@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="30%" r="90%">
+      <stop offset="0%" stop-color="#3d1530"/>
+      <stop offset="100%" stop-color="#120b16"/>
+    </radialGradient>
+    <linearGradient id="lava" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffb066"/>
+      <stop offset="55%" stop-color="#ff5a2c"/>
+      <stop offset="100%" stop-color="#8c1f0a"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7de9ff"/>
+      <stop offset="100%" stop-color="#0a5c8c"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" fill="url(#sky)"/>
+  <path d="M18 80 L38 52 L52 66 L68 44 L88 64 L110 50 L110 110 L18 110 Z" fill="url(#lava)" opacity="0.9"/>
+  <ellipse cx="64" cy="96" rx="28" ry="10" fill="url(#water)"/>
+  <circle cx="86" cy="36" r="10" fill="#ffd08a" opacity="0.9"/>
+</svg>

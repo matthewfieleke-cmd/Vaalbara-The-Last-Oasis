@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="30%" r="90%">
+      <stop offset="0%" stop-color="#3d1530"/>
+      <stop offset="100%" stop-color="#120b16"/>
+    </radialGradient>
+    <linearGradient id="lava" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffb066"/>
+      <stop offset="55%" stop-color="#ff5a2c"/>
+      <stop offset="100%" stop-color="#8c1f0a"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7de9ff"/>
+      <stop offset="100%" stop-color="#0a5c8c"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#sky)"/>
+  <path d="M8 78 L34 44 L52 62 L70 34 L94 60 L120 42 L120 120 L8 120 Z" fill="#1d1226"/>
+  <path d="M8 88 L30 60 L50 76 L72 50 L96 72 L120 58 L120 120 L8 120 Z" fill="url(#lava)" opacity="0.9"/>
+  <ellipse cx="64" cy="102" rx="34" ry="12" fill="url(#water)"/>
+  <ellipse cx="64" cy="100" rx="24" ry="7" fill="#aef4ff" opacity="0.45"/>
+  <circle cx="88" cy="30" r="12" fill="#ffd08a" opacity="0.9"/>
+  <circle cx="88" cy="30" r="18" fill="#ffd08a" opacity="0.25"/>
+</svg>
