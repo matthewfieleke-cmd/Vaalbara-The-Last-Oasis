@@ -7,19 +7,25 @@
  * plain serialisable data in this file.
  * ========================================================================== */
 
-/** Discrete server tick. 1 tick = 1.2 seconds of real time. */
+/**
+ * Discrete server tick. 1 tick = 300 ms of real time.
+ * The fine tick lets every unit run its own movement bank and attack timer,
+ * so characters step, strike and stagger on independent cadences (instead of
+ * the whole board lurching in unison) while the sim stays fully deterministic
+ * and lockstep-replayable for multiplayer.
+ */
 export type Tick = number;
 
-export const TICK_MS = 1200;
+export const TICK_MS = 300;
 
 /** Board dimensions (portrait: narrow and tall). */
 export const BOARD_W = 9;
 export const BOARD_H = 15;
 
-/** Phase durations, in ticks. 5 min / 1.2 s = 250, 3 min / 1.2 s = 150. */
-export const PHASE1_TICKS = 250;
-export const TRANSITION_TICKS = 4;
-export const PHASE2_TICKS = 150;
+/** Phase durations, in ticks. 2 min = 400, 1 min = 200 at 300 ms/tick. */
+export const PHASE1_TICKS = 400;
+export const TRANSITION_TICKS = 13;
+export const PHASE2_TICKS = 200;
 
 /** Player seat. Seat 0 deploys along the bottom rows, seat 1 along the top. */
 export type PlayerId = 0 | 1;
@@ -367,11 +373,14 @@ export const DEPLOY_ROWS: Record<PlayerId, readonly number[]> = {
 };
 
 export const AQUA_MAX = 10;
-export const AQUA_PER_TICK_P1 = 1;
-export const AQUA_PER_TICK_P2 = 2; // doubles in the Oasis
+/** Slow drip (1 aqua / 3 s) keeps armies small: distinct duels, not mobs. */
+export const AQUA_PER_TICK_P1 = 0.1;
+export const AQUA_PER_TICK_P2 = 0.2; // doubles in the Oasis
 export const HAND_SIZE = 4;
-export const CAPTURE_RATE = 4; // meter points per tick of pond majority
-export const VENT_DMG = 7;
-export const ACID_DMG = 4;
+/** Hard cap on living units per player — the field stays readable. */
+export const MAX_ARMY = 6;
+export const CAPTURE_RATE = 1; // meter points per tick of pond majority
+export const VENT_DMG = 2;
+export const ACID_DMG = 1; // per stack per tick
 export const LOTUS_HEAL_PCT = 0.15;
 export const BLESSING_MULT = 1.1;
