@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#120b16" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="description"
+      content="Vaalbara: The Last Oasis — a prehistoric tactics duel blending chess positioning with real-time card battles. 100% procedural. Playable offline."
+    />
+    <title>Vaalbara: The Last Oasis</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <!--
+      Optional Firebase multiplayer keys. Leave commented for Local Guest Mode.
+      <script>
+        window.VAALBARA_FIREBASE = {
+          apiKey: "…",
+          databaseURL: "https://your-project-default-rtdb.firebaseio.com"
+        };
+      </script>
+    -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

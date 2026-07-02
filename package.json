@@ -1,0 +1,28 @@
+{
+  "name": "vaalbara-the-last-oasis",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Vaalbara: The Last Oasis — a mobile-first 2.5D isometric tactics PWA blending chess positioning with real-time card economy.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "sim": "tsx scripts/simtest.ts",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "^1.61.1",
+    "tsx": "^4.22.5",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}
