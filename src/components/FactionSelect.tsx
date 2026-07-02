@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FactionId } from '../types';
 import { FACTIONS } from '../data';
-import { CardArt } from './CardArt';
+import { SpriteArt } from './SpriteArt';
 import { playUi } from '../audio';
 
 export function FactionSelect({
@@ -32,7 +32,7 @@ export function FactionSelect({
             <div className="roster">
               {f.cards.map((c) => (
                 <div className="unit-dot" key={c.id} title={c.name}>
-                  {c.species && <CardArt species={c.species} hue={c.hue} />}
+                  {c.species && <SpriteArt species={c.species} hue={c.hue} />}
                 </div>
               ))}
               <div

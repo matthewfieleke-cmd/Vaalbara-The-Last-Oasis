@@ -3,6 +3,7 @@ import type { FactionId, GameState, PlayerId, Profile, Screen } from './types';
 import { loadProfile, recordResult } from './net';
 import type { MatchSession } from './net';
 import { music, playResult, setMuted, unlockAudio } from './audio';
+import { loadSprites } from './sprites';
 import { Cinematic } from './components/Cinematic';
 import { Menu } from './components/Menu';
 import { FactionSelect } from './components/FactionSelect';
@@ -22,14 +23,24 @@ export function App() {
   /** Forces a fresh GameScreen mount per match. */
   const [matchNonce, setMatchNonce] = useState(0);
 
-  // Boot: brief ember pulse, then intro (first visit) or menu.
+  // Boot: preload the painted character sprites (capped wait — the vector
+  // fallback covers anything that isn't ready), then intro or menu.
   useEffect(() => {
     if (screen !== 'boot') return;
-    const t = setTimeout(() => {
+    let alive = true;
+    const minSplash = new Promise((r) => setTimeout(r, 900));
+    const spriteWait = Promise.race([
+      loadSprites(),
+      new Promise((r) => setTimeout(r, 3500)),
+    ]);
+    void Promise.all([minSplash, spriteWait]).then(() => {
+      if (!alive) return;
       const seen = localStorage.getItem(INTRO_SEEN_KEY) === '1';
       setScreen(seen ? 'menu' : 'cinematic');
-    }, 900);
-    return () => clearTimeout(t);
+    });
+    return () => {
+      alive = false;
+    };
   }, [screen]);
 
   // First user gesture unlocks Web Audio on mobile.

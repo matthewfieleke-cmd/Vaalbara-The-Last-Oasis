@@ -8,7 +8,7 @@ import { BotBrain, TickDriver } from '../engine';
 import { Renderer } from '../render';
 import { handleGameEvents, music, playUi } from '../audio';
 import type { MatchSession } from '../net';
-import { CardArt } from './CardArt';
+import { SpriteArt } from './SpriteArt';
 
 interface Banner {
   id: number;
@@ -364,7 +364,7 @@ export function GameScreen({
                 <span className="cost">{def.cost}</span>
                 <div className="art">
                   {def.species ? (
-                    <CardArt species={def.species} hue={def.hue} />
+                    <SpriteArt species={def.species} hue={def.hue} />
                   ) : (
                     <SpellArt hue={def.hue} phase2={card === PHASE_SPELL_CARD && (ui?.phase === 'oasis' || ui?.phase === 'ended')} />
                   )}

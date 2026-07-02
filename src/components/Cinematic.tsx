@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { drawSpecies } from '../render';
+import { getSprite } from '../sprites';
 import type { SpeciesId } from '../types';
 
 /**
@@ -34,7 +35,7 @@ const BEATS: Beat[] = [
   { at: 48.5, flash: { species: 'eagle', hue: 20, name: 'Eagle', epithet: 'The Skyhunter' }, scene: 'ember' },
 
   { at: 55.5, title: 'The Oasis Syndicate', body: 'The green place raises its own guard — six keepers who will drown the world before they share it.', scene: 'water' },
-  { at: 64, flash: { species: 'bear', hue: 25, name: 'Bear', epithet: 'The Warden' }, scene: 'water' },
+  { at: 64, flash: { species: 'bear', hue: 140, name: 'Bear', epithet: 'The Warden' }, scene: 'water' },
   { at: 71, flash: { species: 'bighorn', hue: 90, name: 'Bighorn', epithet: 'The Comet' }, scene: 'water' },
   { at: 78, flash: { species: 'wolves', hue: 210, name: 'Wolves', epithet: 'The Pack' }, scene: 'water' },
 
@@ -231,12 +232,25 @@ function FlashArt({ species, hue }: { species: SpeciesId; hue: number }) {
         ctx.lineTo(W / 2 + Math.cos(a) * W, H * 0.44 + Math.sin(a) * W);
         ctx.stroke();
       }
-      ctx.save();
-      ctx.translate(W / 2, H * 0.6);
+      const sprite = getSprite(species);
       const breathe = 1 + Math.sin(t * 1.4) * 0.02;
-      ctx.scale(breathe, breathe);
-      drawSpecies(ctx, species, W * 0.3, t);
-      ctx.restore();
+      if (sprite) {
+        // Hero shot of the painted character over the ray burst.
+        const scale = Math.min((W * 0.86) / sprite.w, (H * 0.62) / sprite.h) * breathe;
+        const dw = sprite.w * scale;
+        const dh = sprite.h * scale;
+        ctx.save();
+        ctx.shadowColor = `hsl(${hue} 90% 55%)`;
+        ctx.shadowBlur = 40;
+        ctx.drawImage(sprite.canvas, (W - dw) / 2, H * 0.78 - dh + Math.sin(t * 1.1) * 5, dw, dh);
+        ctx.restore();
+      } else {
+        ctx.save();
+        ctx.translate(W / 2, H * 0.6);
+        ctx.scale(breathe, breathe);
+        drawSpecies(ctx, species, W * 0.3, t);
+        ctx.restore();
+      }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
