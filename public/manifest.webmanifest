@@ -1,0 +1,25 @@
+{
+  "name": "Vaalbara: The Last Oasis",
+  "short_name": "Vaalbara",
+  "description": "A prehistoric tactics duel blending chess positioning with real-time card battles. 100% procedural art. Playable offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#120b16",
+  "theme_color": "#120b16",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
