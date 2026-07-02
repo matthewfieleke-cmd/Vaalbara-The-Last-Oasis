@@ -161,7 +161,6 @@ button {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   text-shadow: 0 2px 26px rgba(0, 0, 0, 0.9);
-  animation: cine-in 1.1s ease-out both;
 }
 
 .cine-text p {
@@ -171,12 +170,18 @@ button {
   font-size: 1.02rem;
   line-height: 1.55;
   text-shadow: 0 1px 14px rgba(0, 0, 0, 0.9);
-  animation: cine-in 1.1s 0.35s ease-out both;
 }
 
-@keyframes cine-in {
-  from { opacity: 0; transform: translateY(18px) scale(0.98); letter-spacing: 0.3em; }
-  to { opacity: 1; transform: none; }
+/* Gentle breathe-in / breathe-out — pure opacity with a whisper of drift.
+   No letter-spacing or layout animation, so text never reconfigures. */
+@keyframes cine-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cine-fade-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-6px); }
 }
 
 .cine-card-flash {
@@ -185,15 +190,42 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: card-flash 2.4s ease-in-out both;
 }
 
-@keyframes card-flash {
-  0% { opacity: 0; transform: scale(0.7) rotate(-5deg); }
-  18% { opacity: 1; transform: scale(1.05) rotate(1deg); }
-  30% { transform: scale(1) rotate(0); }
-  82% { opacity: 1; }
-  100% { opacity: 0; transform: scale(1.08); }
+.cine-card {
+  width: min(58vw, 260px);
+  aspect-ratio: 0.72;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 2px solid;
+  position: relative;
+}
+
+.cine-card-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 1rem 0.9rem 0.9rem;
+  text-align: center;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.92));
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cine-card-label .epithet {
+  font-size: 0.66rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.cine-card-label .name {
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 1.05rem;
 }
 
 .skip-btn {
@@ -643,6 +675,15 @@ button {
   font-size: 0.95rem;
   min-width: 2.4ch;
   text-align: right;
+}
+
+.army-count {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  font-size: 0.78rem;
+  margin-left: 0.4rem;
+  white-space: nowrap;
 }
 
 .hand {
