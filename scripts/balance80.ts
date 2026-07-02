@@ -1,12 +1,15 @@
 import { BotBrain, advanceTick, createGame, resetIds } from '../src/engine';
+import { PHASE1_TICKS, PHASE2_TICKS, TRANSITION_TICKS } from '../src/types';
 import type { PlayerInput } from '../src/types';
+
+const MAX_TICKS = PHASE1_TICKS + TRANSITION_TICKS + PHASE2_TICKS + 5;
 
 function run(seed: number, f: ['magma', 'oasis'] | ['oasis', 'magma']) {
   resetIds();
   const st = createGame(seed, f);
   const bots = [new BotBrain(0, seed + 1), new BotBrain(1, seed + 2)];
   let seq = 0;
-  for (let i = 0; i < 420 && st.phase !== 'ended'; i++) {
+  for (let i = 0; i < MAX_TICKS && st.phase !== 'ended'; i++) {
     const inputs: PlayerInput[] = [];
     for (const p of [0, 1] as const) {
       const a = bots[p].think(st);

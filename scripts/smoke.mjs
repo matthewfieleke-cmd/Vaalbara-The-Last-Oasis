@@ -106,7 +106,7 @@ if (!ultDisabled) {
 }
 
 /* ------- accelerated full match: both phases through to results --------- */
-await page.goto(`${BASE}?p1ticks=14&p2ticks=12`, { waitUntil: 'networkidle' });
+await page.goto(`${BASE}?p1ticks=60&p2ticks=40`, { waitUntil: 'networkidle' });
 await page.waitForSelector('.menu', { timeout: 5000 });
 await page.click('text=Battle');
 await page.waitForSelector('.faction-select', { timeout: 5000 });
@@ -134,8 +134,8 @@ for (let round = 0; round < 2; round++) {
   }
 }
 
-// Phase 1 = 14 ticks * 1.2s ≈ 17s, transition ≈ 5s, phase 2 = 12 ticks ≈ 15s.
-await page.waitForTimeout(14000);
+// Phase 1 = 60 ticks * 0.3s = 18s, transition ≈ 4s, phase 2 = 40 ticks = 12s.
+await page.waitForTimeout(15000);
 await page.screenshot({ path: `${shots}/10-transition-or-oasis.png` });
 const phasePill = await page.textContent('.phase-pill').catch(() => 'gone');
 await page.waitForSelector('.results', { timeout: 45000 });

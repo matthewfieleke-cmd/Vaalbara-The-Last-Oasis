@@ -12,7 +12,7 @@
 
 import {
   ACID_DMG, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT, BOARD_H, BOARD_W,
-  CAPTURE_RATE, DEPLOY_ROWS, HAND_SIZE, LOTUS_HEAL_PCT, PHASE1_TICKS, PHASE2_TICKS,
+  CAPTURE_RATE, DEPLOY_ROWS, HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS,
   TICK_MS, TRANSITION_TICKS, VENT_DMG, idx, inBounds,
 } from './types';
 import type {
@@ -286,11 +286,16 @@ function freshBuffs() {
   return { stun: 0, slowTicks: 0, slowMult: 1, burnStacks: 0, burnTicks: 0, rangeCapTicks: 0, blessed: false, berserk: false };
 }
 
+export function armySize(st: GameState, owner: PlayerId): number {
+  return st.units.reduce((n, u) => n + (u.hp > 0 && u.owner === owner ? 1 : 0), 0);
+}
+
 function spawnUnit(
   st: GameState, ev: GameEvent[], owner: PlayerId, species: UnitState['species'],
   x: number, y: number, waypoint: GridPos | null,
 ): UnitState | null {
   if (!inBounds(x, y)) return null;
+  if (armySize(st, owner) >= MAX_ARMY) return null;
   const stats = speciesDef(species).stats!;
   if (!stats.flying && st.board[idx(x, y)].terrain === 'magma') return null;
   if (unitAt(st, x, y, stats.flying)) return null;
@@ -300,8 +305,9 @@ function spawnUnit(
     x, y, px: x, py: y,
     hp: stats.hp, maxHp: stats.hp,
     facing: owner === 0 ? -1 : 1,
-    moveBank: 0,
-    atkTimer: 1, // brief deploy wind-up
+    // Personal cadence offset: units never step in unison with each other.
+    moveBank: ((nextUnitId * 0.37) % 1) * 0.9,
+    atkTimer: 3, // brief deploy wind-up (~0.9 s)
     traveled: 0,
     struckTargets: [],
     waypoint,
@@ -370,6 +376,8 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
   if (a.type === 'deploy' && def.kind === 'unit' && def.species) {
     // Vector spawning: baseline touch tile must be in the deploy zone…
     if (!inBounds(a.x, a.y) || !DEPLOY_ROWS[input.player].includes(a.y)) return;
+    // …and the army cap keeps the battlefield a set of readable duels.
+    if (armySize(st, input.player) >= MAX_ARMY) return;
     const stats = def.stats!;
     if (!stats.flying && st.board[idx(a.x, a.y)].terrain === 'magma') return;
     p.aqua -= def.cost;
@@ -503,6 +511,15 @@ function visibleEnemies(st: GameState, u: RuntimeUnit): UnitState[] {
 function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
   const enemies = visibleEnemies(st, u);
   if (enemies.length === 0) return null;
+  // Engagement stickiness: once locked in a duel, see it through. This is
+  // what turns the battlefield into distinct one-on-one fights instead of a
+  // mob that constantly re-shuffles targets.
+  if (u.targetId !== null) {
+    const cur = enemies.find((e) => e.id === u.targetId);
+    if (cur && cheb(u.x, u.y, cur.x, cur.y) <= Math.max(2, u.stats.range + 1)) {
+      return cur;
+    }
+  }
   // Eagle: hunts the lowest-HP unit on the board first.
   if (u.species === 'eagle') {
     return enemies.reduce((a, b) => (b.hp < a.hp ? b : a));
@@ -647,10 +664,6 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
   let cd = u.stats.atkCd;
   if (u.buffs.berserk) cd = Math.max(1, Math.round(cd / 2));
   u.atkTimer = cd;
-  // Berserk badger attacks twice within one tick when cd would round to 1.
-  if (u.buffs.berserk && u.stats.atkCd === 1 && target.hp > 0) {
-    dealDamage(st, ev, u, target, effDmg(u, st), 'melee');
-  }
 }
 
 /** T-Rex stomp: chips all enemy ground units within 2 tiles as it moves. */
@@ -789,6 +802,7 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
 
   // 1. Attack if a target is in reach.
   const target = pickTarget(st, u);
+  u.targetId = target?.id ?? null;
   if (target && canAttack(u, target) && u.atkTimer <= 0) {
     performAttack(st, ev, u, target);
     return;
@@ -1087,8 +1101,8 @@ export class TickDriver {
     const result = advanceTick(this.state, inputs);
     this.state = result.state;
 
-    // Snapshot every 5 ticks for rewind support.
-    if (this.state.tick % 5 === 0) {
+    // Snapshot every 10 ticks (3 s) for rewind support.
+    if (this.state.tick % 10 === 0) {
       this.history.push({ tick: this.state.tick, snapshot: JSON.stringify(this.state) });
       if (this.history.length > 8) this.history.shift();
     }
@@ -1128,11 +1142,14 @@ export class BotBrain {
   /** Called once per tick; may return an action to submit. */
   think(st: GameState): PlayerInput['action'] | null {
     if (st.phase !== 'basalt' && st.phase !== 'oasis') return null;
+    // Deliberate like a human: consider a move roughly every 1.2 s.
+    if (st.tick % 4 !== 0) return null;
     const me = st.players[this.seat];
     const rows = DEPLOY_ROWS[this.seat];
+    const phaseLen = st.phase === 'basalt' ? st.cfg.phase1Ticks : st.cfg.phase2Ticks;
 
     // Fire the ultimate at the densest enemy cluster late in a phase.
-    if (!me.ultUsed && st.phaseTicksLeft < 100) {
+    if (!me.ultUsed && st.phaseTicksLeft < phaseLen * 0.55) {
       const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
       if (enemies.length >= 3) {
         let best: GridPos | null = null;
@@ -1148,8 +1165,9 @@ export class BotBrain {
       }
     }
 
-    // Save up sometimes to build bigger pushes.
+    // Save up sometimes to build bigger pushes; never overfill the army.
     if (me.aqua < 4 || this.rng() < 0.35) return null;
+    if (armySize(st, this.seat) >= MAX_ARMY) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
     if (affordable.length === 0) return null;

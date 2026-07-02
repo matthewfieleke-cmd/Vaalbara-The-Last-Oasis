@@ -198,6 +198,11 @@ export function GameScreen({
       playUi('error');
       return;
     }
+    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= 6) {
+      showToast('Army at full strength — lose a fighter first');
+      playUi('error');
+      return;
+    }
     dragRef.current = { pointerId: e.pointerId, fromX: gx, fromY: gy };
     renderer.drag = {
       active: true, fromX: gx, fromY: gy, toX: t.x, toY: t.y, valid: true, hue: def.hue,
@@ -332,10 +337,13 @@ export function GameScreen({
         <div className="aqua-bar">
           <div className="aqua-cells">
             {Array.from({ length: 10 }, (_, i) => (
-              <div key={i} className={`aqua-cell ${me && i < me.aqua ? 'full' : ''}`} />
+              <div key={i} className={`aqua-cell ${me && i < Math.floor(me.aqua) ? 'full' : ''}`} />
             ))}
           </div>
-          <span className="aqua-count">{me?.aqua ?? 0}</span>
+          <span className="aqua-count">{Math.floor(me?.aqua ?? 0)}</span>
+          <span className="army-count">
+            ⚑ {ui ? ui.units.filter((u) => u.owner === seat && u.hp > 0).length : 0}/6
+          </span>
         </div>
         <div className="hand">
           {(me?.hand ?? []).map((card, i) => {
