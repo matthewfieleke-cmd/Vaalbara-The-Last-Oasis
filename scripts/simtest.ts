@@ -97,8 +97,10 @@ for (let s = 1; s <= 24; s++) {
     const r = runMatch(s * 7919, [...factions] as ['magma', 'oasis'] | ['oasis', 'magma']);
     wins[r.winner] = (wins[r.winner] ?? 0) + 1;
     factionWins[r.winner === 'tie' ? 'tie' : factions[Number(r.winner) as 0 | 1]]++;
+    // Matches can now end early (obelisk break, decisive pond claim), so the
+    // floor is "a real fight happened", not "full timer elapsed".
     const ok =
-      r.ticks >= PHASE1_TICKS &&
+      r.ticks >= 120 &&
       r.unitsSpawnedP0 > 5 &&
       r.unitsSpawnedP1 > 5 &&
       r.dmgP0 > 100 &&

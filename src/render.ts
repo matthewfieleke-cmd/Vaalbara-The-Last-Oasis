@@ -17,7 +17,7 @@
  * ========================================================================== */
 
 import { TICK_MS, WORLD_H, WORLD_W } from './types';
-import type { GameEvent, GameState, PlayerId, SpeciesId } from './types';
+import type { GameEvent, GameState, ObeliskState, PlayerId, SpeciesId } from './types';
 import { speciesDef } from './data';
 import { getAnim, getPhaseArt, getSprite } from './sprites';
 import type { Sprite } from './sprites';
@@ -36,6 +36,11 @@ const SIZE_TWEAK: Partial<Record<SpeciesId, number>> = {
 
 const spriteHeight = (s: number, species: SpeciesId, colossal: boolean, heavy: boolean): number =>
   s * (colossal ? 2.5 : heavy ? 2.2 : 1.9) * (SIZE_TWEAK[species] ?? 1);
+
+/** Base footprint scale per weight class (px per world unit multiplier).
+ *  Generous: with the 4-unit army cap, big readable actors are the point. */
+const unitScale = (colossal: boolean, heavy: boolean): number =>
+  colossal ? 0.92 : heavy ? 0.8 : 0.64;
 
 /* ------------------------------------------------------------------------ */
 
@@ -84,6 +89,9 @@ interface DisplayUnit {
   dx: number; dy: number;
   runPhase: number;
   age: number;
+  /** Displayed facing, with hysteresis so steering wobble can't strobe it. */
+  face: 1 | -1;
+  faceHold: number;
   atk?: AttackAnim;
   jig?: Jiggle;
 }
@@ -148,6 +156,7 @@ export class Renderer {
   private floats: FloatText[] = [];
   private display = new Map<number, DisplayUnit>();
   private flashes = new Map<number, number>();
+  private obeliskFlash = new Map<PlayerId, number>();
   private ghosts: Ghost[] = [];
   private hitStop = 0;
   private lastHitDir = new Map<number, { x: number; y: number }>();
@@ -337,6 +346,29 @@ export class Renderer {
         this.burst(p.x, p.y, 10, 'petal', 320, 1.8);
         break;
       }
+      case 'obeliskHit': {
+        const p = this.worldToScreen(e.x, e.y);
+        const mine = e.owner === this.localSeat;
+        this.burst(p.x, p.y - this.unit * 0.7, 8, 'spark', mine ? 190 : 30, 1.4);
+        this.obeliskFlash.set(e.owner, 0.24);
+        this.floats.push({
+          x: p.x, y: p.y - this.unit * 1.4,
+          text: `-${e.amount}`, life: 0, maxLife: 0.9,
+          color: mine ? '#ff8f6d' : '#ffe08a',
+          size: clamp(11 + e.amount * 0.1, 11, 19),
+        });
+        if (mine) this.shake = Math.max(this.shake, 2.5);
+        break;
+      }
+      case 'obeliskDown': {
+        const p = this.worldToScreen(e.x, e.y);
+        this.burst(p.x, p.y - this.unit * 0.6, 40, 'spark', 40, 3);
+        this.burst(p.x, p.y, 5, 'shockwave', 40, 1.4);
+        this.burst(p.x, p.y, 20, 'ash', 30, 2.2);
+        this.shake = 16;
+        this.hitStop = Math.max(this.hitStop, 0.12);
+        break;
+      }
       default:
         break;
     }
@@ -416,6 +448,7 @@ export class Renderer {
     if (st) {
       this.drawArena(ctx, st);
       this.drawZones(ctx, st, 'under');
+      this.drawObjectives(ctx, st, dt);
       this.drawTelegraphs(ctx, st, now);
       this.drawUnits(ctx, st, dt, now);
       this.drawProjectiles(ctx, st, now);
@@ -665,6 +698,203 @@ export class Renderer {
     }
   }
 
+  /* --------------------------- objectives -------------------------------- */
+
+  /** Phase objectives, always on the field: the Ancient Obelisks (phase 1)
+   *  and the pond-control ring (phase 2). */
+  private drawObjectives(ctx: CanvasRenderingContext2D, st: GameState, dt: number): void {
+    for (const [k, v] of [...this.obeliskFlash]) {
+      const n = v - dt;
+      if (n <= 0) this.obeliskFlash.delete(k);
+      else this.obeliskFlash.set(k, n);
+    }
+    for (const ob of st.obelisks) this.drawObelisk(ctx, ob);
+
+    // Pond control ring: glows in the leading side's colour, harder as the
+    // claim approaches 100%.
+    if (st.phase === 'oasis' || st.phase === 'ended') {
+      const m = st.captureMeter;
+      if (m !== 0) {
+        const leader: PlayerId = m > 0 ? 0 : 1;
+        const mine = leader === this.localSeat;
+        const hue = mine ? 175 : 6;
+        const k = Math.abs(m) / 100;
+        const p = this.worldToScreen(WORLD_W / 2, WORLD_H / 2);
+        const rx = this.unit * 2.55;
+        const ry = this.unit * 2.0;
+        const pulse = 0.5 + Math.sin(this.time * (2 + k * 4)) * 0.5;
+        ctx.save();
+        ctx.strokeStyle = `hsla(${hue} 95% 62% / ${0.22 + k * 0.5 + pulse * 0.12})`;
+        ctx.lineWidth = 2.5 + k * 2.5;
+        ctx.setLineDash([14, 10]);
+        ctx.lineDashOffset = this.time * (mine ? -26 : 26);
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const g = ctx.createRadialGradient(p.x, p.y, rx * 0.3, p.x, p.y, rx);
+        g.addColorStop(0, `hsla(${hue} 90% 55% / 0)`);
+        g.addColorStop(1, `hsla(${hue} 90% 55% / ${0.05 + k * 0.14})`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        if (k > 0.7 && Math.random() < 0.2) {
+          const a = Math.random() * Math.PI * 2;
+          this.burst(p.x + Math.cos(a) * rx, p.y + Math.sin(a) * ry, 1, 'mote', hue, 0.8);
+        }
+      }
+    }
+  }
+
+  private drawObelisk(ctx: CanvasRenderingContext2D, ob: ObeliskState): void {
+    const p = this.worldToScreen(ob.x, ob.y);
+    const u = this.unit;
+    const mine = ob.owner === this.localSeat;
+    const hue = mine ? 187 : 8;
+    const frac = clamp(ob.hp / ob.maxHp, 0, 1);
+    const flash = this.obeliskFlash.get(ob.owner) ?? 0;
+    const jx = flash > 0 ? (Math.random() - 0.5) * flash * 26 : 0;
+    const t = this.time;
+
+    ctx.save();
+    ctx.translate(p.x + jx, p.y);
+
+    // Ground shadow + claim ring.
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.beginPath();
+    ctx.ellipse(0, u * 0.1, u * 0.78, u * 0.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `hsla(${hue} 85% 58% / ${0.4 + Math.sin(t * 1.8) * 0.12})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(0, u * 0.1, u * 0.88, u * 0.34, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (ob.hp <= 0) {
+      // Rubble: the broken tower.
+      ctx.fillStyle = 'hsl(255 10% 16%)';
+      for (const [rx, ry, rs] of [[-0.3, 0, 0.3], [0.25, 0.02, 0.26], [0, -0.14, 0.34], [-0.05, 0.08, 0.2]] as const) {
+        ctx.beginPath();
+        ctx.ellipse(rx * u, ry * u, rs * u, rs * u * 0.6, rx * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (Math.random() < 0.12) this.burst(p.x, p.y - u * 0.2, 1, 'ash', 30, 0.8);
+      ctx.restore();
+      return;
+    }
+
+    // Stacked basalt monolith, narrowing upward.
+    const H = u * 1.85;
+    const slabs: Array<[number, number]> = [[0.62, 0.3], [0.5, 0.26], [0.38, 0.24], [0.24, 0.2]];
+    let yCursor = 0;
+    for (let i = 0; i < slabs.length; i++) {
+      const [w, hh] = slabs[i];
+      const w2 = w * u;
+      const h2 = hh * H;
+      const shade = 16 + i * 3.5;
+      const g = ctx.createLinearGradient(-w2, 0, w2, 0);
+      g.addColorStop(0, `hsl(256 14% ${shade - 5}%)`);
+      g.addColorStop(0.4, `hsl(254 12% ${shade + 5}%)`);
+      g.addColorStop(1, `hsl(258 16% ${shade - 7}%)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.roundRect(-w2, yCursor - h2, w2 * 2, h2, u * 0.07);
+      ctx.fill();
+      yCursor -= h2;
+    }
+
+    // Rune band: the tower's heart, in the owner's colour.
+    const bandY = -H * 0.42;
+    const bandGlow = 0.55 + Math.sin(t * 2.4 + (mine ? 0 : 2)) * 0.2;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `hsla(${hue} 95% 58% / ${bandGlow * (0.35 + frac * 0.4)})`;
+    ctx.beginPath();
+    ctx.roundRect(-u * 0.42, bandY - u * 0.09, u * 0.84, u * 0.18, u * 0.05);
+    ctx.fill();
+    for (let r2 = 0; r2 < 3; r2++) {
+      ctx.fillStyle = `hsla(${hue} 100% 75% / ${bandGlow})`;
+      ctx.fillRect(-u * 0.3 + r2 * u * 0.26, bandY - u * 0.045, u * 0.09, u * 0.09);
+    }
+    // Crown crystal.
+    const cg = ctx.createRadialGradient(0, -H - u * 0.12, 1, 0, -H - u * 0.12, u * 0.4);
+    cg.addColorStop(0, `hsla(${hue} 100% 78% / ${0.85 * bandGlow})`);
+    cg.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.arc(0, -H - u * 0.12, u * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = `hsl(${hue} 90% ${64 + Math.sin(t * 3) * 8}%)`;
+    ctx.beginPath();
+    ctx.moveTo(0, -H - u * 0.26);
+    ctx.lineTo(u * 0.1, -H - u * 0.1);
+    ctx.lineTo(0, -H + u * 0.06);
+    ctx.lineTo(-u * 0.1, -H - u * 0.1);
+    ctx.closePath();
+    ctx.fill();
+
+    // Battle damage: cracks spider out as HP falls.
+    if (frac < 0.999) {
+      const dmg = 1 - frac;
+      ctx.strokeStyle = `rgba(5,3,10,${0.35 + dmg * 0.45})`;
+      ctx.lineWidth = 1.6;
+      const cracks = Math.ceil(dmg * 5);
+      for (let c = 0; c < cracks; c++) {
+        const seed = c * 137 + (ob.owner === 0 ? 7 : 31);
+        let cx = ((seed % 10) / 10 - 0.5) * u * 0.8;
+        let cy = -((seed % 7) / 7) * H * 0.8;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        for (let seg = 0; seg < 4; seg++) {
+          cx += (((seed * (seg + 3)) % 9) / 9 - 0.5) * u * 0.3;
+          cy += ((seed * (seg + 7)) % 5) / 5 * u * 0.22 + 2;
+          ctx.lineTo(cx, cy);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // Hit flash.
+    if (flash > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, flash / 0.24) * 0.55;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.roundRect(-u * 0.62, -H, u * 1.24, H, u * 0.07);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Objective HP bar — bigger than unit bars; this IS the scoreboard.
+    const hpw = u * 1.9;
+    const hph = 7;
+    const hy = -H - u * 0.62;
+    ctx.fillStyle = 'rgba(4,3,8,0.82)';
+    ctx.beginPath();
+    ctx.roundRect(-hpw / 2 - 1.5, hy - 1.5, hpw + 3, hph + 3, 4.5);
+    ctx.fill();
+    const barG = ctx.createLinearGradient(0, hy, 0, hy + hph);
+    if (mine) {
+      barG.addColorStop(0, frac > 0.35 ? 'hsl(187 90% 62%)' : 'hsl(45 95% 66%)');
+      barG.addColorStop(1, frac > 0.35 ? 'hsl(195 85% 42%)' : 'hsl(40 95% 46%)');
+    } else {
+      barG.addColorStop(0, 'hsl(4 92% 64%)');
+      barG.addColorStop(1, 'hsl(2 85% 44%)');
+    }
+    ctx.fillStyle = barG;
+    ctx.beginPath();
+    ctx.roundRect(-hpw / 2, hy, Math.max(2, hpw * frac), hph, 3.5);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillRect(-hpw / 2 + 1, hy + 1, Math.max(1, hpw * frac - 2), 1.4);
+
+    ctx.restore();
+  }
+
   /* ------------------------- transition cutscene ------------------------- */
 
   private drawTransition(ctx: CanvasRenderingContext2D, st: GameState, W: number, H: number): void {
@@ -808,23 +1038,34 @@ export class Renderer {
 
   /* ------------------------------- units --------------------------------- */
 
-  private pickFrame(species: SpeciesId, d: DisplayUnit, moving: boolean, flying: boolean): Sprite | null {
+  /** Current frame pair: `a` blends into `b` by `mix` for smooth motion. */
+  private pickFrames(
+    species: SpeciesId, d: DisplayUnit, moving: boolean, flying: boolean,
+  ): { a: Sprite; b: Sprite | null; mix: number } | null {
     const anim = getAnim(species);
-    if (!anim) return getSprite(species, 0);
-    // Attack timeline: anticipation -> strike -> recoil over 0.5 s.
+    if (!anim) {
+      const s = getSprite(species, 0);
+      return s ? { a: s, b: null, mix: 0 } : null;
+    }
+    // Attack timeline: anticipation -> strike -> recoil over 0.55 s.
+    // Strikes cut hard (no blending) so impacts stay crisp.
     if (d.atk) {
-      const at = (this.time - d.atk.t0) / 0.5;
+      const at = (this.time - d.atk.t0) / 0.55;
       if (at < 1) {
         const frames = species === 'bear' && d.atk.air && anim.swat ? anim.swat : anim.attack;
         const idx = at < 0.35 ? 0 : at < 0.65 ? 1 : 2;
-        return frames[Math.min(idx, frames.length - 1)];
+        return { a: frames[Math.min(idx, frames.length - 1)], b: null, mix: 0 };
       }
     }
-    // Flyers always flap; grounded units run when moving, else hold contact.
+    // Flyers always flap; grounded units stride when moving, else hold contact.
     if (flying || moving) {
-      return anim.run[Math.floor(d.runPhase) % anim.run.length];
+      const n = anim.run.length;
+      const i = Math.floor(d.runPhase) % n;
+      const frac = d.runPhase - Math.floor(d.runPhase);
+      const mix = frac * frac * (3 - 2 * frac); // smoothstep crossfade
+      return { a: anim.run[i], b: anim.run[(i + 1) % n], mix };
     }
-    return anim.run[0];
+    return { a: anim.run[0], b: null, mix: 0 };
   }
 
   private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number): void {
@@ -845,7 +1086,7 @@ export class Renderer {
       alive.add(u.id);
       let d = this.display.get(u.id);
       if (!d) {
-        d = { dx: u.x, dy: u.y, runPhase: (u.id * 0.7) % 4, age: 0 };
+        d = { dx: u.x, dy: u.y, runPhase: (u.id * 0.7) % 4, age: 0, face: u.facing, faceHold: 0 };
         this.display.set(u.id, d);
       }
       d.age += dt;
@@ -859,13 +1100,31 @@ export class Renderer {
 
       const stats = speciesDef(u.species).stats!;
       const flying = stats.flying;
-      // Run cadence tied to actual ground speed (world units/second).
+      // Deliberate stride cadence: ~1 to 1.5 full 4-frame cycles per second,
+      // rising a touch with actual ground speed. Frame-to-frame crossfading
+      // (below) keeps it smooth instead of strobing.
       const wps = (stats.speed / TICK_MS) * 1000;
-      d.runPhase += dt * (flying ? 9 : moving ? 5 + wps * 22 : 1.2);
+      d.runPhase += dt * (
+        flying ? (u.species === 'bees' ? 10 : 4.6)
+          : moving ? 3.0 + wps * 4.5
+            : 0.6
+      );
+
+      // Facing hysteresis: only flip after the sim holds a direction ~0.22 s,
+      // so wall-slide wobble can't mirror-strobe the sprite.
+      if (u.facing !== d.face) {
+        d.faceHold += dt;
+        if (d.faceHold > 0.22 || d.atk) {
+          d.face = u.facing;
+          d.faceHold = 0;
+        }
+      } else {
+        d.faceHold = 0;
+      }
 
       const p = this.worldToScreen(d.dx, d.dy);
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
-      const s = this.unit * (stats.colossal ? 0.78 : stats.heavy ? 0.68 : 0.54);
+      const s = this.unit * unitScale(stats.colossal, stats.heavy);
 
       const popT = clamp(d.age / 0.45, 0, 1);
       const pb = popT - 1;
@@ -888,7 +1147,8 @@ export class Renderer {
       ctx.ellipse(p.x, p.y + this.unit * 0.15, s * 0.62 * pop, s * 0.22 * pop, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      const frame = this.pickFrame(u.species, d, moving, flying);
+      const framePair = this.pickFrames(u.species, d, moving, flying);
+      const frame = framePair?.a ?? null;
 
       // Offscreen composite (for outline fallback + hit flash tint).
       const pad = Math.ceil(s * 2.6);
@@ -901,16 +1161,28 @@ export class Renderer {
       }
       const ac = this.artCanvas.getContext('2d')!;
       ac.clearRect(0, 0, size, size);
-      if (frame) {
+      if (frame && framePair) {
         const targetH = spriteHeight(s, u.species, stats.colossal, stats.heavy);
-        const scale = targetH / frame.h;
-        ac.drawImage(
-          frame.canvas,
-          pad - frame.anchorX * scale,
-          pad + s * 0.55 - frame.anchorY * scale,
-          frame.canvas.width * scale,
-          frame.canvas.height * scale,
-        );
+        const drawFrame = (f: Sprite, alpha: number) => {
+          const scale = targetH / f.h;
+          ac.globalAlpha = alpha;
+          ac.drawImage(
+            f.canvas,
+            pad - f.anchorX * scale,
+            pad + s * 0.55 - f.anchorY * scale,
+            f.canvas.width * scale,
+            f.canvas.height * scale,
+          );
+        };
+        // Crossfade successive stride frames — motion reads smooth, not
+        // strobed, even at the slower deliberate cadence.
+        if (framePair.b && framePair.mix > 0.01) {
+          drawFrame(framePair.a, 1 - framePair.mix);
+          drawFrame(framePair.b, framePair.mix);
+        } else {
+          drawFrame(framePair.a, 1);
+        }
+        ac.globalAlpha = 1;
       } else {
         ac.save();
         ac.translate(pad, pad + s * 0.55);
@@ -934,7 +1206,7 @@ export class Renderer {
       // Attack lunge (subtle now that real strike frames exist).
       let strikeStretch = 0;
       if (d.atk) {
-        const at = (this.time - d.atk.t0) / 0.5;
+        const at = (this.time - d.atk.t0) / 0.55;
         if (at >= 1) {
           d.atk = undefined;
         } else {
@@ -959,7 +1231,7 @@ export class Renderer {
         }
       }
 
-      const face = this.localSeat === 1 ? -u.facing : u.facing;
+      const face = this.localSeat === 1 ? -d.face : d.face;
       const native = frame ? frame.nativeFacing : 1;
       if (face !== native) ctx.scale(-1, 1);
 
@@ -1059,7 +1331,7 @@ export class Renderer {
       if (!sprite) continue;
       const k = g.t / DUR;
       const p = this.worldToScreen(g.x, g.y);
-      const s = this.unit * (g.colossal ? 0.78 : g.heavy ? 0.68 : 0.54);
+      const s = this.unit * unitScale(g.colossal, g.heavy);
       const targetH = spriteHeight(s, g.species, g.colossal, g.heavy);
       const scale = targetH / sprite.h;
       const face = this.localSeat === 1 ? -g.facing : g.facing;

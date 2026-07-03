@@ -14,13 +14,14 @@
  * ========================================================================== */
 
 import {
-  ACID_DMG, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT, CAPTURE_RATE,
-  DEPLOY_DEPTH, HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS,
+  ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
+  CAPTURE_RATE, DEPLOY_DEPTH, HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
+  OBELISK_RADIUS, PHASE1_TICKS, PHASE2_TICKS,
   TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, inDeployBand, inWorld,
 } from './types';
 import type {
-  CardId, FactionId, GameEvent, GameState, PhaseConfig, PlayerId, PlayerInput,
-  PropState, TickResult, UnitState, UnitStats, Vec2,
+  CardId, FactionId, GameEvent, GameState, ObeliskState, PhaseConfig, PlayerId,
+  PlayerInput, PropState, TickResult, UnitState, UnitStats, Vec2,
 } from './types';
 import { LAVA_RAIN, MECHANICS, SPELL_BALANCE, buildDeck, cardDef, speciesDef } from './data';
 import { CELL, cellAt, isDeep, isWater, nextCorridor, walkableAt } from './navmask';
@@ -62,6 +63,14 @@ function basaltProps(): PropState[] {
     { kind: 'vent', x: 8.1, y: 4.6, r: 0.6, destroyed: false },
     { kind: 'vent', x: 0.9, y: 10.6, r: 0.6, destroyed: false },
     { kind: 'vent', x: 8.1, y: 10.4, r: 0.6, destroyed: false },
+  ];
+}
+
+/** The Phase-1 towers: one Ancient Obelisk per seat, on the staging ground. */
+function makeObelisks(): ObeliskState[] {
+  return [
+    { owner: 0, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: WORLD_H - 1.55, r: OBELISK_RADIUS },
+    { owner: 1, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: 1.55, r: OBELISK_RADIUS },
   ];
 }
 
@@ -117,6 +126,7 @@ export function createGame(
     projectiles: [],
     zones: [],
     props: basaltProps(),
+    obelisks: makeObelisks(),
     pendingLava: [],
     players: [makePlayer(factions[0]), makePlayer(factions[1])],
     captureMeter: 0,
@@ -396,21 +406,32 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
       if (!(cs.flying && !u.stats.canHitAir && !u.stats.flying)) return cur;
     }
   }
+  // Eagle stays a global assassin; everyone else only picks fights inside
+  // their aggro bubble — otherwise they push the lane toward the obelisk.
   if (u.species === 'eagle') {
     return enemies.reduce((a, b) => (b.hp < a.hp ? b : a));
   }
   let best: UnitState | null = null;
   let bestD = Infinity;
+  const aggro2 = AGGRO_RANGE * AGGRO_RANGE;
   for (const e of enemies) {
     const eFly = speciesDef(e.species).stats!.flying;
     if (eFly && !u.stats.canHitAir && !u.stats.flying) continue;
     const d = dist2(u.x, u.y, e.x, e.y) + (e.id % 7) * 1e-4;
+    if (d > aggro2) continue;
     if (d < bestD) {
       bestD = d;
       best = e;
     }
   }
-  return best ?? enemies.reduce((a, b) => (dist2(u.x, u.y, b.x, b.y) < dist2(u.x, u.y, a.x, a.y) ? b : a));
+  return best;
+}
+
+/** The enemy obelisk this unit should be pressuring (phase 1 only). */
+function enemyObelisk(st: GameState, u: UnitState): ObeliskState | null {
+  if (st.phase !== 'basalt') return null;
+  const ob = st.obelisks.find((o) => o.owner !== u.owner);
+  return ob && ob.hp > 0 ? ob : null;
 }
 
 function attackReach(u: RuntimeUnit): number {
@@ -522,6 +543,49 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
   u.atkTimer = cd;
 }
 
+/* ------------------------------------------------------------------------ */
+/* Obelisk siege                                                              */
+/* ------------------------------------------------------------------------ */
+
+function dealObeliskDamage(st: GameState, ev: GameEvent[], attacker: PlayerId, ob: ObeliskState, amount: number): void {
+  if (ob.hp <= 0 || amount <= 0) return;
+  ob.hp -= amount;
+  st.players[attacker].damageDealt += amount;
+  ev.push({ type: 'obeliskHit', owner: ob.owner, amount, x: ob.x, y: ob.y });
+  if (ob.hp <= 0) {
+    ob.hp = 0;
+    ev.push({ type: 'obeliskDown', owner: ob.owner, x: ob.x, y: ob.y });
+  }
+}
+
+function attackObelisk(st: GameState, ev: GameEvent[], u: RuntimeUnit, ob: ObeliskState): void {
+  u.traveled = 0;
+  u.action = 'attack';
+  u.facing = ob.x >= u.x ? 1 : -1;
+  let cd = u.stats.atkCd;
+  if (u.buffs.berserk) cd = Math.max(1, Math.round(cd / 2));
+  u.atkTimer = cd;
+  ev.push({ type: 'attack', unitId: u.id, species: u.species, owner: u.owner, x: u.x, y: u.y, tx: ob.x, ty: ob.y, crit: false, air: false });
+
+  if (u.stats.ranged) {
+    const d = Math.max(0.001, dist(u.x, u.y, ob.x, ob.y));
+    const speed = MECHANICS.acidJetSpeed;
+    st.projectiles.push({
+      id: nextProjId++,
+      owner: u.owner,
+      kind: 'acid',
+      x: u.x, y: u.y, px: u.x, py: u.y,
+      vx: ((ob.x - u.x) / d) * speed,
+      vy: ((ob.y - u.y) / d) * speed,
+      dmg: effDmg(u, st),
+      ticksLeft: Math.max(1, Math.ceil(d / speed)),
+    });
+    ev.push({ type: 'shoot', unitId: u.id, x: u.x, y: u.y, tx: ob.x, ty: ob.y });
+    return;
+  }
+  dealObeliskDamage(st, ev, u.owner, ob, effDmg(u, st));
+}
+
 /** T-Rex stomp: chips all enemy ground units nearby, once per stride. */
 function trexStomp(st: GameState, ev: GameEvent[], u: RuntimeUnit): void {
   ev.push({ type: 'stomp', x: u.x, y: u.y });
@@ -552,6 +616,12 @@ function tickProjectiles(st: GameState, ev: GameEvent[]): void {
         if (dist2(o.x, o.y, pr.x, pr.y) <= MECHANICS.acidSplashRadius ** 2) {
           dealDamage(st, ev, null, o, pr.dmg, 'ranged');
           st.players[pr.owner].damageDealt += pr.dmg;
+        }
+      }
+      for (const ob of st.obelisks) {
+        if (ob.owner === pr.owner || ob.hp <= 0) continue;
+        if (dist2(ob.x, ob.y, pr.x, pr.y) <= (MECHANICS.acidSplashRadius + ob.r) ** 2) {
+          dealObeliskDamage(st, ev, pr.owner, ob, pr.dmg);
         }
       }
       st.zones.push({
@@ -778,6 +848,17 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
     return;
   }
 
+  // 1b. No duel in reach: siege the enemy obelisk when close enough.
+  const ob = target ? null : enemyObelisk(st, u);
+  if (ob) {
+    const reach = attackReach(u) + u.stats.radius + ob.r;
+    if (dist2(u.x, u.y, ob.x, ob.y) <= reach * reach) {
+      if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob);
+      else u.facing = ob.x >= u.x ? 1 : -1;
+      return;
+    }
+  }
+
   // 2. Otherwise move.
   const speed = effSpeed(st, u);
   if (speed <= 0) return;
@@ -791,7 +872,9 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
     u.waypoint = null;
     goal = st.phase === 'oasis'
       ? { x: WORLD_W / 2, y: WORLD_H / 2 }
-      : { x: u.x, y: u.owner === 0 ? 1.2 : WORLD_H - 1.2 };
+      : ob
+        ? { x: ob.x, y: ob.y }
+        : { x: u.x, y: u.owner === 0 ? 1.2 : WORLD_H - 1.2 };
   }
 
   const before = { x: u.x, y: u.y };
@@ -828,14 +911,27 @@ function scoreTerritory(st: GameState): void {
   }
 }
 
+/** Phase-1 dominance = share of obelisk damage dealt (the towers ARE the
+ *  scoreboard). Destroying one is a hard 1.0/0.0; ties fall back to combat
+ *  damage share. */
 function computeDominance(st: GameState): number {
+  const ob0 = st.obelisks.find((o) => o.owner === 0);
+  const ob1 = st.obelisks.find((o) => o.owner === 1);
+  if (ob0 && ob1) {
+    const down0 = ob0.hp <= 0;
+    const down1 = ob1.hp <= 0;
+    if (down1 && !down0) return 1;
+    if (down0 && !down1) return 0;
+    const dealtByP0 = ob1.maxHp - ob1.hp;
+    const dealtByP1 = ob0.maxHp - ob0.hp;
+    if (dealtByP0 + dealtByP1 > 0 && !down0 && !down1) {
+      return dealtByP0 / (dealtByP0 + dealtByP1);
+    }
+  }
   const p0 = st.players[0];
   const p1 = st.players[1];
-  const terrTotal = p0.territoryScore + p1.territoryScore;
   const dmgTotal = p0.damageDealt + p1.damageDealt;
-  const terr = terrTotal > 0 ? p0.territoryScore / terrTotal : 0.5;
-  const dmg = dmgTotal > 0 ? p0.damageDealt / dmgTotal : 0.5;
-  return terr * 0.5 + dmg * 0.5;
+  return dmgTotal > 0 ? p0.damageDealt / dmgTotal : 0.5;
 }
 
 function beginTransition(st: GameState, ev: GameEvent[]): void {
@@ -879,6 +975,7 @@ function beginOasis(st: GameState, ev: GameEvent[]): void {
   st.projectiles = [];
   st.pendingLava = [];
   st.props = oasisProps();
+  st.obelisks = [];
 
   // Survivors re-enter from their own edge, HP intact, marching on the pond.
   const survivors = st.units.filter((u) => u.hp > 0);
@@ -903,7 +1000,7 @@ function beginOasis(st: GameState, ev: GameEvent[]): void {
   ev.push({ type: 'phaseChange', phase: 'oasis' });
 }
 
-function tickCapture(st: GameState): void {
+function tickCapture(st: GameState, ev: GameEvent[]): void {
   let p0 = 0;
   let p1 = 0;
   const world = worldOf(st);
@@ -916,6 +1013,12 @@ function tickCapture(st: GameState): void {
   }
   if (p0 > p1) st.captureMeter = Math.min(100, st.captureMeter + CAPTURE_RATE);
   else if (p1 > p0) st.captureMeter = Math.max(-100, st.captureMeter - CAPTURE_RATE);
+  // Decisive claim: fill the meter and the pond is yours — game over early.
+  if (Math.abs(st.captureMeter) >= 100 && st.phase === 'oasis') {
+    const claimant: PlayerId = st.captureMeter > 0 ? 0 : 1;
+    ev.push({ type: 'pondClaimed', player: claimant });
+    endGame(st, ev);
+  }
 }
 
 function endGame(st: GameState, ev: GameEvent[]): void {
@@ -970,7 +1073,13 @@ export function advanceTick(st: GameState, inputs: PlayerInput[]): TickResult {
   st.units = st.units.filter((u) => u.hp > 0);
 
   if (st.phase === 'basalt') scoreTerritory(st);
-  if (st.phase === 'oasis') tickCapture(st);
+  if (st.phase === 'oasis') tickCapture(st, ev);
+
+  // Breaking an obelisk ends the Basalt Fields on the spot — a decisive
+  // phase-1 victory that carries the Blessing into the Oasis.
+  if (st.phase === 'basalt' && st.obelisks.some((o) => o.hp <= 0)) {
+    beginTransition(st, ev);
+  }
 
   st.phaseTicksLeft--;
   if (st.phaseTicksLeft <= 0) {

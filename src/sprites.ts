@@ -256,45 +256,70 @@ function splitStrip(img: HTMLImageElement, expected: number): HTMLCanvasElement[
   pctx.drawImage(img, 0, 0);
   const data = pctx.getImageData(0, 0, w, h).data;
 
-  // Column magenta density.
+  // Column separator density. Sheets use either magenta rules or thin dark
+  // grey rules; both read as "a narrow column of non-background ink running
+  // nearly the full sheet height".
   const magenta: number[] = new Array(w).fill(0);
+  const ink: number[] = new Array(w).fill(0);
   for (let x = 0; x < w; x++) {
-    let n = 0;
+    let nMag = 0;
+    let nInk = 0;
     for (let y = 0; y < h; y += 3) {
       const i = (y * w + x) * 4;
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
-      if (r > 140 && b > 140 && g < r * 0.72 && g < b * 0.72) n++;
+      const mx = Math.max(r, g, b);
+      const mn = Math.min(r, g, b);
+      if (r > 140 && b > 140 && g < r * 0.72 && g < b * 0.72) nMag++;
+      if (!(mx > 196 && mx - mn < 26)) nInk++; // anything that is not paper-white
     }
-    magenta[x] = n / (h / 3);
+    magenta[x] = nMag / Math.ceil(h / 3);
+    ink[x] = nInk / Math.ceil(h / 3);
   }
-  // Separator columns: dense magenta runs away from the borders.
-  const cuts: number[] = [];
+
+  // Track FULL separator runs so panels are cut inset past them — otherwise
+  // anti-aliased fringe survives keying as a ghost line inside the frame.
+  const cuts: Array<{ a: number; b: number }> = [];
+  const maxRule = Math.max(6, Math.round(w * 0.012));
   let x = 4;
   while (x < w - 4) {
-    if (magenta[x] > 0.5) {
+    const isMag = magenta[x] > 0.5;
+    // A dark rule: a tall, very narrow ink run sitting in an empty gutter —
+    // no painted character ever presents as an isolated 2-5 px column.
+    const isRule = ink[x] > 0.7;
+    if (isMag || isRule) {
       let x2 = x;
-      while (x2 < w - 1 && magenta[x2] > 0.3) x2++;
-      cuts.push(Math.round((x + x2) / 2));
-      x = x2 + Math.round(w * 0.05); // skip past this separator region
+      while (x2 < w - 1 && (isMag ? magenta[x2] > 0.15 : ink[x2] > 0.6)) x2++;
+      const gutterL = ink[Math.max(0, x - 3)] < 0.05;
+      const gutterR = ink[Math.min(w - 1, x2 + 3)] < 0.05;
+      if (isMag || (x2 - x <= maxRule && gutterL && gutterR)) {
+        cuts.push({ a: x, b: x2 });
+        x = x2 + Math.round(w * 0.05); // skip past this separator region
+        continue;
+      }
+      x = x2 + 1;
     } else {
       x++;
     }
   }
 
-  let panels: HTMLCanvasElement[];
+  const inset = Math.max(2, Math.round(w * 0.004));
+  let panels: HTMLCanvasElement[] = [];
   if (cuts.length >= expected - 1) {
-    const bounds = [0, ...cuts.slice(0, expected - 1), w];
-    panels = [];
+    const used = cuts.slice(0, expected - 1);
     for (let i = 0; i < expected; i++) {
-      panels.push(sliceCanvas(probe, bounds[i], bounds[i + 1]));
+      const x0 = i === 0 ? 0 : used[i - 1].b + inset;
+      const x1 = i === expected - 1 ? w : used[i].a - inset;
+      panels.push(sliceCanvas(probe, x0, x1));
     }
   } else {
-    panels = [];
+    // Equal-width fallback — shave the shared edge in case a rule sits there.
     const step = w / expected;
     for (let i = 0; i < expected; i++) {
-      panels.push(sliceCanvas(probe, Math.round(i * step), Math.round((i + 1) * step)));
+      const x0 = Math.round(i * step) + (i === 0 ? 0 : inset);
+      const x1 = Math.round((i + 1) * step) - (i === expected - 1 ? 0 : inset);
+      panels.push(sliceCanvas(probe, x0, x1));
     }
   }
   return panels.map((p) => autoCrop(keyBackground(p)));
