@@ -105,7 +105,7 @@ export function App() {
           profile={profile}
           onPlay={() => {
             music.start();
-            music.setPhase('menu');
+            music.setMode('menu');
             setScreen('faction');
           }}
           onReplayIntro={() => setScreen('cinematic')}

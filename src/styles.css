@@ -184,48 +184,73 @@ button {
   to { opacity: 0; transform: translateY(-6px); }
 }
 
-.cine-card-flash {
+.cine-hero-label {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.cine-card {
-  width: min(58vw, 260px);
-  aspect-ratio: 0.72;
-  border-radius: 18px;
-  overflow: hidden;
-  border: 2px solid;
-  position: relative;
-}
-
-.cine-card-label {
-  position: absolute;
-  bottom: 0;
   left: 0;
   right: 0;
-  padding: 1rem 0.9rem 0.9rem;
+  top: 71%;
   text-align: center;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.92));
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.2rem;
+  pointer-events: none;
 }
 
-.cine-card-label .epithet {
-  font-size: 0.66rem;
-  letter-spacing: 0.3em;
+.cine-hero-label .epithet {
+  font-size: 0.68rem;
+  letter-spacing: 0.34em;
   text-transform: uppercase;
   color: var(--ink-dim);
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9);
 }
 
-.cine-card-label .name {
+.cine-hero-label .name {
   font-weight: 900;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
-  font-size: 1.05rem;
+  font-size: 1.5rem;
+  text-shadow: 0 2px 22px rgba(0, 0, 0, 0.95);
+}
+
+.tap-to-begin {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: rgba(4, 2, 8, 0.55);
+  color: var(--ink);
+}
+
+.tap-to-begin b {
+  font-size: 1.15rem;
+  letter-spacing: 0.4em;
+  font-weight: 900;
+  animation: tap-pulse 1.8s ease-in-out infinite;
+}
+
+.tap-to-begin .hint {
+  font-size: 0.75rem;
+  letter-spacing: 0.16em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.tap-to-begin .ember-dot {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #ffd08a, var(--magma) 45%, var(--magma-deep) 90%);
+  box-shadow: 0 0 34px 8px rgba(255, 90, 44, 0.45);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes tap-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 .skip-btn {

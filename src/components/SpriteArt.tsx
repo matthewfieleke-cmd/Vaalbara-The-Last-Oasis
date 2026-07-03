@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { SpeciesId } from '../types';
-import { drawSpecies } from '../render';
+import { drawSpecies } from '../vector-art';
 import { getSprite, loadSprites } from '../sprites';
 
 /**
