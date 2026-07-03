@@ -1,6 +1,6 @@
 # Vaalbara: The Last Oasis
 
-A high-fidelity, mobile-first multiplayer PWA tactics game — the positional depth of chess fused with the real-time resource economy and card cycling of Clash Royale, set on the dying supercontinent of Vaalbara. **100% procedural**: every sprite, landscape, particle and note of music is generated in code. Zero image or audio assets.
+A high-fidelity, mobile-first multiplayer PWA tactics game — real-time arena battles with the resource economy and card cycling of Clash Royale, set on the dying supercontinent of Vaalbara. Painted arenas and frame-animated characters, procedural particles and a fully synthesized Zimmer-style score — zero audio files, offline-capable.
 
 ## Play
 
@@ -11,7 +11,7 @@ A high-fidelity, mobile-first multiplayer PWA tactics game — the positional de
 
 ### Two-phase match (~8 minutes)
 
-1. **The Basalt Fields (5 min)** — jagged black rock, sulfur vents that punish campers, and magma rivers forming chess-like chokepoints. Deploy units from your baseline with a **drag-to-fling vector**: touch your baseline, drag an arrow, and the unit charges down that trajectory. Accumulate **Dominance** — 50% territory pushed, 50% damage dealt.
+1. **The Basalt Fields (5 min)** — jagged black rock, sulfur vents that punish campers, and magma rivers crossed only at the rock bridges — the arena painting IS the collision geometry. Deploy units from your baseline with a **drag-to-fling vector**. Accumulate **Dominance** — 50% territory pushed, 50% damage dealt.
 2. **The Transition** — the camera pans up; survivors physically march into the Oasis carrying their remaining HP. The Dominance leader receives the **Vaalbara Blessing** (+10% speed & damage).
 3. **The Oasis (3 min)** — a vibrant pond ecosystem. Aqua income **doubles**. Deep shallows slow heavy units 40%, reeds grant stealth, lily pads sink under colossal units, and lotus blooms burst into 15% AOE healing mist. Win by **king-of-the-hill** majority control of the pond. A 50/50 meter at the buzzer is an official Tie.
 
@@ -39,7 +39,9 @@ Strictly decoupled headless simulation:
 | --- | --- |
 | `src/types.ts` | Strict coordinate & state contracts. The whole world is serialisable data. |
 | `src/data.ts` | Faction rosters, deck matrix, every balance number in one place. |
-| `src/engine.ts` | Deterministic headless sim on a rigid **1.2 s global tick**. Seeded PRNG, BFS/knight pathfinding, phase orchestration, `TickDriver` (real-time pacing + async input queue + rewind/replay desync reconciliation), `BotBrain`. |
+| `src/engine.ts` | Deterministic headless sim over a **continuous world** on a 300 ms tick: corridor routing + steering + wall-slide + unit separation, projectiles, phase orchestration, `TickDriver` (real-time pacing + async input queue + rewind/replay desync reconciliation), `BotBrain`. |
+| `src/navmask.ts` | Collision/terrain masks baked offline from the arena paintings (`scripts/gen-navmask.mjs`). |
+| `src/sprites.ts` | Painted-art pipeline: background keying, film-strip splitting into run/attack animation frames. |
 | `src/audio.ts` | Web Audio synthesizer: per-species SFX profiles + generative two-layer soundtrack that crossfades between phases and tracks battle intensity. |
 | `src/net.ts` | Firebase matchmaking/relay (dynamically imported only when keys exist) + LocalStorage guest mode. |
 | `src/render.ts` | Procedural 2.5D canvas at 60fps: gradient terrain, vector animals, particle engines (lava sparks, ash, ripples, glowing mist), and **visual catch-up interpolation** that smooths both normal tick motion and network corrections. |
