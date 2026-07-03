@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W, inDeployBand,
+  MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W, inDeployBand,
 } from '../types';
 import type { CardId, GameEvent, GameState, PlayerId } from '../types';
 import { cardDef } from '../data';
@@ -118,9 +118,25 @@ export function GameScreen({
         } else if (e.type === 'phaseChange' && e.phase === 'oasis') {
           setBanner({
             id: Date.now(),
-            title: 'Phase II — The Oasis',
-            body: 'Hold the pond. Aqua flows double.',
+            title: 'Phase II — Hold the Pond',
+            body: 'Keep more fighters in the water — fill the bar to claim it.',
             color: '#4fd8ff',
+          });
+        } else if (e.type === 'obeliskDown') {
+          setBanner({
+            id: Date.now(),
+            title: e.owner === seat ? 'Your Obelisk Falls!' : 'Enemy Obelisk Destroyed!',
+            body: e.owner === seat
+              ? 'The enemy takes the Basalt Fields…'
+              : 'The Basalt Fields are yours — march on the Oasis!',
+            color: e.owner === seat ? '#ff7d6d' : '#ffc94d',
+          });
+        } else if (e.type === 'pondClaimed') {
+          setBanner({
+            id: Date.now(),
+            title: e.player === seat ? 'The Pond Is Yours!' : 'The Pond Is Lost',
+            body: e.player === seat ? 'Total control of the last water on Earth.' : 'The enemy claims the last water…',
+            color: e.player === seat ? '#7dffce' : '#ff7d6d',
           });
         } else if (e.type === 'blessing') {
           setBanner({
@@ -139,6 +155,12 @@ export function GameScreen({
     music.start();
     music.setMode('basalt');
     driver.start();
+    setBanner({
+      id: Date.now(),
+      title: 'Phase I — Break Their Obelisk',
+      body: 'Defend yours. Its health is the score.',
+      color: '#ffab7a',
+    });
 
     return () => {
       driver.stop();
@@ -197,7 +219,7 @@ export function GameScreen({
       playUi('error');
       return;
     }
-    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= 6) {
+    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= MAX_ARMY) {
       showToast('Army at full strength — lose a fighter first');
       playUi('error');
       return;
@@ -250,21 +272,34 @@ export function GameScreen({
   const mm = Math.floor(secondsLeft / 60);
   const ss = String(secondsLeft % 60).padStart(2, '0');
 
-  // Dominance (phase 1) / capture (phase 2) meter from the local seat's view.
-  const meterMine = useMemo(() => {
-    if (!ui) return 50;
-    if (ui.phase === 'oasis' || ui.phase === 'ended') {
-      const m = seat === 0 ? ui.captureMeter : -ui.captureMeter;
-      return 50 + m / 2;
-    }
-    const p0 = ui.players[0];
-    const p1 = ui.players[1];
-    const terrTotal = p0.territoryScore + p1.territoryScore;
-    const dmgTotal = p0.damageDealt + p1.damageDealt;
-    const terr = terrTotal > 0 ? p0.territoryScore / terrTotal : 0.5;
-    const dmg = dmgTotal > 0 ? p0.damageDealt / dmgTotal : 0.5;
-    const dom0 = (terr * 0.5 + dmg * 0.5) * 100;
-    return seat === 0 ? dom0 : 100 - dom0;
+  // Phase 1 objective: the two obelisks' health, from the local seat's view.
+  const obelisks = useMemo(() => {
+    if (!ui || ui.obelisks.length === 0) return null;
+    const mine = ui.obelisks.find((o) => o.owner === seat);
+    const theirs = ui.obelisks.find((o) => o.owner !== seat);
+    if (!mine || !theirs) return null;
+    return {
+      mine: Math.max(0, mine.hp / mine.maxHp),
+      theirs: Math.max(0, theirs.hp / theirs.maxHp),
+      mineHp: Math.max(0, Math.round(mine.hp)),
+      theirsHp: Math.max(0, Math.round(theirs.hp)),
+    };
+  }, [ui, seat]);
+
+  // Phase 2 objective: capture percentage + which way it is ticking.
+  const prevMeterRef = useRef(0);
+  const capture = useMemo(() => {
+    if (!ui || (ui.phase !== 'oasis' && ui.phase !== 'ended')) return null;
+    const m = seat === 0 ? ui.captureMeter : -ui.captureMeter;
+    const trend = m - prevMeterRef.current;
+    prevMeterRef.current = m;
+    return {
+      pct: Math.abs(m),
+      mineLeads: m > 0,
+      gaining: trend > 0,
+      losing: trend < 0,
+      fill: 50 + m / 2,
+    };
   }, [ui, seat]);
 
   const selectCard = (card: CardId) => {
@@ -315,9 +350,51 @@ export function GameScreen({
             {mm}:{ss}
           </span>
         </div>
-        <div className="meter-bar">
-          <div className="mine" style={{ width: `${meterMine}%` }} />
-          <div className="theirs" style={{ width: `${100 - meterMine}%` }} />
+        {obelisks ? (
+          /* Phase 1 scoreboard: the two towers' health, side by side. */
+          <div className="objective-bars">
+            <div className="obelisk-track mine-side">
+              <span className="ob-label">YOURS</span>
+              <div className="ob-bar">
+                <div className="fill mine" style={{ width: `${obelisks.mine * 100}%` }} />
+              </div>
+              <span className="ob-hp">{obelisks.mineHp}</span>
+            </div>
+            <span className="ob-vs">⚔</span>
+            <div className="obelisk-track their-side">
+              <span className="ob-hp">{obelisks.theirsHp}</span>
+              <div className="ob-bar">
+                <div className="fill theirs" style={{ width: `${obelisks.theirs * 100}%` }} />
+              </div>
+              <span className="ob-label">ENEMY</span>
+            </div>
+          </div>
+        ) : capture ? (
+          /* Phase 2 scoreboard: pond claim percentage with live trend. */
+          <div className="capture-wrap">
+            <div className="meter-bar">
+              <div className="mine" style={{ width: `${capture.fill}%` }} />
+              <div className="theirs" style={{ width: `${100 - capture.fill}%` }} />
+              <span className="capture-pct">
+                {capture.pct > 0
+                  ? `${capture.mineLeads ? 'YOU' : 'ENEMY'} ${capture.pct}%`
+                  : 'CONTESTED'}
+                {capture.gaining ? ' ▲' : capture.losing ? ' ▼' : ''}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="meter-bar">
+            <div className="mine" style={{ width: '50%' }} />
+            <div className="theirs" style={{ width: '50%' }} />
+          </div>
+        )}
+        <div className="objective-pill">
+          {phase === 'basalt'
+            ? '⛨ Break the enemy Obelisk — defend your own'
+            : phase === 'transition'
+              ? 'The armies march to the last water…'
+              : '❖ Hold the pond — 100% claims victory'}
         </div>
         {me?.blessed && <div className="blessing-tag">✦ Vaalbara Blessing ✦</div>}
       </div>
@@ -341,7 +418,7 @@ export function GameScreen({
           </div>
           <span className="aqua-count">{Math.floor(me?.aqua ?? 0)}</span>
           <span className="army-count">
-            ⚑ {ui ? ui.units.filter((u) => u.owner === seat && u.hp > 0).length : 0}/6
+            ⚑ {ui ? ui.units.filter((u) => u.owner === seat && u.hp > 0).length : 0}/{MAX_ARMY}
           </span>
         </div>
         <div className="hand">

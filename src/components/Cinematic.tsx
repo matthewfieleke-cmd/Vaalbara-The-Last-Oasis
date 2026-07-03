@@ -20,7 +20,10 @@ interface Beat {
   braam?: boolean;
 }
 
-const HERO_TIME = 3.4;
+const HERO_TIME = 3.6;
+/** Shared fade envelope (seconds) — the DOM titles and the canvas hero use
+ *  the exact same ramps so a champion and its name always move together. */
+const FADE = 0.55;
 
 function heroBeats(at: number, world: 'basalt' | 'oasis', heroes: Beat['hero'][]): Beat[] {
   return heroes.map((hero, i) => ({ at: at + i * HERO_TIME, hero, world }));
@@ -40,8 +43,8 @@ const BEATS: Beat[] = [
     { species: 'fireants', hue: 15, name: 'Fire Ants', epithet: 'The Crawling Pyre' },
   ]),
 
-  { at: 41.2, title: 'The Oasis Syndicate', body: 'The green place raises six keepers of the water.', world: 'oasis', braam: true },
-  ...heroBeats(47.2, 'oasis', [
+  { at: 42.4, title: 'The Oasis Syndicate', body: 'The green place raises six keepers of the water.', world: 'oasis', braam: true },
+  ...heroBeats(48.4, 'oasis', [
     { species: 'bear', hue: 140, name: 'Bear', epithet: 'The Warden' },
     { species: 'bighorn', hue: 90, name: 'Bighorn', epithet: 'The Comet' },
     { species: 'bees', hue: 50, name: 'Bees', epithet: 'The Humming Veil' },
@@ -50,19 +53,20 @@ const BEATS: Beat[] = [
     { species: 'beetles', hue: 130, name: 'Beetle', epithet: 'The Artillery' },
   ]),
 
-  { at: 68, title: 'Two Armies. One Water.', body: 'Cross the lava. Hold the pond. History remembers one coalition.', world: 'basalt', braam: true },
-  { at: 75, title: 'Vaalbara', body: 'The drought ends today.', world: 'oasis', braam: true },
+  { at: 70.5, title: 'Two Armies. One Water.', body: 'Cross the lava. Hold the pond. History remembers one coalition.', world: 'basalt', braam: true },
+  { at: 77.5, title: 'Vaalbara', body: 'The drought ends today.', world: 'oasis', braam: true },
 ];
 
-const TOTAL = 82;
+const TOTAL = 84;
 
 export function Cinematic({ onDone }: { onDone: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [started, setStarted] = useState(false);
   const [beatIdx, setBeatIdx] = useState(-1);
   const doneRef = useRef(false);
-  const startedRef = useRef(false);
-  startedRef.current = started;
+  // THE shared timeline clock: set once at tap, read by both the DOM titles
+  // and the canvas painter, so heroes and their names can never drift apart.
+  const startRef = useRef<number | null>(null);
   const firedBraam = useRef(new Set<number>());
 
   const begin = () => {
@@ -71,6 +75,7 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
     music.setMode('intro');
     music.setIntensity(0.55);
     music.braam(73.4, 2.2, 0.55);
+    startRef.current = performance.now();
     setStarted(true);
   };
 
@@ -82,12 +87,12 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
     onDone();
   };
 
-  // Timeline clock.
+  // Timeline clock (reads the same startRef the canvas uses).
   useEffect(() => {
     if (!started) return;
-    const start = performance.now();
     const iv = setInterval(() => {
-      const t = (performance.now() - start) / 1000;
+      if (startRef.current === null) return;
+      const t = (performance.now() - startRef.current) / 1000;
       let i = -1;
       for (let k = 0; k < BEATS.length; k++) if (t >= BEATS[k].at) i = k;
       setBeatIdx(i);
@@ -96,7 +101,7 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         music.braam(BEATS[i].world === 'oasis' ? 110 : 73.4, 1.9, 0.5);
       }
       if (t >= TOTAL) finish();
-    }, 100);
+    }, 50);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
@@ -108,11 +113,16 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     let raf = 0;
-    const start = performance.now();
     let worldBlend = 0; // 0 = basalt, 1 = oasis
+    let lastNow = performance.now();
 
     const frame = () => {
-      const t = (performance.now() - start) / 1000;
+      const now = performance.now();
+      const dt = Math.min(0.1, (now - lastNow) / 1000);
+      lastNow = now;
+      // Ambient clock (pre-tap drift) vs the SHARED timeline clock (post-tap).
+      const ambient = now / 1000;
+      const t = startRef.current !== null ? (now - startRef.current) / 1000 : -1;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const W = Math.max(1, Math.round(rect.width * dpr));
@@ -123,10 +133,16 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
       }
 
       let active: Beat = BEATS[0];
-      if (startedRef.current) {
-        for (const b of BEATS) if (t >= b.at) active = b;
+      let activeIdx = 0;
+      if (t >= 0) {
+        for (let i = 0; i < BEATS.length; i++) {
+          if (t >= BEATS[i].at) {
+            active = BEATS[i];
+            activeIdx = i;
+          }
+        }
       }
-      worldBlend += ((active.world === 'oasis' ? 1 : 0) - worldBlend) * 0.02;
+      worldBlend += ((active.world === 'oasis' ? 1 : 0) - worldBlend) * Math.min(1, dt * 2.4);
 
       // Base wash.
       const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -143,7 +159,7 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.globalAlpha = alpha;
         const scale = (W * 1.25) / img.naturalWidth;
         const ih = img.naturalHeight * scale;
-        const drift = ((t * 14 * dir) % (ih * 0.4));
+        const drift = ((ambient * 14 * dir) % (ih * 0.4));
         const y0 = -ih * 0.2 + drift - H * 0.1;
         ctx.drawImage(img, (W - img.naturalWidth * scale) / 2, y0, img.naturalWidth * scale, ih);
         ctx.restore();
@@ -160,8 +176,8 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
 
       // Drifting embers / motes.
       for (let i = 0; i < 24; i++) {
-        const px = ((i * 733 + t * (20 + (i % 5) * 9)) % (W + 40)) - 20;
-        const py = H - (((i * 397 + t * (26 + (i % 3) * 12)) % H) * 0.9);
+        const px = ((i * 733 + ambient * (20 + (i % 5) * 9)) % (W + 40)) - 20;
+        const py = H - (((i * 397 + ambient * (26 + (i % 3) * 12)) % H) * 0.9);
         const hue = worldBlend > 0.5 ? 150 : 24;
         ctx.fillStyle = `hsla(${hue} 95% 62% / ${0.2 + (i % 4) * 0.1})`;
         ctx.beginPath();
@@ -169,12 +185,22 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.fill();
       }
 
-      // The animated hero: run-cycle frames striding in place.
-      if (startedRef.current && active.hero) {
+      // The animated hero: run-cycle frames striding in place, fading in and
+      // out on the exact same envelope as its DOM title card.
+      if (t >= 0 && active.hero) {
         const anim = getAnim(active.hero.species);
         const beatT = t - active.at;
+        const beatDur = (activeIdx + 1 < BEATS.length ? BEATS[activeIdx + 1].at : TOTAL) - active.at;
+        const heroAlpha = Math.max(0, Math.min(
+          1,
+          beatT / FADE,                      // fade in
+          (beatDur - beatT) / FADE,          // fade out
+        ));
+        const rise = (1 - Math.min(1, beatT / FADE)) * H * 0.012;
         const cx = W / 2;
-        const cy = H * 0.56;
+        const cy = H * 0.56 + rise;
+        ctx.save();
+        ctx.globalAlpha = heroAlpha;
         // Ground glow.
         const glow = ctx.createRadialGradient(cx, cy + H * 0.07, 4, cx, cy + H * 0.07, W * 0.34);
         glow.addColorStop(0, `hsla(${active.hero.hue} 85% 55% / 0.4)`);
@@ -182,25 +208,34 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.fillStyle = glow;
         ctx.fillRect(0, cy - H * 0.1, W, H * 0.3);
         if (anim) {
+          // Deliberate stride: ~1.3 cycles/s with crossfade between frames.
           const frames = anim.run;
-          const frame = frames[Math.floor(beatT * 9) % frames.length];
+          const phase = beatT * 5.2;
+          const i0 = Math.floor(phase) % frames.length;
+          const frac = phase - Math.floor(phase);
+          const mix = frac * frac * (3 - 2 * frac);
           const targetH = H * 0.3;
-          const scale = targetH / frame.h;
-          const dw = frame.canvas.width * scale;
-          const dh = frame.canvas.height * scale;
-          ctx.save();
           ctx.shadowColor = `hsl(${active.hero.hue} 90% 55%)`;
           ctx.shadowBlur = 34;
-          // Slight bob with the stride.
-          const bob = Math.abs(Math.sin(beatT * 9 * Math.PI * 0.5)) * -6;
-          ctx.drawImage(frame.canvas, cx - frame.anchorX * scale, cy + H * 0.07 - frame.anchorY * scale + bob, dw, dh);
-          ctx.restore();
+          const bob = Math.abs(Math.sin(phase * Math.PI * 0.5)) * -5;
+          const drawHero = (f: typeof frames[number], alpha: number) => {
+            const scale = targetH / f.h;
+            ctx.globalAlpha = heroAlpha * alpha;
+            ctx.drawImage(
+              f.canvas,
+              cx - f.anchorX * scale,
+              cy + H * 0.07 - f.anchorY * scale + bob,
+              f.canvas.width * scale,
+              f.canvas.height * scale,
+            );
+          };
+          drawHero(frames[i0], 1 - mix);
+          if (mix > 0.02) drawHero(frames[(i0 + 1) % frames.length], mix);
         } else {
-          ctx.save();
           ctx.translate(cx, cy);
           drawSpecies(ctx, active.hero.species, W * 0.16, t);
-          ctx.restore();
         }
+        ctx.restore();
       }
 
       // Letterbox.
@@ -218,8 +253,9 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
   const dur = active
     ? (beatIdx + 1 < BEATS.length ? BEATS[beatIdx + 1].at : TOTAL) - active.at
     : 0;
+  // Same FADE envelope as the canvas hero — titles land WITH their champion.
   const fadeStyle: React.CSSProperties = {
-    animation: `cine-fade-in 0.8s ease-out both, cine-fade-out 0.8s ease-in ${Math.max(0.4, dur - 0.8)}s both`,
+    animation: `cine-fade-in ${FADE}s ease-out both, cine-fade-out ${FADE}s ease-in ${Math.max(0.2, dur - FADE)}s both`,
   };
 
   return (

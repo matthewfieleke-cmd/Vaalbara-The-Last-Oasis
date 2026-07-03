@@ -346,6 +346,28 @@ const GLOBAL_SFX = {
     noise({ dur: 0.5, gain: 0.22, filterFreq: 2600, filterEnd: 500 });
     voice({ type: 'sine', freq: 300, freqEnd: 90, dur: 0.3, gain: 0.18 });
   },
+  obeliskHit: () => {
+    // Stone thud with a crystalline ring off the rune band.
+    voice({ type: 'sine', freq: 140, freqEnd: 55, dur: 0.28, gain: 0.24 });
+    voice({ type: 'triangle', freq: 1180, freqEnd: 990, dur: 0.35, gain: 0.05 });
+    noise({ dur: 0.2, gain: 0.12, filterFreq: 900, filterEnd: 300 });
+  },
+  obeliskDown: () => {
+    // Tower collapse: deep rumble + cascading rubble.
+    const t = core.ctx?.currentTime ?? 0;
+    voice({ type: 'sine', freq: 90, freqEnd: 24, dur: 1.6, gain: 0.5 });
+    noise({ dur: 1.8, gain: 0.4, filterFreq: 1800, filterEnd: 80 });
+    [500, 380, 300, 210].forEach((f, i) => {
+      voice({ type: 'triangle', freq: f, freqEnd: f * 0.5, dur: 0.35, gain: 0.12, when: t + 0.15 + i * 0.16 });
+    });
+  },
+  pondClaimed: () => {
+    const t = core.ctx?.currentTime ?? 0;
+    [392, 494, 587, 784].forEach((f, i) => {
+      voice({ type: 'sine', freq: f, dur: 0.9, gain: 0.14, when: t + i * 0.1 });
+    });
+    noise({ dur: 1.2, gain: 0.12, filterFreq: 3600, filterType: 'highpass' });
+  },
   blessing: () => {
     const t = core.ctx?.currentTime ?? 0;
     [523, 659, 784, 1047].forEach((f, i) => {
@@ -439,6 +461,18 @@ export function handleGameEvents(events: GameEvent[]): void {
         break;
       case 'blessing':
         GLOBAL_SFX.blessing();
+        budget--;
+        break;
+      case 'obeliskHit':
+        GLOBAL_SFX.obeliskHit();
+        budget--;
+        break;
+      case 'obeliskDown':
+        GLOBAL_SFX.obeliskDown();
+        budget--;
+        break;
+      case 'pondClaimed':
+        GLOBAL_SFX.pondClaimed();
         budget--;
         break;
       default:

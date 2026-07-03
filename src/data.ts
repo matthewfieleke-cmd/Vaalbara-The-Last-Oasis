@@ -4,9 +4,11 @@
  *
  * Balance philosophy (tick = 300 ms, continuous world, aqua caps at 10):
  *  - Cheap swarm (2 aqua) trades up vs single big targets but melts to AOE.
- *  - Tanks (6 aqua) anchor lanes; they survive ~12 s of mid-tier focus.
- *  - Income of 1 aqua / 3 s (doubled in the Oasis) plus the 6-unit army cap
- *    keeps the field a set of readable duels, not a mob.
+ *  - Tanks (6 aqua) anchor lanes; they survive ~15 s of mid-tier focus.
+ *  - Income of 1 aqua / ~3.75 s (faster in the Oasis) plus the 4-unit army
+ *    cap keeps the field a handful of readable duels, not a mob.
+ *  - HP curves run generous so every engagement plays out long enough to
+ *    watch, react to and counter.
  * ========================================================================== */
 
 import type { CardDef, CardId, FactionId, SpeciesId, UnitStats } from './types';
@@ -33,37 +35,37 @@ const U = (s: Partial<UnitStats> & Pick<UnitStats, 'hp' | 'dmg' | 'speed' | 'atk
 export const MAGMA_CARDS: CardDef[] = [
   {
     id: 'trex', name: 'T-Rex', title: 'Tyrant of the Ashfall', cost: 6, kind: 'unit', species: 'trex',
-    stats: U({ hp: 430, dmg: 58, speed: 0.11, atkCd: 8, range: 1.1, canHitAir: true, heavy: true, colossal: true, radius: 0.55 }),
+    stats: U({ hp: 520, dmg: 58, speed: 0.11, atkCd: 8, range: 1.1, canHitAir: true, heavy: true, colossal: true, radius: 0.55 }),
     blurb: 'Colossal tank. Every few strides stamps the ground, chipping nearby foes. Chomps flyers from the sky.',
     hue: 8,
   },
   {
     id: 'lion', name: 'Lion', title: 'Ember-Maned Commander', cost: 4, kind: 'unit', species: 'lion',
-    stats: U({ hp: 195, dmg: 40, speed: 0.2, atkCd: 4, radius: 0.4 }),
+    stats: U({ hp: 235, dmg: 40, speed: 0.2, atkCd: 4, radius: 0.4 }),
     blurb: 'High-damage commander. His deployment roar freezes nearby enemies solid.',
     hue: 35,
   },
   {
     id: 'eagle', name: 'Eagle', title: 'Cinder Talon', cost: 3, kind: 'unit', species: 'eagle',
-    stats: U({ hp: 88, dmg: 30, speed: 0.32, atkCd: 4, flying: true, canHitAir: true, radius: 0.32 }),
+    stats: U({ hp: 105, dmg: 30, speed: 0.32, atkCd: 4, flying: true, canHitAir: true, radius: 0.32 }),
     blurb: 'High-speed air assassin. Soars over lava and blockers, hunting the weakest heart on the field.',
     hue: 20,
   },
   {
     id: 'honeybadger', name: 'Honey Badger', title: 'The Unkillable Grudge', cost: 3, kind: 'unit', species: 'honeybadger',
-    stats: U({ hp: 150, dmg: 24, speed: 0.25, atkCd: 4, radius: 0.32 }),
+    stats: U({ hp: 180, dmg: 24, speed: 0.25, atkCd: 4, radius: 0.32 }),
     blurb: 'Fast berserker. Below 30% HP it snaps: double attack speed and total immunity to crowd control.',
     hue: 45,
   },
   {
     id: 'scorpion', name: 'Scorpion', title: 'Obsidian Flanker', cost: 3, kind: 'unit', species: 'scorpion',
-    stats: U({ hp: 125, dmg: 28, speed: 0.2, atkCd: 4, range: 1.05, radius: 0.36 }),
+    stats: U({ hp: 150, dmg: 28, speed: 0.2, atkCd: 4, range: 1.05, radius: 0.36 }),
     blurb: 'A circling flanker whose first sting on every victim stuns them cold.',
     hue: 285,
   },
   {
     id: 'fireants', name: 'Fire Ants', title: 'The Crawling Pyre', cost: 2, kind: 'unit', species: 'fireants',
-    stats: U({ hp: 44, dmg: 9, speed: 0.24, atkCd: 4, radius: 0.24, count: 3, formation: 'line' }),
+    stats: U({ hp: 52, dmg: 9, speed: 0.24, atkCd: 4, radius: 0.24, count: 3, formation: 'line' }),
     blurb: 'Cheap swarm deployed as a trio. Bites stack a burning acid debuff that eats through armour.',
     hue: 15,
   },
@@ -76,37 +78,37 @@ export const MAGMA_CARDS: CardDef[] = [
 export const OASIS_CARDS: CardDef[] = [
   {
     id: 'bear', name: 'Bear', title: 'Warden of the Shallows', cost: 6, kind: 'unit', species: 'bear',
-    stats: U({ hp: 440, dmg: 56, speed: 0.12, atkCd: 8, range: 1.1, canHitAir: true, heavy: true, radius: 0.52 }),
+    stats: U({ hp: 530, dmg: 56, speed: 0.12, atkCd: 8, range: 1.1, canHitAir: true, heavy: true, radius: 0.52 }),
     blurb: 'Heavy sweeping tank. Each swipe rakes everything beside its target — and it rears up to swat flyers out of the air.',
     hue: 25,
   },
   {
     id: 'bighorn', name: 'Bighorn Sheep', title: 'The Emerald Comet', cost: 4, kind: 'unit', species: 'bighorn',
-    stats: U({ hp: 200, dmg: 34, speed: 0.26, atkCd: 4, heavy: true, radius: 0.42 }),
+    stats: U({ hp: 240, dmg: 34, speed: 0.26, atkCd: 4, heavy: true, radius: 0.42 }),
     blurb: 'A charger. After 3+ unbroken strides at full gallop, its first strike lands triple damage and hurls the victim back.',
     hue: 90,
   },
   {
     id: 'bees', name: 'Swarm of Bees', title: 'The Humming Veil', cost: 3, kind: 'unit', species: 'bees',
-    stats: U({ hp: 86, dmg: 18, speed: 0.31, atkCd: 4, flying: true, canHitAir: true, radius: 0.34 }),
+    stats: U({ hp: 104, dmg: 18, speed: 0.31, atkCd: 4, flying: true, canHitAir: true, radius: 0.34 }),
     blurb: 'Air support that ignores every ground block, smothering victims until they can barely reach past their own nose.',
     hue: 50,
   },
   {
     id: 'wolves', name: 'Pack of Wolves', title: 'Twin Fang Doctrine', cost: 3, kind: 'unit', species: 'wolves',
-    stats: U({ hp: 128, dmg: 27, speed: 0.32, atkCd: 4, radius: 0.34, count: 2, formation: 'pair' }),
+    stats: U({ hp: 155, dmg: 27, speed: 0.32, atkCd: 4, radius: 0.34, count: 2, formation: 'pair' }),
     blurb: 'Skirmish pair. Wolves fighting side by side feed off each other for +15% damage.',
     hue: 210,
   },
   {
     id: 'porcupine', name: 'Porcupine', title: 'The Thousand Needles', cost: 3, kind: 'unit', species: 'porcupine',
-    stats: U({ hp: 240, dmg: 19, speed: 0.16, atkCd: 4, radius: 0.38, reflectPct: 0.2 }),
+    stats: U({ hp: 290, dmg: 19, speed: 0.16, atkCd: 4, radius: 0.38, reflectPct: 0.2 }),
     blurb: 'Defensive tank. A fifth of every melee blow it takes is returned to the attacker as a face full of quills.',
     hue: 160,
   },
   {
     id: 'beetles', name: 'Bombardier Beetles', title: 'Chemical Artillery', cost: 3, kind: 'unit', species: 'beetles',
-    stats: U({ hp: 118, dmg: 38, speed: 0.16, atkCd: 8, range: 4.4, ranged: true, canHitAir: true, radius: 0.36 }),
+    stats: U({ hp: 140, dmg: 38, speed: 0.16, atkCd: 8, range: 4.4, ranged: true, canHitAir: true, radius: 0.36 }),
     blurb: 'Anti-air artillery. Fires a visible arc of boiling acid that bursts into a caustic, slowing pool.',
     hue: 130,
   },

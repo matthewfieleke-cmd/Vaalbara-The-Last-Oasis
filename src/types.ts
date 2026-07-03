@@ -215,6 +215,20 @@ export interface PropState {
 }
 
 /* ------------------------------------------------------------------------ */
+/* Obelisks — the Phase-1 "towers". Each seat guards one; breaking the        */
+/* enemy's wins the Basalt Fields outright.                                   */
+/* ------------------------------------------------------------------------ */
+
+export interface ObeliskState {
+  readonly owner: PlayerId;
+  hp: number;
+  readonly maxHp: number;
+  readonly x: number;
+  readonly y: number;
+  readonly r: number;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Player economy & hand cycling                                              */
 /* ------------------------------------------------------------------------ */
 
@@ -285,6 +299,9 @@ export type GameEvent =
   | { type: 'lavaTelegraph'; x: number; y: number }
   | { type: 'lavaStrike'; x: number; y: number }
   | { type: 'lotusBurst'; x: number; y: number }
+  | { type: 'obeliskHit'; owner: PlayerId; amount: number; x: number; y: number }
+  | { type: 'obeliskDown'; owner: PlayerId; x: number; y: number }
+  | { type: 'pondClaimed'; player: PlayerId }
   | { type: 'phaseChange'; phase: GamePhase }
   | { type: 'blessing'; player: PlayerId }
   | { type: 'gameOver'; winner: PlayerId | 'tie' };
@@ -308,6 +325,8 @@ export interface GameState {
   projectiles: ProjectileState[];
   zones: ZoneState[];
   props: PropState[];
+  /** Phase-1 objectives: [seat 0's obelisk, seat 1's obelisk]. Empty in P2. */
+  obelisks: ObeliskState[];
   pendingLava: PendingLavaRain[];
   players: [PlayerBoardState, PlayerBoardState];
   /** Phase-2 capture meter, range [-100, +100]; positive favours player 0. */
@@ -364,13 +383,19 @@ export const inDeployBand = (player: PlayerId, y: number): boolean =>
   player === 0 ? y >= WORLD_H - DEPLOY_DEPTH : y < DEPLOY_DEPTH;
 
 export const AQUA_MAX = 10;
-/** Slow drip (1 aqua / 3 s) keeps armies small: distinct duels, not mobs. */
-export const AQUA_PER_TICK_P1 = 0.1;
-export const AQUA_PER_TICK_P2 = 0.2; // doubles in the Oasis
+/** Slow drip (1 aqua / ~3.75 s) keeps armies small: distinct duels, not mobs. */
+export const AQUA_PER_TICK_P1 = 0.08;
+export const AQUA_PER_TICK_P2 = 0.16; // doubles in the Oasis
 export const HAND_SIZE = 4;
 /** Hard cap on living units per player — the field stays readable. */
-export const MAX_ARMY = 6;
+export const MAX_ARMY = 4;
 export const CAPTURE_RATE = 1;
+/** Phase-1 objective: the Ancient Obelisk each seat must defend. */
+export const OBELISK_HP = 850;
+export const OBELISK_RADIUS = 0.55;
+/** Units only auto-acquire enemies inside this radius; otherwise they push
+ *  the lane toward the enemy obelisk (Clash-Royale-style tower pressure). */
+export const AGGRO_RANGE = 3.2;
 export const VENT_DMG = 2;
 export const ACID_DMG = 1; // per stack per tick
 export const LOTUS_HEAL_PCT = 0.15;
