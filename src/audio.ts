@@ -10,7 +10,7 @@
  *    filter, noise mix) triggered on deployment spawn and combat ticks.
  * ========================================================================== */
 
-import type { GameEvent, GamePhase, SpeciesId } from './types';
+import type { GameEvent, SpeciesId } from './types';
 
 /* ------------------------------------------------------------------------ */
 /* Core                                                                       */
@@ -341,9 +341,10 @@ const GLOBAL_SFX = {
     voice({ type: 'sine', freq: 660, freqEnd: 1320, dur: 0.5, gain: 0.14 });
     noise({ dur: 0.4, gain: 0.1, filterFreq: 4000, filterType: 'highpass' });
   },
-  lilySink: () => {
-    noise({ dur: 0.6, gain: 0.2, filterFreq: 800, filterEnd: 150 });
-    voice({ type: 'sine', freq: 200, freqEnd: 60, dur: 0.5, gain: 0.2 });
+  splash: () => {
+    // Acid burst: sizzling impact.
+    noise({ dur: 0.5, gain: 0.22, filterFreq: 2600, filterEnd: 500 });
+    voice({ type: 'sine', freq: 300, freqEnd: 90, dur: 0.3, gain: 0.18 });
   },
   blessing: () => {
     const t = core.ctx?.currentTime ?? 0;
@@ -424,8 +425,12 @@ export function handleGameEvents(events: GameEvent[]): void {
         GLOBAL_SFX.lotusBurst();
         budget--;
         break;
-      case 'lilySink':
-        GLOBAL_SFX.lilySink();
+      case 'shoot':
+        SPECIES_SFX.beetles.attack();
+        budget--;
+        break;
+      case 'splash':
+        GLOBAL_SFX.splash();
         budget--;
         break;
       case 'heal':
@@ -443,45 +448,71 @@ export function handleGameEvents(events: GameEvent[]): void {
 }
 
 /* ------------------------------------------------------------------------ */
-/* Generative soundtrack                                                      */
+/* Generative soundtrack — a Zimmer-inspired hybrid-orchestral synth score    */
+/*                                                                            */
+/* Signature elements, all synthesized:                                       */
+/*   BRAAM      massive detuned-saw brass hit through an opening filter       */
+/*   OSTINATO   relentless 16th-note string figure in D minor                 */
+/*   TAIKO      pitch-dropped drum hits with noise skin                       */
+/*   PULSE      sub-bass heartbeat                                            */
+/*   CHOIR PAD  formant-filtered detuned pad                                  */
+/*   RISER      tension sweep for the phase transition                        */
+/* A generated-impulse convolver gives the whole score a hall tail.           */
 /* ------------------------------------------------------------------------ */
 
-/**
- * The music director runs on a musical scheduler (lookahead pattern) and
- * owns two "scores" that share one clock, so the phase-1 -> phase-2
- * crossfade is beat-aligned and seamless.
- */
+export type MusicMode = 'menu' | 'intro' | 'basalt' | 'transition' | 'oasis' | 'ended';
+
 class MusicDirector {
   private running = false;
-  private phase: GamePhase | 'menu' = 'menu';
-  private layerA: GainNode | null = null; // basalt score
-  private layerB: GainNode | null = null; // oasis score
+  private mode: MusicMode = 'menu';
+  private bus: GainNode | null = null;
+  private reverb: ConvolverNode | null = null;
+  private reverbGain: GainNode | null = null;
   private nextNoteTime = 0;
-  private beat = 0;
+  private step = 0;
   private schedTimer: ReturnType<typeof setInterval> | null = null;
-  private intensity = 0.3; // 0..1, driven by battle density
+  private intensity = 0.35;
 
-  /** Basalt: D natural minor, brooding low register. */
-  private static BASALT_BASS = [36.71, 36.71, 43.65, 36.71, 34.65, 34.65, 36.71, 32.7]; // D1 G1 C#1 area
-  /** Oasis: D dorian, floating and hopeful. */
-  private static OASIS_ARP = [293.66, 349.23, 440, 523.25, 440, 349.23, 493.88, 587.33];
-  private static OASIS_PAD = [[146.83, 220, 293.66], [130.81, 196, 329.63], [174.61, 261.63, 349.23], [164.81, 246.94, 392]];
+  /* D natural minor. Frequencies for the ostinato register (D3-based). */
+  private static OSTINATO: number[][] = [
+    // Four 1-bar cells (16 sixteenths each), Dm -> Bb -> Gm -> A.
+    [146.8, 146.8, 220, 146.8, 174.6, 146.8, 220, 174.6, 146.8, 146.8, 220, 146.8, 174.6, 220, 174.6, 146.8],
+    [116.5, 116.5, 174.6, 116.5, 146.8, 116.5, 174.6, 146.8, 116.5, 116.5, 174.6, 116.5, 146.8, 174.6, 146.8, 116.5],
+    [98, 98, 146.8, 98, 116.5, 98, 146.8, 116.5, 98, 98, 146.8, 98, 116.5, 146.8, 116.5, 98],
+    [110, 110, 164.8, 110, 138.6, 110, 164.8, 138.6, 110, 110, 164.8, 110, 138.6, 164.8, 138.6, 110],
+  ];
+
+  private static BASS = [36.7, 29.1, 24.5, 27.5]; // D1 Bb0 G0 A0
+  /** Oasis: D dorian, hopeful. Pad chords + soaring line. */
+  private static OASIS_PADS: number[][] = [
+    [146.8, 220, 293.7, 440], // Dm add9
+    [174.6, 261.6, 349.2, 523.3], // F
+    [196, 293.7, 392, 587.3], // G
+    [164.8, 246.9, 329.6, 493.9], // Em
+  ];
+  private static OASIS_LEAD = [587.3, 523.3, 440, 523.3, 587.3, 659.3, 587.3, 880];
 
   start(): void {
     const ctx = core.ensure();
     if (!ctx || !core.musicBus || this.running) return;
     this.running = true;
-    this.layerA = ctx.createGain();
-    this.layerB = ctx.createGain();
-    this.layerA.gain.value = this.phase === 'oasis' ? 0 : 1;
-    this.layerB.gain.value = this.phase === 'oasis' ? 1 : 0;
-    this.layerA.connect(core.musicBus);
-    this.layerB.connect(core.musicBus);
-    this.nextNoteTime = ctx.currentTime + 0.1;
-    this.beat = 0;
-    // 100 BPM eighth-note grid = 0.3 s per step; 4 steps per 1.2 s tick, so
-    // the score breathes in lockstep with the simulation.
-    this.schedTimer = setInterval(() => this.schedule(), 80);
+    this.bus = ctx.createGain();
+    this.bus.gain.value = 1;
+    this.bus.connect(core.musicBus);
+    // Hall reverb from a generated impulse.
+    if (!this.reverb) {
+      this.reverb = ctx.createConvolver();
+      this.reverb.buffer = makeImpulse(ctx, 2.8, 2.2);
+      this.reverbGain = ctx.createGain();
+      this.reverbGain.gain.value = 0.4;
+      this.reverb.connect(this.reverbGain);
+      this.reverbGain.connect(core.musicBus);
+    }
+    this.bus.connect(this.reverb);
+    this.nextNoteTime = ctx.currentTime + 0.08;
+    this.step = 0;
+    // 100 BPM 16th grid = 0.15 s per step (8 steps per 1.2 s = 4 sim ticks).
+    this.schedTimer = setInterval(() => this.schedule(), 70);
   }
 
   stop(): void {
@@ -489,96 +520,229 @@ class MusicDirector {
     if (this.schedTimer) clearInterval(this.schedTimer);
     this.schedTimer = null;
     const ctx = core.ctx;
-    if (ctx) {
-      this.layerA?.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
-      this.layerB?.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+    if (ctx && this.bus) {
+      this.bus.gain.setTargetAtTime(0, ctx.currentTime, 0.4);
+      const bus = this.bus;
+      setTimeout(() => bus.disconnect(), 1800);
+      this.bus = null;
     }
-    setTimeout(() => {
-      this.layerA?.disconnect();
-      this.layerB?.disconnect();
-      this.layerA = null;
-      this.layerB = null;
-    }, 1200);
   }
 
-  setPhase(phase: GamePhase | 'menu'): void {
-    if (phase === this.phase) return;
-    this.phase = phase;
-    const ctx = core.ctx;
-    if (!ctx || !this.layerA || !this.layerB) return;
-    const toOasis = phase === 'oasis' || phase === 'ended';
-    // 4-second equal-power crossfade.
-    this.layerA.gain.setTargetAtTime(toOasis ? 0 : 1, ctx.currentTime, 1.2);
-    this.layerB.gain.setTargetAtTime(toOasis ? 1 : 0, ctx.currentTime, 1.2);
+  setMode(mode: MusicMode): void {
+    if (mode === this.mode) return;
+    const prev = this.mode;
+    this.mode = mode;
+    // Punctuate big scene changes.
+    if (mode === 'transition') {
+      this.riser(2.4);
+    } else if (mode === 'oasis' && prev === 'transition') {
+      this.braam(220, 1.4, 0.5);
+    } else if (mode === 'basalt') {
+      this.braam(146.8, 1.6, 0.55);
+    }
   }
 
-  /** Battle density (0..1) subtly drives percussion energy. */
+  /** Battle density (0..1) drives percussion energy and note density. */
   setIntensity(v: number): void {
     this.intensity = Math.max(0, Math.min(1, v));
+  }
+
+  /** The Zimmer hit — public so the cinematic can score its reveals. */
+  braam(freq = 73.4, dur = 1.8, gain = 0.5): void {
+    const ctx = core.ensure();
+    if (!ctx || !this.bus) return;
+    const t0 = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t0);
+    out.gain.exponentialRampToValueAtTime(gain, t0 + dur * 0.28);
+    out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(160, t0);
+    lp.frequency.exponentialRampToValueAtTime(900, t0 + dur * 0.4);
+    lp.frequency.exponentialRampToValueAtTime(220, t0 + dur);
+    lp.Q.value = 1.2;
+    lp.connect(out);
+    out.connect(this.bus);
+    for (const cents of [-12, -5, 0, 6, 13]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq * Math.pow(2, cents / 1200);
+      osc.connect(lp);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.1);
+    }
+    // Sub octave reinforcement.
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = freq / 2;
+    const subG = ctx.createGain();
+    subG.gain.setValueAtTime(0.0001, t0);
+    subG.gain.exponentialRampToValueAtTime(gain * 0.8, t0 + dur * 0.3);
+    subG.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    sub.connect(subG);
+    subG.connect(this.bus);
+    sub.start(t0);
+    sub.stop(t0 + dur + 0.1);
+  }
+
+  /** Rising tension sweep (phase transition, cinematic climax). */
+  riser(dur = 2.0): void {
+    const ctx = core.ensure();
+    if (!ctx || !this.bus) return;
+    const t0 = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(80 * (i + 1), t0);
+      osc.frequency.exponentialRampToValueAtTime(320 * (i + 1), t0 + dur);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.07, t0 + dur * 0.8);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + 0.2);
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(300, t0);
+      bp.frequency.exponentialRampToValueAtTime(2400, t0 + dur);
+      osc.connect(bp);
+      bp.connect(g);
+      g.connect(this.bus);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.3);
+    }
+  }
+
+  private taiko(t: number, big: boolean, vel = 1): void {
+    if (!this.bus) return;
+    voice({ type: 'sine', freq: big ? 88 : 130, freqEnd: big ? 40 : 62, dur: big ? 0.42 : 0.24, gain: (big ? 0.55 : 0.3) * vel, bus: this.bus, when: t });
+    noise({ dur: big ? 0.18 : 0.09, gain: (big ? 0.22 : 0.12) * vel, filterFreq: big ? 900 : 1600, filterEnd: 200, bus: this.bus, when: t });
+  }
+
+  private stringNote(t: number, freq: number, vel: number, dur = 0.14): void {
+    if (!this.bus) return;
+    voice({ type: 'sawtooth', freq, dur, gain: 0.085 * vel, filterFreq: 1500, filterQ: 1.6, attack: 0.012, bus: this.bus, when: t });
+    voice({ type: 'sawtooth', freq: freq * 1.004, dur, gain: 0.055 * vel, filterFreq: 1100, attack: 0.012, bus: this.bus, when: t });
+  }
+
+  private padChord(t: number, freqs: number[], dur: number, gain = 0.05): void {
+    if (!this.bus) return;
+    for (const f of freqs) {
+      voice({ type: 'triangle', freq: f, dur, gain, attack: dur * 0.3, bus: this.bus, when: t });
+      voice({ type: 'triangle', freq: f * 1.003, dur, gain: gain * 0.7, attack: dur * 0.35, bus: this.bus, when: t });
+    }
   }
 
   private schedule(): void {
     const ctx = core.ctx;
     if (!ctx || !this.running) return;
-    const STEP = 0.3;
-    while (this.nextNoteTime < ctx.currentTime + 0.35) {
-      this.playStep(this.beat, this.nextNoteTime);
+    const STEP = 0.15;
+    while (this.nextNoteTime < ctx.currentTime + 0.3) {
+      this.playStep(this.step, this.nextNoteTime);
       this.nextNoteTime += STEP;
-      this.beat++;
+      this.step++;
     }
   }
 
-  private playStep(beat: number, t: number): void {
-    const step8 = beat % 8;
-    const step4 = beat % 4;
+  private playStep(step: number, t: number): void {
+    const s16 = step % 16; // position in bar
+    const bar = Math.floor(step / 16);
+    const inten = this.intensity;
 
-    /* --- Layer A: the Basalt score — dark, heavy, ominous ------------- */
-    if (this.layerA && this.layerA.gain.value > 0.02) {
-      // Doom bass drone on every half bar.
-      if (step8 % 2 === 0) {
-        const f = MusicDirector.BASALT_BASS[step8];
-        voice({ type: 'sawtooth', freq: f, dur: 0.55, gain: 0.32, filterFreq: 130, attack: 0.02, bus: this.layerA, when: t });
-        voice({ type: 'square', freq: f * 2, dur: 0.5, gain: 0.1, filterFreq: 220, bus: this.layerA, when: t });
-      }
-      // War-drum thud on beats 0 and 5 (heavy syncopation).
-      if (step8 === 0 || step8 === 5) {
-        voice({ type: 'sine', freq: 82, freqEnd: 38, dur: 0.3, gain: 0.5, bus: this.layerA, when: t });
-      }
-      // Metallic tick pattern, denser with intensity.
-      if (step4 === 2 || (this.intensity > 0.5 && step4 === 3)) {
-        noise({ dur: 0.05, gain: 0.06 + this.intensity * 0.08, filterFreq: 5200, filterType: 'highpass', bus: this.layerA, when: t });
-      }
-      // Ominous minor-second drone swell every 4 bars.
-      if (beat % 32 === 16) {
-        voice({ type: 'triangle', freq: 293.66, dur: 3.5, gain: 0.05, attack: 1.2, bus: this.layerA, when: t });
-        voice({ type: 'triangle', freq: 311.13, dur: 3.5, gain: 0.045, attack: 1.4, bus: this.layerA, when: t });
-      }
-    }
-
-    /* --- Layer B: the Oasis score — mysterious, intense, hopeful ------- */
-    if (this.layerB && this.layerB.gain.value > 0.02) {
-      // Water-drop arpeggio.
-      const arp = MusicDirector.OASIS_ARP[step8];
-      if (step8 % 2 === 0 || this.intensity > 0.45) {
-        voice({ type: 'sine', freq: arp, dur: 0.34, gain: 0.11, attack: 0.01, bus: this.layerB, when: t });
-      }
-      // Warm pad chord every bar.
-      if (beat % 8 === 0) {
-        const chord = MusicDirector.OASIS_PAD[Math.floor(beat / 8) % 4];
-        for (const f of chord) {
-          voice({ type: 'triangle', freq: f, dur: 2.3, gain: 0.05, attack: 0.5, bus: this.layerB, when: t });
+    switch (this.mode) {
+      case 'menu': {
+        // Brooding, quiet: pulse + sparse pad.
+        if (s16 === 0 || s16 === 8) {
+          voice({ type: 'sine', freq: 36.7, dur: 0.5, gain: 0.3, bus: this.bus, when: t });
         }
+        if (step % 64 === 0) this.padChord(t, [146.8, 220, 293.7], 4.5, 0.04);
+        if (step % 64 === 32) this.padChord(t, [130.8, 196, 246.9], 4.5, 0.035);
+        break;
       }
-      // Soft heartbeat pulse keeps the tension.
-      if (step8 === 0 || step8 === 3) {
-        voice({ type: 'sine', freq: 68, freqEnd: 50, dur: 0.22, gain: 0.26 + this.intensity * 0.1, bus: this.layerB, when: t });
+
+      case 'intro':
+      case 'basalt': {
+        const cell = MusicDirector.OSTINATO[bar % 4];
+        // Relentless string ostinato; density rides intensity.
+        const gate = inten > 0.55 ? 1 : inten > 0.3 ? (s16 % 2 === 0 ? 1 : 0) : (s16 % 4 === 0 ? 1 : 0);
+        if (gate) {
+          const accent = s16 % 4 === 0 ? 1.25 : 0.85;
+          this.stringNote(t, cell[s16], accent * (0.7 + inten * 0.5));
+        }
+        // Bass root each bar; fifth halfway.
+        if (s16 === 0) {
+          voice({ type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2, gain: 0.26, filterFreq: 130, attack: 0.03, bus: this.bus, when: t });
+        }
+        // Taiko pattern: heavy downbeat, answer on 11; fills at high intensity.
+        if (s16 === 0) this.taiko(t, true);
+        if (s16 === 10) this.taiko(t, false, 0.9);
+        if (inten > 0.5 && s16 === 13) this.taiko(t, false, 0.7);
+        if (inten > 0.75 && s16 % 4 === 2) this.taiko(t, false, 0.45);
+        // Braam accent opening every 8th bar (intro leans on manual braams).
+        if (this.mode === 'basalt' && step % 128 === 0 && step > 0) {
+          this.braam(73.4, 1.6, 0.34 + inten * 0.2);
+        }
+        // High tension drone every 4 bars.
+        if (step % 64 === 48) {
+          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.03, attack: 0.8, bus: this.bus, when: t });
+          voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.026, attack: 0.9, bus: this.bus, when: t });
+        }
+        break;
       }
-      // Hopeful high shimmer every 2 bars.
-      if (beat % 16 === 12) {
-        voice({ type: 'sine', freq: 1174.66, dur: 1.4, gain: 0.03, attack: 0.4, bus: this.layerB, when: t });
+
+      case 'transition': {
+        // Suspended: choir swell + heartbeat, the riser was fired on entry.
+        if (s16 === 0) this.padChord(t, [146.8, 220, 293.7, 440], 2.6, 0.06);
+        if (s16 === 0 || s16 === 6) {
+          voice({ type: 'sine', freq: 60, freqEnd: 45, dur: 0.3, gain: 0.32, bus: this.bus, when: t });
+        }
+        break;
+      }
+
+      case 'oasis': {
+        // Hopeful but driving: pads, plucked lead, lighter taikos.
+        if (s16 === 0) {
+          this.padChord(t, MusicDirector.OASIS_PADS[bar % 4], 2.6, 0.05);
+          voice({ type: 'sine', freq: MusicDirector.OASIS_PADS[bar % 4][0] / 2, dur: 2.2, gain: 0.22, bus: this.bus, when: t });
+        }
+        // Lead line on the off beats, denser as battle heats up.
+        if (s16 % 2 === 0 && (s16 % 4 === 2 || inten > 0.45)) {
+          const note = MusicDirector.OASIS_LEAD[(bar * 2 + (s16 >> 1)) % 8];
+          voice({ type: 'sine', freq: note, dur: 0.32, gain: 0.085, attack: 0.01, bus: this.bus, when: t });
+        }
+        if (s16 === 0) this.taiko(t, true, 0.8);
+        if (s16 === 8) this.taiko(t, false, 0.7);
+        if (inten > 0.6 && s16 === 12) this.taiko(t, false, 0.5);
+        // Shimmer.
+        if (step % 32 === 24) {
+          voice({ type: 'sine', freq: 1174.7, dur: 1.4, gain: 0.028, attack: 0.4, bus: this.bus, when: t });
+        }
+        break;
+      }
+
+      case 'ended': {
+        if (s16 === 0 && bar % 2 === 0) this.padChord(t, [146.8, 220, 293.7, 370], 4, 0.05);
+        break;
       }
     }
   }
 }
 
+function makeImpulse(ctx: AudioContext, seconds: number, decay: number): AudioBuffer {
+  const rate = ctx.sampleRate;
+  const len = Math.floor(rate * seconds);
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+  }
+  return buf;
+}
+
 export const music = new MusicDirector();
+
+/** Map game phases onto music modes (used by the game screen). */
+export function musicModeForPhase(phase: 'basalt' | 'transition' | 'oasis' | 'ended'): MusicMode {
+  return phase;
+}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BOARD_H, BOARD_W, DEPLOY_ROWS, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS,
+  PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W, inDeployBand,
 } from '../types';
 import type { CardId, GameEvent, GameState, PlayerId } from '../types';
 import { cardDef } from '../data';
@@ -85,7 +85,7 @@ export function GameScreen({
         routeEvents(events, state);
         // Battle density feeds the adaptive score.
         music.setIntensity(Math.min(1, state.units.length / 14));
-        music.setPhase(state.phase);
+        music.setMode(state.phase);
         setUi({ ...state });
         // Local bot thinks after seeing the tick, like a remote player would.
         if (bot && state.phase !== 'ended') {
@@ -137,7 +137,7 @@ export function GameScreen({
     };
 
     music.start();
-    music.setPhase('basalt');
+    music.setMode('basalt');
     driver.start();
 
     return () => {
@@ -161,13 +161,12 @@ export function GameScreen({
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    const t = renderer.screenToTile(px, py);
-    // Forgiving one-handed input: touches just outside the board clamp to the
-    // nearest tile (thumbs often land below the baseline row). Touches far
-    // away are ignored.
-    if (t.x < -1.6 || t.x > BOARD_W + 0.6 || t.y < -1.6 || t.y > BOARD_H + 0.6) return;
-    const gx = Math.max(0, Math.min(BOARD_W - 1, Math.round(t.x)));
-    const gy = Math.max(0, Math.min(BOARD_H - 1, Math.round(t.y)));
+    const t = renderer.screenToWorld(px, py);
+    // Forgiving one-handed input: touches just outside the world clamp to the
+    // nearest point (thumbs often land below the baseline). Far away = ignore.
+    if (t.x < -1.6 || t.x > WORLD_W + 1.6 || t.y < -1.6 || t.y > WORLD_H + 1.6) return;
+    const gx = Math.max(0.25, Math.min(WORLD_W - 0.25, t.x));
+    const gy = Math.max(0.25, Math.min(WORLD_H - 0.25, t.y));
     const st = driver.state;
     if (st.phase !== 'basalt' && st.phase !== 'oasis') return;
 
@@ -192,8 +191,8 @@ export function GameScreen({
       return;
     }
 
-    // Unit deploy: touch must begin on the local baseline rows.
-    if (!DEPLOY_ROWS[seat].includes(gy)) {
+    // Unit deploy: touch must begin inside the local deploy band.
+    if (!inDeployBand(seat, gy)) {
       showToast('Deploy from your baseline — drag to aim the charge');
       playUi('error');
       return;
@@ -216,7 +215,7 @@ export function GameScreen({
     const drag = dragRef.current;
     if (!renderer || !drag || drag.pointerId !== e.pointerId) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const t = renderer.screenToTile(e.clientX - rect.left, e.clientY - rect.top);
+    const t = renderer.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
     renderer.drag.toX = t.x;
     renderer.drag.toY = t.y;
   }, []);

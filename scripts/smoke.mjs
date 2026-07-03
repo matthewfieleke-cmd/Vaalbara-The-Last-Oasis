@@ -20,11 +20,13 @@ await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${shots}/01-boot.png` });
 
-// Boot -> cinematic (first visit). Skip it.
-const skip = page.locator('.skip-btn');
-if (await skip.count()) {
+// Boot -> cinematic (first visit): tap to begin, sample a frame, then skip.
+const tap = page.locator('.tap-to-begin');
+if (await tap.count()) {
+  await tap.click();
+  await page.waitForTimeout(2500);
   await page.screenshot({ path: `${shots}/02-cinematic.png` });
-  await skip.click();
+  await page.click('.skip-btn');
 }
 await page.waitForSelector('.menu', { timeout: 5000 });
 await page.screenshot({ path: `${shots}/03-menu.png` });

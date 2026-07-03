@@ -17,7 +17,8 @@
     <title>Vaalbara: The Last Oasis</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="./icon.svg" />
+    <!-- iOS requires a PNG for Add to Home Screen (SVG is ignored). -->
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <!--
       Optional Firebase multiplayer keys. Leave commented for Local Guest Mode.
       <script>
