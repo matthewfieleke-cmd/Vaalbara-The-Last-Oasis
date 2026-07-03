@@ -43,82 +43,73 @@ function tile(terrain: TileState['terrain']): TileState {
   return { terrain, destroyed: false };
 }
 
-/** Phase 1 — The Basalt Fields: magma rivers form chess-like chokepoints. */
-export function generateBasaltMap(seed: number): TileState[] {
-  const rng = makeRng(seed ^ 0xba5a17);
-  const board: TileState[] = new Array(BOARD_W * BOARD_H);
-  for (let i = 0; i < board.length; i++) board[i] = tile('basalt');
+/*
+ * AUTHORED MAPS — hand-traced from the phase paintings so the lava rivers,
+ * pond, reeds and lily pads sit exactly where the art shows them. Both maps
+ * are 180°-rotation symmetric, so neither seat gets a terrain advantage.
+ *
+ * Legend: '.' basalt  M magma  V vent
+ *         g grass  s sand  w shallow  d deep  r reeds  L lily  o lotus
+ */
+const BASALT_LAYOUT = [
+  '.........',
+  '.........',
+  '.........',
+  'MM..V..MM',
+  '.........',
+  'MMM..MMMM',
+  '.V.....V.',
+  '.........',
+  '.V.....V.',
+  'MMMM..MMM',
+  '.........',
+  'MM..V..MM',
+  '.........',
+  '.........',
+  '.........',
+];
 
-  // Two horizontal magma rivers with staggered gaps => chokepoints.
-  const riverRows = [5, 9];
-  for (const ry of riverRows) {
-    const gap1 = 1 + Math.floor(rng() * 3);
-    const gap2 = BOARD_W - 2 - Math.floor(rng() * 3);
+const OASIS_LAYOUT = [
+  'ggggggggg',
+  'ggggggggg',
+  'ggrgggrgg',
+  'ggsssssgg',
+  'grswwwsrg',
+  'gsowdwosg',
+  'gswdddwsg',
+  'gswLdLwsg',
+  'gswdddwsg',
+  'gsowdwosg',
+  'grswwwsrg',
+  'ggsssssgg',
+  'ggrgggrgg',
+  'ggggggggg',
+  'ggggggggg',
+];
+
+const LAYOUT_CHARS: Record<string, TileState['terrain']> = {
+  '.': 'basalt', M: 'magma', V: 'vent',
+  g: 'grass', s: 'sand', w: 'shallow', d: 'deep', r: 'reeds', L: 'lily', o: 'lotus',
+};
+
+function buildLayout(rows: string[]): TileState[] {
+  const board: TileState[] = new Array(BOARD_W * BOARD_H);
+  for (let y = 0; y < BOARD_H; y++) {
     for (let x = 0; x < BOARD_W; x++) {
-      if (x === gap1 || x === gap2 || x === Math.floor(BOARD_W / 2)) continue;
-      board[idx(x, ry)] = tile('magma');
-    }
-  }
-  // Sulfur vents scattered in the midfield punish campers.
-  let vents = 0;
-  while (vents < 5) {
-    const x = Math.floor(rng() * BOARD_W);
-    const y = 4 + Math.floor(rng() * 7);
-    if (board[idx(x, y)].terrain === 'basalt') {
-      board[idx(x, y)] = tile('vent');
-      vents++;
+      board[idx(x, y)] = tile(LAYOUT_CHARS[rows[y][x]]);
     }
   }
   return board;
 }
 
-/** Phase 2 — The Oasis: pond, shallows, reeds, lilies, lotus blooms. */
-export function generateOasisMap(seed: number): TileState[] {
-  const rng = makeRng(seed ^ 0x0a515);
-  const board: TileState[] = new Array(BOARD_W * BOARD_H);
-  const cx = (BOARD_W - 1) / 2;
-  const cy = (BOARD_H - 1) / 2;
+/** Phase 1 — The Basalt Fields (seed kept for signature stability). */
+export function generateBasaltMap(_seed: number): TileState[] {
+  return buildLayout(BASALT_LAYOUT);
+}
 
-  for (let y = 0; y < BOARD_H; y++) {
-    for (let x = 0; x < BOARD_W; x++) {
-      const d = Math.hypot((x - cx) * 1.15, (y - cy) * 0.8);
-      let t: TileState['terrain'] = 'grass';
-      if (d < 1.7) t = 'deep';
-      else if (d < 2.9) t = 'shallow';
-      else if (d < 3.6) t = 'sand';
-      board[idx(x, y)] = tile(t);
-    }
-  }
-  // Lily pads bridge the deep water.
-  const lilySpots: GridPos[] = [
-    { x: Math.round(cx) - 1, y: Math.round(cy) },
-    { x: Math.round(cx) + 1, y: Math.round(cy) },
-  ];
-  for (const p of lilySpots) if (inBounds(p.x, p.y)) board[idx(p.x, p.y)] = tile('lily');
-
-  // Reed banks flanking the pond grant stealth.
-  let reeds = 0;
-  while (reeds < 6) {
-    const x = Math.floor(rng() * BOARD_W);
-    const y = 3 + Math.floor(rng() * (BOARD_H - 6));
-    const i = idx(x, y);
-    if (board[i].terrain === 'grass' || board[i].terrain === 'sand') {
-      board[i] = tile('reeds');
-      reeds++;
-    }
-  }
-  // Four lotus blooms at the pond rim — breakable healing pinatas.
-  let lotus = 0;
-  while (lotus < 4) {
-    const x = Math.floor(rng() * BOARD_W);
-    const y = 3 + Math.floor(rng() * (BOARD_H - 6));
-    const i = idx(x, y);
-    if (board[i].terrain === 'shallow') {
-      board[i] = tile('lotus');
-      lotus++;
-    }
-  }
-  return board;
+/** Phase 2 — The Oasis. */
+export function generateOasisMap(_seed: number): TileState[] {
+  return buildLayout(OASIS_LAYOUT);
 }
 
 /* ------------------------------------------------------------------------ */

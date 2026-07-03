@@ -20,6 +20,7 @@
 import { BOARD_H, BOARD_W, TICK_MS, idx } from './types';
 import type { GameEvent, GameState, PlayerId, SpeciesId, UnitState } from './types';
 import { speciesDef } from './data';
+import { getPhaseArt, getSprite } from './sprites';
 
 /* ------------------------------------------------------------------------ */
 /* Small math helpers                                                         */
@@ -27,6 +28,16 @@ import { speciesDef } from './data';
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** Per-species sprite size trims (the ant painting shows a pair, so each of
+ * the three swarm units renders smaller to keep the field readable). */
+const SPRITE_SIZE_TWEAK: Partial<Record<SpeciesId, number>> = {
+  fireants: 0.72,
+  wolves: 0.94,
+};
+
+const spriteHeight = (s: number, species: SpeciesId, colossal: boolean, heavy: boolean): number =>
+  s * (colossal ? 2.5 : heavy ? 2.2 : 1.9) * (SPRITE_SIZE_TWEAK[species] ?? 1);
 
 interface Particle {
   x: number; y: number; vx: number; vy: number;
@@ -41,13 +52,44 @@ interface FloatText {
   x: number; y: number; text: string; life: number; maxLife: number; color: string; size: number;
 }
 
+interface AttackAnim {
+  /** Renderer-clock seconds when the swing began. */
+  t0: number;
+  dirX: number;
+  dirY: number;
+  crit: boolean;
+}
+
+interface Jiggle {
+  t0: number;
+  dirX: number;
+  dirY: number;
+  mag: number;
+}
+
+interface Ghost {
+  species: SpeciesId;
+  variant: number;
+  owner: PlayerId;
+  facing: 1 | -1;
+  x: number;
+  y: number;
+  flying: boolean;
+  heavy: boolean;
+  colossal: boolean;
+  t: number; // seconds since death
+}
+
 interface DisplayUnit {
   dx: number; dy: number; // smoothed display tile coords (float)
   bob: number;
   lastSeenTick: number;
   /** Seconds since spawn — drives the pop-in animation. */
   age: number;
-  deathT?: number;
+  /** Event-driven swing animation: anticipation -> strike -> recoil. */
+  atk?: AttackAnim;
+  /** Damped knock in the hit direction when struck. */
+  jig?: Jiggle;
 }
 
 export interface DragOverlay {
@@ -78,6 +120,12 @@ export class Renderer {
   private display = new Map<number, DisplayUnit>();
   /** unitId -> remaining white-flash seconds after taking a hit. */
   private flashes = new Map<number, number>();
+  /** Fallen pieces mid death-animation. */
+  private ghosts: Ghost[] = [];
+  /** Remaining hit-stop seconds — the whole battle freezes for a beat. */
+  private hitStop = 0;
+  /** tile "x,y" -> last incoming attack direction (feeds knock jiggle). */
+  private lastHitDir = new Map<string, { x: number; y: number }>();
   private raf = 0;
   private running = false;
   private time = 0;
@@ -154,15 +202,29 @@ export class Renderer {
   private consumeEvent(e: GameEvent): void {
     switch (e.type) {
       case 'spawn': {
+        // Deploy staging: dust ring + debris kick; heavies land with a thud.
         const p = this.tileToScreen(e.x, e.y);
+        const stats = speciesDef(e.species).stats!;
         this.burst(p.x, p.y, 10, 'mist', e.owner === this.localSeat ? 190 : 20, 1.4);
+        this.burst(p.x, p.y + this.tileH * 0.15, 1, 'shockwave', e.owner === this.localSeat ? 190 : 25, 0.6);
+        this.burst(p.x, p.y + this.tileH * 0.1, 7, 'ash', 35, 1.0);
+        if (stats.heavy || stats.colossal) this.shake = Math.max(this.shake, stats.colossal ? 5 : 3);
         break;
       }
       case 'attack': {
+        // Kick the attacker's anticipation->strike->recoil swing and note the
+        // incoming direction at the victim's tile for knock jiggle.
+        const from = this.tileToScreen(e.x, e.y);
+        const to = this.tileToScreen(e.tx, e.ty);
+        const len = Math.hypot(to.x - from.x, to.y - from.y) || 1;
+        const dir = { x: (to.x - from.x) / len, y: (to.y - from.y) / len };
+        const d = this.display.get(e.unitId);
+        if (d) d.atk = { t0: this.time, dirX: dir.x, dirY: dir.y, crit: e.crit };
+        this.lastHitDir.set(`${e.tx},${e.ty}`, dir);
         if (e.crit) {
-          const p = this.tileToScreen(e.tx, e.ty);
-          this.burst(p.x, p.y, 16, 'spark', 45, 2.2);
-          this.shake = Math.max(this.shake, 6);
+          this.burst(to.x, to.y, 16, 'spark', 45, 2.2);
+          this.shake = Math.max(this.shake, 7);
+          this.hitStop = Math.max(this.hitStop, 0.09);
         }
         break;
       }
@@ -172,6 +234,11 @@ export class Renderer {
         this.burst(p.x, p.y, e.kind === 'lava' ? 18 : 5, e.kind === 'lava' ? 'spark' : 'flash', hue, 1.4);
         if (e.kind === 'melee' || e.kind === 'ranged' || e.kind === 'lava') {
           this.flashes.set(e.unitId, 0.22);
+          // Knock jiggle in the incoming direction.
+          const dir = this.lastHitDir.get(`${Math.round(e.x)},${Math.round(e.y)}`) ?? { x: 0.7, y: 0.3 };
+          const d = this.display.get(e.unitId);
+          if (d) d.jig = { t0: this.time, dirX: dir.x, dirY: dir.y, mag: clamp(2 + e.amount * 0.12, 2, 7) };
+          if (e.amount >= 30) this.hitStop = Math.max(this.hitStop, 0.05);
         }
         this.floats.push({
           x: p.x + (Math.random() - 0.5) * 14, y: p.y - this.tileH * 0.5,
@@ -185,6 +252,22 @@ export class Renderer {
         const p = this.tileToScreen(e.x, e.y);
         this.burst(p.x, p.y, 22, 'spark', e.owner === 0 ? 14 : 165, 2.0);
         this.burst(p.x, p.y, 8, 'mist', 0, 1.5);
+        // The piece tips over and dissolves instead of vanishing.
+        const stats = speciesDef(e.species).stats!;
+        const dir = this.lastHitDir.get(`${e.x},${e.y}`);
+        this.ghosts.push({
+          species: e.species,
+          variant: e.unitId % 2,
+          owner: e.owner,
+          facing: (dir?.x ?? 1) >= 0 ? 1 : -1,
+          x: e.x, y: e.y,
+          flying: stats.flying,
+          heavy: stats.heavy,
+          colossal: stats.colossal,
+          t: 0,
+        });
+        this.hitStop = Math.max(this.hitStop, stats.heavy || stats.colossal ? 0.09 : 0.05);
+        if (stats.heavy || stats.colossal) this.shake = Math.max(this.shake, 5);
         break;
       }
       case 'heal': {
@@ -273,8 +356,12 @@ export class Renderer {
     this.lastFrame = performance.now();
     const loop = (now: number) => {
       if (!this.running) return;
-      const dt = clamp((now - this.lastFrame) / 1000, 0, 0.1);
+      const rawDt = clamp((now - this.lastFrame) / 1000, 0, 0.1);
       this.lastFrame = now;
+      // Hit-stop: the entire battle freezes for a beat on heavy impacts,
+      // then resumes — the cheapest trick in the game-feel book.
+      this.hitStop = Math.max(0, this.hitStop - rawDt);
+      const dt = this.hitStop > 0 ? rawDt * 0.1 : rawDt;
       this.time += dt;
       this.frame(dt, now);
       this.raf = requestAnimationFrame(loop);
@@ -312,12 +399,72 @@ export class Renderer {
       this.drawTelegraphs(ctx, st, now);
       this.drawUnits(ctx, st, dt, now);
       this.drawZones(ctx, st, 'over');
+      this.drawAtmosphere(ctx, W, H);
       this.drawDragOverlay(ctx);
       this.drawPlacementTelegraph(ctx);
     }
     this.updateParticles(ctx, dt);
     this.updateFloats(ctx, dt);
     this.drawVignette(ctx, W, H);
+    ctx.restore();
+  }
+
+  /* --------------------------- atmosphere pass -------------------------- */
+  /* Cinematic lighting over the arena: drifting cloud shadows always; god
+   * rays over the Oasis; heat shimmer bands over the Basalt Fields. */
+
+  private drawAtmosphere(ctx: CanvasRenderingContext2D, W: number, H: number): void {
+    const t = this.time;
+    const pan = this.camPan;
+
+    // Slow cloud shadows crossing the arena.
+    for (let i = 0; i < 2; i++) {
+      const cw = W * (0.55 + i * 0.2);
+      const cx2 = ((t * (9 + i * 5) + i * 700) % (W + cw * 2)) - cw;
+      const cy2 = H * (0.28 + i * 0.34) + Math.sin(t * 0.1 + i * 3) * 26;
+      const g = ctx.createRadialGradient(cx2, cy2, cw * 0.1, cx2, cy2, cw * 0.55);
+      g.addColorStop(0, 'rgba(2,2,12,0.09)');
+      g.addColorStop(1, 'rgba(2,2,12,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(cx2 - cw, cy2 - cw, cw * 2, cw * 2);
+    }
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    if (pan > 0.35) {
+      // God rays: slanted light shafts swaying over the pond.
+      const strength = (pan - 0.35) / 0.65;
+      for (let i = 0; i < 3; i++) {
+        const sway = Math.sin(t * 0.2 + i * 2.1) * W * 0.09;
+        const topX = W * (0.22 + i * 0.26) + sway;
+        const width = W * (0.07 + i * 0.02);
+        const grad = ctx.createLinearGradient(topX, 0, topX + W * 0.16, H);
+        grad.addColorStop(0, `hsla(75 80% 72% / ${0.075 * strength})`);
+        grad.addColorStop(0.7, `hsla(120 70% 65% / ${0.028 * strength})`);
+        grad.addColorStop(1, 'hsla(120 70% 60% / 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(topX, -10);
+        ctx.lineTo(topX + width, -10);
+        ctx.lineTo(topX + width + W * 0.16, H);
+        ctx.lineTo(topX + W * 0.16 - width * 0.4, H);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    if (pan < 0.65) {
+      // Heat shimmer: warm bands slowly rising off the basalt.
+      const strength = (0.65 - pan) / 0.65;
+      for (let i = 0; i < 2; i++) {
+        const yy = H - (((t * (26 + i * 14)) % (H * 1.3)) - H * 0.12);
+        const grad = ctx.createLinearGradient(0, yy - 46, 0, yy + 46);
+        grad.addColorStop(0, 'hsla(20 90% 55% / 0)');
+        grad.addColorStop(0.5, `hsla(${22 + i * 10} 95% 58% / ${0.035 * strength})`);
+        grad.addColorStop(1, 'hsla(20 90% 55% / 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, yy - 46 + Math.sin(t * 2 + i * 2) * 6, W, 92);
+      }
+    }
     ctx.restore();
   }
 
@@ -368,6 +515,14 @@ export class Renderer {
           life: 0, maxLife: 5, size: 1.2 + Math.random() * 1.4, hue: 95, sat: 80, lit: 65,
           kind: 'mote', alpha: 0.8, gravity: -1,
         });
+        // Extra fireflies and drifting pollen bring the oasis alive.
+        if (Math.random() < 0.4) {
+          this.particles.push({
+            x: Math.random() * W, y: H * (0.25 + Math.random() * 0.65), vx: (Math.random() - 0.5) * 22, vy: -3 - Math.random() * 5,
+            life: 0, maxLife: 4, size: 0.9 + Math.random(), hue: 55, sat: 90, lit: 72,
+            kind: 'mote', alpha: 0.7, gravity: -0.5,
+          });
+        }
       }
     }
   }
@@ -404,7 +559,8 @@ export class Renderer {
   private ensureBaseCache(st: GameState): void {
     const destroyed = st.board.reduce((n, tl) => n + (tl.destroyed ? 1 : 0), 0);
     const world = st.phase === 'oasis' || st.phase === 'ended' ? 'oasis' : 'basalt';
-    const key = `${world}|${this.canvas.width}x${this.canvas.height}|${this.localSeat}|${destroyed}`;
+    const art = getPhaseArt(world);
+    const key = `${world}|${this.canvas.width}x${this.canvas.height}|${this.localSeat}|${destroyed}|${art ? 'art' : 'proc'}`;
     if (this.baseKey === key && this.baseCache) return;
     this.baseKey = key;
 
@@ -445,6 +601,50 @@ export class Renderer {
     c.beginPath();
     c.roundRect(left - 4, top - 3, bw + 8, bh + 8, 12);
     c.fill();
+
+    // PAINTED ARENA: when the phase painting is available it becomes the
+    // ground itself (the authored tile layout is traced from it, so lava
+    // rivers / pond / reeds sit where the art shows them). The procedural
+    // painter below remains the offline fallback.
+    if (art) {
+      c.save();
+      c.beginPath();
+      c.roundRect(left - 3, top - 2, bw + 6, bh + 6, 11);
+      c.clip();
+      c.drawImage(art, left - 3, top - 2, bw + 6, bh + 6);
+      // Gentle depth grade + faint tactical grid over the painting.
+      const grade = c.createLinearGradient(0, top, 0, top + bh);
+      grade.addColorStop(0, 'rgba(255,255,255,0.05)');
+      grade.addColorStop(0.5, 'rgba(0,0,0,0)');
+      grade.addColorStop(1, 'rgba(0,0,0,0.18)');
+      c.fillStyle = grade;
+      c.fillRect(left, top, bw, bh);
+      c.strokeStyle = 'rgba(255,255,255,0.05)';
+      c.lineWidth = 1;
+      for (let gx = 1; gx < BOARD_W; gx++) {
+        c.beginPath();
+        c.moveTo(left + gx * w, top + 2);
+        c.lineTo(left + gx * w, top + bh - 2);
+        c.stroke();
+      }
+      for (let gy = 1; gy < BOARD_H; gy++) {
+        c.beginPath();
+        c.moveTo(left + 2, top + gy * h);
+        c.lineTo(left + bw - 2, top + gy * h);
+        c.stroke();
+      }
+      const midY2 = top + bh / 2;
+      c.strokeStyle = oasis ? 'rgba(120,255,220,0.12)' : 'rgba(255,150,90,0.12)';
+      c.lineWidth = 2;
+      c.setLineDash([10, 8]);
+      c.beginPath();
+      c.moveTo(left + 6, midY2);
+      c.lineTo(left + bw - 6, midY2);
+      c.stroke();
+      c.setLineDash([]);
+      c.restore();
+      return;
+    }
 
     const groupAt = (gx: number, gy: number, self: number): number => {
       if (!inBoundsLocal(gx, gy)) return self; // board edge merges smoothly
@@ -699,6 +899,11 @@ export class Renderer {
     const w = this.tileW;
     const h = this.tileH;
     const t = this.time;
+    // When the painted arena is active the overlays become accents: the
+    // painting already depicts the lava/reeds/grass, so we only add motion
+    // and glow on top of it, never opaque fills that fight the art.
+    const world = st.phase === 'oasis' || st.phase === 'ended' ? 'oasis' : 'basalt';
+    const painted = !!getPhaseArt(world);
 
     // Animated overlays on dynamic terrain.
     for (let gy = 0; gy < BOARD_H; gy++) {
@@ -710,50 +915,61 @@ export class Renderer {
 
         switch (tile.terrain) {
           case 'magma': {
-            // Molten flow: layered drifting veins + hot bloom.
-            const pulse = 46 + Math.sin(t * 2.2 + gy * 1.7 + gx * 0.6) * 8;
-            const flow = ctx.createLinearGradient(x0, y0, x0 + w, y0 + h);
-            flow.addColorStop(0, `hsla(14 95% ${pulse}% / 0.85)`);
-            flow.addColorStop(0.5, `hsla(30 100% ${pulse + 12}% / 0.9)`);
-            flow.addColorStop(1, `hsla(8 90% ${pulse - 6}% / 0.85)`);
-            ctx.fillStyle = flow;
-            ctx.beginPath();
-            ctx.roundRect(x0 + 1, y0 + 1, w - 2, h - 2, 3);
-            ctx.fill();
-            for (let v = 0; v < 2; v++) {
-              const ph = t * (1.0 + v * 0.4) + gx * 0.8 + gy + v * 2.4;
-              ctx.strokeStyle = `hsla(48 100% ${72 + Math.sin(t * 3 + gx + v) * 10}% / ${0.65 - v * 0.25})`;
-              ctx.lineWidth = 2 - v * 0.7;
+            if (!painted) {
+              // Procedural fallback: molten fill + drifting veins.
+              const pulse = 46 + Math.sin(t * 2.2 + gy * 1.7 + gx * 0.6) * 8;
+              const flow = ctx.createLinearGradient(x0, y0, x0 + w, y0 + h);
+              flow.addColorStop(0, `hsla(14 95% ${pulse}% / 0.85)`);
+              flow.addColorStop(0.5, `hsla(30 100% ${pulse + 12}% / 0.9)`);
+              flow.addColorStop(1, `hsla(8 90% ${pulse - 6}% / 0.85)`);
+              ctx.fillStyle = flow;
               ctx.beginPath();
-              ctx.moveTo(x0 + 2, p.y + Math.sin(ph) * 4 + (v - 0.5) * 5);
-              ctx.quadraticCurveTo(p.x, p.y + Math.cos(ph * 1.3) * 5 + (v - 0.5) * 5, x0 + w - 2, p.y + Math.sin(ph + 1.5) * 4 + (v - 0.5) * 5);
-              ctx.stroke();
+              ctx.roundRect(x0 + 1, y0 + 1, w - 2, h - 2, 3);
+              ctx.fill();
+              for (let v = 0; v < 2; v++) {
+                const ph = t * (1.0 + v * 0.4) + gx * 0.8 + gy + v * 2.4;
+                ctx.strokeStyle = `hsla(48 100% ${72 + Math.sin(t * 3 + gx + v) * 10}% / ${0.65 - v * 0.25})`;
+                ctx.lineWidth = 2 - v * 0.7;
+                ctx.beginPath();
+                ctx.moveTo(x0 + 2, p.y + Math.sin(ph) * 4 + (v - 0.5) * 5);
+                ctx.quadraticCurveTo(p.x, p.y + Math.cos(ph * 1.3) * 5 + (v - 0.5) * 5, x0 + w - 2, p.y + Math.sin(ph + 1.5) * 4 + (v - 0.5) * 5);
+                ctx.stroke();
+              }
             }
-            const bloom = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, w * 0.85);
-            bloom.addColorStop(0, `hsla(24 100% 58% / ${0.13 + Math.sin(t * 2.6 + gx) * 0.05})`);
+            // Breathing hot bloom (additive) — on the painting this is the
+            // only magma accent, letting the painted lava do the talking.
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const bloom = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, w * 0.8);
+            const bloomA = (painted ? 0.07 : 0.13) + Math.sin(t * 2.6 + gx + gy * 0.7) * (painted ? 0.03 : 0.05);
+            bloom.addColorStop(0, `hsla(28 100% 55% / ${Math.max(0, bloomA)})`);
             bloom.addColorStop(1, 'hsla(24 100% 50% / 0)');
             ctx.fillStyle = bloom;
             ctx.fillRect(x0 - w * 0.4, y0 - h * 0.4, w * 1.8, h * 1.8);
+            ctx.restore();
             if (Math.random() < 0.007) this.burst(p.x, p.y, 2, 'spark', 25, 0.8);
             break;
           }
           case 'vent': {
             const puff = 0.25 + Math.sin(t * 2.6 + gx * 2 + gy) * 0.15;
+            const ventA = painted ? (puff + 0.25) * 0.45 : puff + 0.25;
             const vg = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, w * 0.44);
-            vg.addColorStop(0, `hsla(58 75% 52% / ${puff + 0.25})`);
+            vg.addColorStop(0, `hsla(58 75% 52% / ${ventA})`);
             vg.addColorStop(1, 'hsla(58 70% 40% / 0)');
             ctx.fillStyle = vg;
             ctx.beginPath();
             ctx.ellipse(p.x, p.y, w * 0.44, h * 0.4, 0, 0, Math.PI * 2);
             ctx.fill();
-            // Cracked fissure mouth.
-            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-            ctx.lineWidth = 1.4;
-            ctx.beginPath();
-            ctx.moveTo(p.x - w * 0.18, p.y - 2);
-            ctx.lineTo(p.x, p.y + 2);
-            ctx.lineTo(p.x + w * 0.16, p.y - 3);
-            ctx.stroke();
+            if (!painted) {
+              // Cracked fissure mouth (baked into the painting otherwise).
+              ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+              ctx.lineWidth = 1.4;
+              ctx.beginPath();
+              ctx.moveTo(p.x - w * 0.18, p.y - 2);
+              ctx.lineTo(p.x, p.y + 2);
+              ctx.lineTo(p.x + w * 0.16, p.y - 3);
+              ctx.stroke();
+            }
             if (Math.random() < 0.03) this.burst(p.x, p.y - 4, 1, 'mist', 58, 0.7);
             break;
           }
@@ -831,9 +1047,9 @@ export class Renderer {
             break;
           }
           case 'reeds': {
-            ctx.strokeStyle = 'hsla(85 55% 42% / 0.95)';
+            ctx.strokeStyle = `hsla(85 55% 42% / ${painted ? 0.55 : 0.95})`;
             ctx.lineWidth = 1.7;
-            for (let r = 0; r < 5; r++) {
+            for (let r = 0; r < (painted ? 3 : 5); r++) {
               const rx = x0 + w * (0.14 + r * 0.18);
               const sway = Math.sin(t * 1.4 + r * 1.3 + gx * 2) * 4;
               ctx.beginPath();
@@ -849,7 +1065,7 @@ export class Renderer {
           }
           case 'grass': {
             // Sparse animated blades on some tiles keep the meadow alive.
-            if ((gx * 13 + gy * 29) % 6 === 0) {
+            if (!painted && (gx * 13 + gy * 29) % 6 === 0) {
               ctx.strokeStyle = 'hsla(110 52% 42% / 0.85)';
               ctx.lineWidth = 1.3;
               for (let b = 0; b < 3; b++) {
@@ -1041,8 +1257,9 @@ export class Renderer {
       ctx.ellipse(p.x, p.y + this.tileH * 0.22, s * 0.68 * pop, s * 0.24 * pop, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // ---- Offscreen species art -> outline -> composite ----------------
-      const pad = Math.ceil(s * 2.4);
+      // ---- Offscreen art (painted sprite or vector fallback) -------------
+      const sprite = getSprite(u.species, u.id % 2);
+      const pad = Math.ceil(s * 2.6);
       const size = pad * 2;
       if (this.artCanvas.width !== size) {
         this.artCanvas.width = size;
@@ -1052,10 +1269,23 @@ export class Renderer {
       }
       const ac = this.artCanvas.getContext('2d')!;
       ac.clearRect(0, 0, size, size);
-      ac.save();
-      ac.translate(pad, pad + s * 0.55);
-      drawSpecies(ac, u.species, s, this.time + u.id * 0.61, u);
-      ac.restore();
+      if (sprite) {
+        // Painted piece: scale by height class, ground anchor onto the tile.
+        const targetH = spriteHeight(s, u.species, stats.colossal, stats.heavy);
+        const scale = targetH / sprite.h;
+        ac.drawImage(
+          sprite.canvas,
+          pad - sprite.anchorX * scale,
+          pad + s * 0.55 - sprite.anchorY * scale,
+          sprite.w * scale,
+          sprite.h * scale,
+        );
+      } else {
+        ac.save();
+        ac.translate(pad, pad + s * 0.55);
+        drawSpecies(ac, u.species, s, this.time + u.id * 0.61, u);
+        ac.restore();
+      }
 
       // Tinted silhouette (outline colour, or white during a hit flash).
       const flash = this.flashes.get(u.id) ?? 0;
@@ -1068,29 +1298,61 @@ export class Renderer {
       tc.fillRect(0, 0, size, size);
 
       ctx.translate(p.x, p.y + hover + bobY - s * 0.55);
-      const face = this.localSeat === 1 ? -u.facing : u.facing;
-      if (face === -1) ctx.scale(-1, 1);
 
-      // Squash & stretch while moving; lunge while attacking.
+      // Attack swing: anticipation (lean back) -> strike (lunge) -> recoil.
+      // Screen-space, so it works in every facing; applied before the flip.
+      let strikeStretch = 0;
+      if (d.atk) {
+        const at = (this.time - d.atk.t0) / 0.5;
+        if (at >= 1) {
+          d.atk = undefined;
+        } else {
+          let lunge: number;
+          if (at < 0.35) lunge = -0.13 * (at / 0.35); // wind up
+          else if (at < 0.6) {
+            const k = (at - 0.35) / 0.25;
+            lunge = -0.13 + 0.53 * (1 - (1 - k) * (1 - k)); // explosive strike
+          } else lunge = 0.4 * (1 - (at - 0.6) / 0.4); // recoil
+          const amp = (d.atk.crit ? 1.35 : 1) * s;
+          ctx.translate(d.atk.dirX * lunge * amp, d.atk.dirY * lunge * amp);
+          strikeStretch = at >= 0.35 && at < 0.6 ? 0.1 : at < 0.35 ? -0.06 : 0;
+        }
+      }
+      // Knock jiggle when struck: damped shake along the incoming direction.
+      if (d.jig) {
+        const jt = (this.time - d.jig.t0) / 0.3;
+        if (jt >= 1) {
+          d.jig = undefined;
+        } else {
+          const k = Math.sin(jt * Math.PI * 3) * (1 - jt) * d.jig.mag;
+          ctx.translate(d.jig.dirX * k, d.jig.dirY * k);
+        }
+      }
+
+      const face = this.localSeat === 1 ? -u.facing : u.facing;
+      const flip = sprite ? face !== sprite.nativeFacing : face === -1;
+      if (flip) ctx.scale(-1, 1);
+
+      // Squash & stretch while moving; idle breathing when standing.
       let sqx = 1;
       let sqy = 1;
       if (moving && !flying) {
         const q = Math.sin(d.bob * 2) * 0.05;
         sqx = 1 + q;
         sqy = 1 - q;
+      } else if (!moving && !d.atk) {
+        sqy *= 1 + Math.sin(this.time * 2 + u.id * 1.7) * 0.012;
       }
-      if (u.action === 'attack') {
-        const a = clamp((now - this.lastTickAt) / (TICK_MS * 0.9), 0, 1);
-        const lunge = Math.sin(a * Math.PI) * s * 0.3;
-        ctx.translate(lunge, 0);
-        sqx *= 1 + Math.sin(a * Math.PI) * 0.08;
-      }
+      sqx *= 1 + strikeStretch;
+      sqy *= 1 - strikeStretch * 0.5;
       ctx.scale(sqx * pop, sqy * pop);
 
-      // Outline: silhouette stamped around the art.
-      const o = Math.max(1.2, s * 0.045);
-      for (const [ox2, oy2] of [[o, 0], [-o, 0], [0, o], [0, -o], [o * 0.7, o * 0.7], [-o * 0.7, o * 0.7], [o * 0.7, -o * 0.7], [-o * 0.7, -o * 0.7]] as const) {
-        ctx.drawImage(this.tintCanvas, -pad + ox2, -pad + oy2);
+      if (!sprite) {
+        // Vector fallback keeps its cartoon outline.
+        const o = Math.max(1.2, s * 0.045);
+        for (const [ox2, oy2] of [[o, 0], [-o, 0], [0, o], [0, -o], [o * 0.7, o * 0.7], [-o * 0.7, o * 0.7], [o * 0.7, -o * 0.7], [-o * 0.7, -o * 0.7]] as const) {
+          ctx.drawImage(this.tintCanvas, -pad + ox2, -pad + oy2);
+        }
       }
       // The character itself.
       ctx.drawImage(this.artCanvas, -pad, -pad);
@@ -1157,6 +1419,42 @@ export class Renderer {
 
     for (const id of [...this.display.keys()]) {
       if (!alive.has(id)) this.display.delete(id);
+    }
+
+    // Fallen pieces: tip over, sink and dissolve.
+    for (let i = this.ghosts.length - 1; i >= 0; i--) {
+      const g = this.ghosts[i];
+      g.t += dt;
+      const DUR = 0.75;
+      if (g.t >= DUR) {
+        this.ghosts.splice(i, 1);
+        continue;
+      }
+      const sprite = getSprite(g.species, g.variant);
+      if (!sprite) continue; // vector deaths are covered by the particle burst
+      const k = g.t / DUR;
+      const p = this.tileToScreen(g.x, g.y);
+      const s = this.tileW * (g.colossal ? 0.78 : g.heavy ? 0.68 : 0.54);
+      const targetH = spriteHeight(s, g.species, g.colossal, g.heavy);
+      const scale = targetH / sprite.h;
+      const face = this.localSeat === 1 ? -g.facing : g.facing;
+      ctx.save();
+      ctx.globalAlpha = (1 - k) * 0.9;
+      ctx.translate(p.x, p.y + k * 7);
+      ctx.rotate(face * k * k * 1.25);
+      if (face !== sprite.nativeFacing) ctx.scale(-1, 1);
+      ctx.scale(1, 1 - k * 0.25);
+      ctx.drawImage(
+        sprite.canvas,
+        -sprite.anchorX * scale,
+        -sprite.anchorY * scale,
+        sprite.w * scale,
+        sprite.h * scale,
+      );
+      ctx.restore();
+      if (Math.random() < 0.5) {
+        this.burst(p.x + (Math.random() - 0.5) * s, p.y - k * 14, 1, g.owner === 0 ? 'spark' : 'petal', g.owner === 0 ? 18 : 130, 0.6);
+      }
     }
   }
 
@@ -1318,9 +1616,14 @@ export class Renderer {
         continue;
       }
       const k = 1 - f.life / f.maxLife;
-      ctx.font = `700 ${f.size}px 'Segoe UI', system-ui, sans-serif`;
-      ctx.fillStyle = f.color;
+      // Scale pop on arrival: numbers slam in oversized then settle.
+      const popK = 1 + 0.65 * Math.max(0, 1 - f.life * 6);
+      ctx.font = `800 ${Math.round(f.size * popK)}px 'Segoe UI', system-ui, sans-serif`;
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.lineWidth = 3;
       ctx.globalAlpha = k;
+      ctx.strokeText(f.text, f.x, f.y - f.life * 34);
+      ctx.fillStyle = f.color;
       ctx.fillText(f.text, f.x, f.y - f.life * 34);
       ctx.globalAlpha = 1;
     }
