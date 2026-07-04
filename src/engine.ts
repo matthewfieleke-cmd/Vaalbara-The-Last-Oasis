@@ -411,17 +411,23 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
   }
   // Eagle stays a global assassin; everyone else only picks fights inside
   // their aggro bubble — otherwise they push the lane toward the obelisk.
+  // Phase 2 has no lanes: the pond brawl IS the game, so aggro goes global
+  // and the armies actually clash instead of camping their own bank.
   if (u.species === 'eagle') {
     return enemies.reduce((a, b) => (b.hp < a.hp ? b : a));
   }
   let best: UnitState | null = null;
   let bestD = Infinity;
-  const aggro2 = AGGRO_RANGE * AGGRO_RANGE;
+  const aggroBase2 = AGGRO_RANGE * AGGRO_RANGE;
+  const aggro2 = st.phase === 'oasis' ? Infinity : aggroBase2;
   for (const e of enemies) {
     const eFly = speciesDef(e.species).stats!.flying;
     if (eFly && !u.stats.canHitAir && !u.stats.flying) continue;
     const d = dist2(u.x, u.y, e.x, e.y) + (e.id % 7) * 1e-4;
     if (d > aggro2) continue;
+    // Never marathon-chase a kiting flyer across the pond — swat it only
+    // when it strays into the normal aggro bubble.
+    if (eFly && !u.stats.flying && d > aggroBase2) continue;
     if (d < bestD) {
       bestD = d;
       best = e;
@@ -892,9 +898,10 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   const speed = effSpeed(st, u);
   if (speed <= 0) return;
 
-  // Standing in the deep pond IS the Phase-2 objective — hold the prize
-  // instead of grinding against the crowd for the exact centre pixel.
-  if (st.phase === 'oasis' && !u.waypoint && isDeep(worldOf(st), u.x, u.y)) {
+  // Standing in the deep pond IS the Phase-2 objective — but only rest on
+  // the prize when there is NO enemy to fight. A duel target always takes
+  // priority, otherwise both armies camp their own bank and never clash.
+  if (st.phase === 'oasis' && !target && !u.waypoint && isDeep(worldOf(st), u.x, u.y)) {
     u.stall = 0;
     return;
   }
