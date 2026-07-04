@@ -155,21 +155,35 @@ button {
   pointer-events: none;
 }
 
+/* A soft full-width dark band behind the copy keeps it legible over any
+   bright patch of the arena paintings. */
+.cine-text::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 15rem;
+  transform: translateY(-50%);
+  background: radial-gradient(ellipse 85% 100% at 50% 50%, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+  z-index: -1;
+}
+
 .cine-text h2 {
   font-size: 1.7rem;
   font-weight: 800;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  text-shadow: 0 2px 26px rgba(0, 0, 0, 0.9);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95), 0 2px 26px rgba(0, 0, 0, 0.9);
 }
 
 .cine-text p {
   margin-top: 0.9rem;
   max-width: 30ch;
-  color: var(--ink-dim);
+  color: var(--ink);
   font-size: 1.02rem;
   line-height: 1.55;
-  text-shadow: 0 1px 14px rgba(0, 0, 0, 0.9);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.95), 0 1px 14px rgba(0, 0, 0, 0.9);
 }
 
 /* Gentle breathe-in / breathe-out — pure opacity with a whisper of drift.
@@ -190,6 +204,8 @@ button {
   right: 0;
   top: 71%;
   text-align: center;
+  background: radial-gradient(ellipse 70% 130% at 50% 50%, rgba(0, 0, 0, 0.6), transparent 100%);
+  padding: 0.6rem 0;
   display: flex;
   flex-direction: column;
   gap: 0.2rem;

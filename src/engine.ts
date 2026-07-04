@@ -66,11 +66,12 @@ function basaltProps(): PropState[] {
   ];
 }
 
-/** The Phase-1 towers: one Ancient Obelisk per seat, on the staging ground. */
+/** The Phase-1 towers: one Ancient Obelisk per seat, set INSIDE the deploy
+ *  band (CR-style) so the tower + its HP bar never clip the board edge. */
 function makeObelisks(): ObeliskState[] {
   return [
-    { owner: 0, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: WORLD_H - 1.55, r: OBELISK_RADIUS },
-    { owner: 1, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: 1.55, r: OBELISK_RADIUS },
+    { owner: 0, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: WORLD_H - 2.35, r: OBELISK_RADIUS },
+    { owner: 1, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: 2.35, r: OBELISK_RADIUS },
   ];
 }
 

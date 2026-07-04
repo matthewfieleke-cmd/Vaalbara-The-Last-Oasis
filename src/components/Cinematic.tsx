@@ -25,6 +25,21 @@ const HERO_TIME = 3.6;
  *  the exact same ramps so a champion and its name always move together. */
 const FADE = 0.55;
 
+/** Per-species hero size (× of the base 30%-of-screen height). Frames crop
+ *  differently, so a flat size lets busy frames (wolf) swallow the screen. */
+const HERO_SCALE: Partial<Record<SpeciesId, number>> = {
+  trex: 1.06,
+  bear: 1.04,
+  eagle: 0.94,
+  honeybadger: 0.9,
+  scorpion: 0.92,
+  fireants: 0.72,
+  bees: 0.82,
+  wolves: 0.76,
+  porcupine: 0.9,
+  beetles: 0.86,
+};
+
 function heroBeats(at: number, world: 'basalt' | 'oasis', heroes: Beat['hero'][]): Beat[] {
   return heroes.map((hero, i) => ({ at: at + i * HERO_TIME, hero, world }));
 }
@@ -151,17 +166,21 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
 
-      // The arena paintings scroll slowly as the cinematic backdrop —
-      // crossfading between worlds as the story moves.
+      // The arena paintings drift slowly as the cinematic backdrop —
+      // crossfading between worlds as the story moves. COVER-fit: scale to
+      // whichever axis is binding (plus drift margin) so the painting always
+      // fills the whole screen on any aspect ratio.
       const drawArena = (img: HTMLImageElement | null, alpha: number, dir: number) => {
         if (!img || alpha <= 0.01) return;
         ctx.save();
         ctx.globalAlpha = alpha;
-        const scale = (W * 1.25) / img.naturalWidth;
+        const scale = Math.max((W * 1.12) / img.naturalWidth, (H * 1.18) / img.naturalHeight);
+        const iw = img.naturalWidth * scale;
         const ih = img.naturalHeight * scale;
-        const drift = ((ambient * 14 * dir) % (ih * 0.4));
-        const y0 = -ih * 0.2 + drift - H * 0.1;
-        ctx.drawImage(img, (W - img.naturalWidth * scale) / 2, y0, img.naturalWidth * scale, ih);
+        // Seamless slow drift: a bounded sine, never a wrapping jump.
+        const margin = Math.max(0, (ih - H) / 2);
+        const drift = Math.sin(ambient * 0.11 * dir + dir * 2.1) * margin * 0.85;
+        ctx.drawImage(img, (W - iw) / 2, (H - ih) / 2 + drift, iw, ih);
         ctx.restore();
       };
       drawArena(getPhaseArt('basalt'), (1 - worldBlend) * 0.85, 1);
@@ -214,12 +233,14 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           const i0 = Math.floor(phase) % frames.length;
           const frac = phase - Math.floor(phase);
           const mix = frac * frac * (3 - 2 * frac);
-          const targetH = H * 0.3;
+          const targetH = H * 0.3 * (HERO_SCALE[active.hero.species] ?? 1);
           ctx.shadowColor = `hsl(${active.hero.hue} 90% 55%)`;
           ctx.shadowBlur = 34;
           const bob = Math.abs(Math.sin(phase * Math.PI * 0.5)) * -5;
           const drawHero = (f: typeof frames[number], alpha: number) => {
-            const scale = targetH / f.h;
+            // Height-fit, but never wider than ~78% of the screen — long
+            // poses (wolf mid-stride) must not swallow the frame.
+            const scale = Math.min(targetH / f.h, (W * 0.78) / f.w);
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,

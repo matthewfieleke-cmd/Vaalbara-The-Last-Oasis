@@ -325,15 +325,32 @@ function splitStrip(img: HTMLImageElement, expected: number): HTMLCanvasElement[
   return panels.map((p) => autoCrop(keyBackground(p)));
 }
 
-/** Normalise frames of a set: shared scale, bottom-centre ground anchor. */
-function toFrameSprites(frames: HTMLCanvasElement[], groundLift = 0.03): Sprite[] {
+/** Mean opaque-pixel area of a frame set — a pose-invariant proxy for the
+ *  animal's drawn scale (a rearing pose is taller but covers ~the same ink). */
+function meanContentArea(frames: HTMLCanvasElement[]): number {
+  let total = 0;
+  for (const f of frames) {
+    const data = f.getContext('2d', { willReadFrequently: true })!
+      .getImageData(0, 0, f.width, f.height).data;
+    let n = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 16) n++;
+    total += n;
+  }
+  return Math.max(1, total / frames.length);
+}
+
+/** Normalise frames of a set: shared scale, bottom-centre ground anchor.
+ *  `logicalH` overrides the set's own height so DIFFERENT sets of one
+ *  species (run vs attack sheets, drawn at different sheet scales) render
+ *  the animal at one consistent size — no more size-popping on attack. */
+function toFrameSprites(frames: HTMLCanvasElement[], groundLift = 0.03, logicalH?: number): Sprite[] {
   const maxH = Math.max(...frames.map((f) => f.height));
   return frames.map((f) => ({
     canvas: f,
     w: f.width,
     // A shared logical height keeps scale steady across the cycle even when
     // individual frames crop differently.
-    h: maxH,
+    h: logicalH ?? maxH,
     nativeFacing: 1 as const,
     anchorX: f.width / 2,
     anchorY: f.height * (1 - groundLift),
@@ -390,11 +407,23 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
             loadImage(`${baseUrl}anim/${files.attack}.webp`),
             files.swat ? loadImage(`${baseUrl}anim/${files.swat}.webp`) : Promise.resolve(null),
           ]);
+          // The run set defines the species' reference scale; attack/swat
+          // sets are area-matched against it so the animal never changes
+          // size when it switches animation.
+          const runFrames = splitStrip(runImg, 4);
+          const runH = Math.max(...runFrames.map((f) => f.height));
+          const runArea = meanContentArea(runFrames);
+          const crossH = (frames: HTMLCanvasElement[]): number =>
+            runH * Math.sqrt(meanContentArea(frames) / runArea);
+          const atkFrames = splitStrip(atkImg, 3);
           const set: AnimSet = {
-            run: toFrameSprites(splitStrip(runImg, 4)),
-            attack: toFrameSprites(splitStrip(atkImg, 3)),
+            run: toFrameSprites(runFrames),
+            attack: toFrameSprites(atkFrames, 0.03, crossH(atkFrames)),
           };
-          if (swatImg) set.swat = toFrameSprites(splitStrip(swatImg, 3));
+          if (swatImg) {
+            const swatFrames = splitStrip(swatImg, 3);
+            set.swat = toFrameSprites(swatFrames, 0.03, crossH(swatFrames));
+          }
           ANIMS.set(sp, set);
         } catch (err) {
           console.warn(`[sprites] anim ${sp} failed, portrait/vector fallback`, err);
