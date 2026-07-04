@@ -78,6 +78,8 @@ interface VoiceOpts {
   filterQ?: number;
   bus?: GainNode | null;
   when?: number;
+  /** Stereo position -1..1 — the score uses this for orchestral width. */
+  pan?: number;
 }
 
 function voice(o: VoiceOpts): void {
@@ -109,7 +111,14 @@ function voice(o: VoiceOpts): void {
     head = f;
   }
   head.connect(g);
-  g.connect(bus);
+  if (o.pan && typeof ctx.createStereoPanner === 'function') {
+    const p = ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, o.pan));
+    g.connect(p);
+    p.connect(bus);
+  } else {
+    g.connect(bus);
+  }
   osc.start(t0);
   osc.stop(t0 + o.dur + 0.05);
 }
@@ -517,6 +526,8 @@ class MusicDirector {
   ];
 
   private static BASS = [36.7, 29.1, 24.5, 27.5]; // D1 Bb0 G0 A0
+  /** Cello bed roots, one octave above the sub bass (D2 Bb1 G1 A1). */
+  private static CELLO = [73.4, 58.3, 49, 55];
   /** Oasis: D dorian, hopeful. Pad chords + soaring line. */
   private static OASIS_PADS: number[][] = [
     [146.8, 220, 293.7, 440], // Dm add9
@@ -525,6 +536,20 @@ class MusicDirector {
     [164.8, 246.9, 329.6, 493.9], // Em
   ];
   private static OASIS_LEAD = [587.3, 523.3, 440, 523.3, 587.3, 659.3, 587.3, 880];
+
+  /** The Vaalbara motif — a rising D-minor horn theme threaded through the
+   *  intro, the menu and both battle phases. [16th-step, freq, dur-steps]. */
+  private static THEME: Array<[number, number, number]> = [
+    [0, 293.66, 4],   // D4
+    [4, 349.23, 4],   // F4
+    [8, 329.63, 2],   // E4
+    [10, 293.66, 2],  // D4
+    [12, 440, 8],     // A4 — the reach
+    [20, 466.16, 4],  // Bb4
+    [24, 440, 2],     // A4
+    [26, 392, 2],     // G4
+    [28, 349.23, 4],  // F4 — settle
+  ];
 
   start(): void {
     const ctx = core.ensure();
@@ -536,9 +561,9 @@ class MusicDirector {
     // Hall reverb from a generated impulse.
     if (!this.reverb) {
       this.reverb = ctx.createConvolver();
-      this.reverb.buffer = makeImpulse(ctx, 2.8, 2.2);
+      this.reverb.buffer = makeImpulse(ctx, 3.6, 2.4);
       this.reverbGain = ctx.createGain();
-      this.reverbGain.gain.value = 0.4;
+      this.reverbGain.gain.value = 0.45;
       this.reverb.connect(this.reverbGain);
       this.reverbGain.connect(core.musicBus);
     }
@@ -654,15 +679,60 @@ class MusicDirector {
 
   private stringNote(t: number, freq: number, vel: number, dur = 0.14): void {
     if (!this.bus) return;
-    voice({ type: 'sawtooth', freq, dur, gain: 0.085 * vel, filterFreq: 1500, filterQ: 1.6, attack: 0.012, bus: this.bus, when: t });
-    voice({ type: 'sawtooth', freq: freq * 1.004, dur, gain: 0.055 * vel, filterFreq: 1100, attack: 0.012, bus: this.bus, when: t });
+    // Detuned pair, panned apart — a section, not a single player.
+    voice({ type: 'sawtooth', freq, dur, gain: 0.085 * vel, filterFreq: 1500, filterQ: 1.6, attack: 0.012, bus: this.bus, when: t, pan: -0.28 });
+    voice({ type: 'sawtooth', freq: freq * 1.004, dur, gain: 0.055 * vel, filterFreq: 1100, attack: 0.012, bus: this.bus, when: t, pan: 0.22 });
   }
 
   private padChord(t: number, freqs: number[], dur: number, gain = 0.05): void {
     if (!this.bus) return;
-    for (const f of freqs) {
-      voice({ type: 'triangle', freq: f, dur, gain, attack: dur * 0.3, bus: this.bus, when: t });
-      voice({ type: 'triangle', freq: f * 1.003, dur, gain: gain * 0.7, attack: dur * 0.35, bus: this.bus, when: t });
+    freqs.forEach((f, i) => {
+      const pan = ((i % 2 === 0 ? -1 : 1) * (0.15 + i * 0.08));
+      voice({ type: 'triangle', freq: f, dur, gain, attack: dur * 0.3, bus: this.bus, when: t, pan });
+      voice({ type: 'triangle', freq: f * 1.003, dur, gain: gain * 0.7, attack: dur * 0.35, bus: this.bus, when: t, pan: -pan });
+    });
+  }
+
+  /** Low sustained cello bed — the dark floor under the ostinato. */
+  private cello(t: number, freq: number, dur: number, gain = 0.1): void {
+    if (!this.bus) return;
+    voice({ type: 'sawtooth', freq, dur, gain, filterFreq: 320, attack: 0.25, bus: this.bus, when: t, pan: -0.2 });
+    voice({ type: 'sawtooth', freq: freq * 1.006, dur, gain: gain * 0.75, filterFreq: 260, attack: 0.3, bus: this.bus, when: t, pan: 0.2 });
+  }
+
+  /** High shimmer strings — a cold sustained gleam above the action. */
+  private shimmer(t: number, freq: number, dur: number, gain = 0.022): void {
+    if (!this.bus) return;
+    voice({ type: 'triangle', freq, dur, gain, attack: dur * 0.45, bus: this.bus, when: t, pan: 0.35 });
+    voice({ type: 'triangle', freq: freq * 1.007, dur, gain: gain * 0.8, attack: dur * 0.5, bus: this.bus, when: t, pan: -0.35 });
+  }
+
+  /** Synth french horn — carries the theme. */
+  private horn(t: number, freq: number, dur: number, gain = 0.085): void {
+    if (!this.bus) return;
+    voice({ type: 'sawtooth', freq, dur, gain, filterFreq: 820, filterQ: 0.8, attack: 0.055, bus: this.bus, when: t, pan: -0.08 });
+    voice({ type: 'sawtooth', freq: freq * 1.005, dur, gain: gain * 0.5, filterFreq: 640, attack: 0.07, bus: this.bus, when: t, pan: 0.12 });
+    voice({ type: 'triangle', freq: freq * 2, dur, gain: gain * 0.22, attack: 0.05, bus: this.bus, when: t });
+  }
+
+  /** Harp / celesta pluck for the Oasis. */
+  private harp(t: number, freq: number, gain = 0.055, pan = 0.2): void {
+    if (!this.bus) return;
+    voice({ type: 'sine', freq, dur: 0.7, gain, attack: 0.004, bus: this.bus, when: t, pan });
+    voice({ type: 'triangle', freq: freq * 2.01, dur: 0.35, gain: gain * 0.3, attack: 0.004, bus: this.bus, when: t, pan: -pan * 0.6 });
+  }
+
+  /** Tick-hat: tiny filtered noise keeping the 16th grid alive. */
+  private hat(t: number, vel = 1): void {
+    if (!this.bus) return;
+    noise({ dur: 0.035, gain: 0.045 * vel, filterFreq: 6800, filterType: 'highpass', bus: this.bus, when: t });
+  }
+
+  /** Schedule the full 2-bar theme starting at t0. mult shifts the octave. */
+  private playTheme(t0: number, mult = 1, gain = 0.085): void {
+    const STEP = 0.15;
+    for (const [st, freq, durSteps] of MusicDirector.THEME) {
+      this.horn(t0 + st * STEP, freq * mult, durSteps * STEP + 0.12, gain);
     }
   }
 
@@ -684,12 +754,16 @@ class MusicDirector {
 
     switch (this.mode) {
       case 'menu': {
-        // Brooding, quiet: pulse + sparse pad.
+        // Brooding, quiet: pulse, slow pads, a distant statement of the theme.
         if (s16 === 0 || s16 === 8) {
           voice({ type: 'sine', freq: 36.7, dur: 0.5, gain: 0.3, bus: this.bus, when: t });
         }
         if (step % 64 === 0) this.padChord(t, [146.8, 220, 293.7], 4.5, 0.04);
         if (step % 64 === 32) this.padChord(t, [130.8, 196, 246.9], 4.5, 0.035);
+        if (bar % 4 === 0 && s16 === 0) this.cello(t, 73.4, 4.6, 0.07);
+        if (bar % 8 === 2 && s16 === 0) this.shimmer(t, 587.3, 4.2, 0.014);
+        // The theme drifts in from far away every 16 bars.
+        if (bar % 16 === 6 && s16 === 0) this.playTheme(t, 0.5, 0.05);
         break;
       }
 
@@ -702,59 +776,79 @@ class MusicDirector {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
           this.stringNote(t, cell[s16], accent * (0.7 + inten * 0.5));
         }
-        // Bass root each bar; fifth halfway.
+        // Bass root each bar, doubled by a sustained cello bed one octave up.
         if (s16 === 0) {
           voice({ type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2, gain: 0.26, filterFreq: 130, attack: 0.03, bus: this.bus, when: t });
+          this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.085 + inten * 0.03);
         }
+        // Cold shimmer strings hold the minor third high above, once per bar.
+        if (s16 === 4) this.shimmer(t, bar % 4 === 1 ? 466.2 : 587.3, 2.0, 0.016 + inten * 0.012);
         // Taiko pattern: heavy downbeat, answer on 11; fills at high intensity.
         if (s16 === 0) this.taiko(t, true);
         if (s16 === 10) this.taiko(t, false, 0.9);
         if (inten > 0.5 && s16 === 13) this.taiko(t, false, 0.7);
         if (inten > 0.75 && s16 % 4 === 2) this.taiko(t, false, 0.45);
+        // Tick-hats keep the 16th grid alive once the fight warms up.
+        if (inten > 0.35 && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.6);
+        // The horn theme rises out of the ostinato every 8 bars.
+        if (bar % 8 === 4 && s16 === 0) this.playTheme(t, 1, 0.07 + inten * 0.05);
         // Braam accent opening every 8th bar (intro leans on manual braams).
         if (this.mode === 'basalt' && step % 128 === 0 && step > 0) {
           this.braam(73.4, 1.6, 0.34 + inten * 0.2);
         }
         // High tension drone every 4 bars.
         if (step % 64 === 48) {
-          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.03, attack: 0.8, bus: this.bus, when: t });
-          voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.026, attack: 0.9, bus: this.bus, when: t });
+          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.03, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+          voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.026, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
         }
         break;
       }
 
       case 'transition': {
-        // Suspended: choir swell + heartbeat, the riser was fired on entry.
+        // Suspended: choir swell + heartbeat + a climbing tremolo shimmer;
+        // the riser was fired on entry.
         if (s16 === 0) this.padChord(t, [146.8, 220, 293.7, 440], 2.6, 0.06);
         if (s16 === 0 || s16 === 6) {
           voice({ type: 'sine', freq: 60, freqEnd: 45, dur: 0.3, gain: 0.32, bus: this.bus, when: t });
         }
+        if (s16 === 8) this.shimmer(t, 587.3 * (1 + (bar % 4) * 0.06), 1.6, 0.02);
         break;
       }
 
       case 'oasis': {
-        // Hopeful but driving: pads, plucked lead, lighter taikos.
+        // Hopeful but driving: pads, harp arpeggios, plucked lead, lighter
+        // taikos — same heartbeat, warmer light.
+        const chord = MusicDirector.OASIS_PADS[bar % 4];
         if (s16 === 0) {
-          this.padChord(t, MusicDirector.OASIS_PADS[bar % 4], 2.6, 0.05);
-          voice({ type: 'sine', freq: MusicDirector.OASIS_PADS[bar % 4][0] / 2, dur: 2.2, gain: 0.22, bus: this.bus, when: t });
+          this.padChord(t, chord, 2.6, 0.05);
+          voice({ type: 'sine', freq: chord[0] / 2, dur: 2.2, gain: 0.22, bus: this.bus, when: t });
+          this.cello(t, chord[0] / 2, 2.4, 0.06);
+        }
+        // Harp / celesta arpeggio climbing the chord on the 8ths.
+        if (s16 % 2 === 0) {
+          const tone = chord[(s16 >> 1) % 4] * 2;
+          this.harp(t, tone, 0.04 + inten * 0.02, (s16 >> 1) % 2 === 0 ? 0.28 : -0.28);
         }
         // Lead line on the off beats, denser as battle heats up.
         if (s16 % 2 === 0 && (s16 % 4 === 2 || inten > 0.45)) {
           const note = MusicDirector.OASIS_LEAD[(bar * 2 + (s16 >> 1)) % 8];
-          voice({ type: 'sine', freq: note, dur: 0.32, gain: 0.085, attack: 0.01, bus: this.bus, when: t });
+          voice({ type: 'sine', freq: note, dur: 0.32, gain: 0.085, attack: 0.01, bus: this.bus, when: t, pan: 0.1 });
         }
         if (s16 === 0) this.taiko(t, true, 0.8);
         if (s16 === 8) this.taiko(t, false, 0.7);
         if (inten > 0.6 && s16 === 12) this.taiko(t, false, 0.5);
+        if (inten > 0.45 && s16 % 4 === 3) this.hat(t, 0.5);
+        // The theme returns in the light — up an octave, gentler.
+        if (bar % 8 === 4 && s16 === 0) this.playTheme(t, 2, 0.045);
         // Shimmer.
-        if (step % 32 === 24) {
-          voice({ type: 'sine', freq: 1174.7, dur: 1.4, gain: 0.028, attack: 0.4, bus: this.bus, when: t });
-        }
+        if (step % 32 === 24) this.shimmer(t, 1174.7, 1.6, 0.02);
         break;
       }
 
       case 'ended': {
         if (s16 === 0 && bar % 2 === 0) this.padChord(t, [146.8, 220, 293.7, 370], 4, 0.05);
+        if (s16 === 0 && bar % 8 === 1) this.playTheme(t, 1, 0.055);
+        if (s16 === 0 && bar % 4 === 0) this.cello(t, 73.4, 4.2, 0.06);
         break;
       }
     }

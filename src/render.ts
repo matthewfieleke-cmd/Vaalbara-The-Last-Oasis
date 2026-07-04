@@ -28,9 +28,10 @@ import { drawSpecies } from './vector-art';
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** Per-species sprite size trims. */
+/** Per-species sprite size trims. Swarm critters read at critter scale. */
 const SIZE_TWEAK: Partial<Record<SpeciesId, number>> = {
-  fireants: 0.8,
+  fireants: 0.5,
+  bees: 0.85,
   wolves: 0.94,
 };
 
@@ -92,6 +93,9 @@ interface DisplayUnit {
   /** Displayed facing, with hysteresis so steering wobble can't strobe it. */
   face: 1 | -1;
   faceHold: number;
+  /** Body pitch (canvas radians, unmirrored space) toward travel direction —
+   *  side-profile art reads as "heading" up/down field instead of strafing. */
+  lean: number;
   atk?: AttackAnim;
   jig?: Jiggle;
 }
@@ -163,6 +167,8 @@ export class Renderer {
   private raf = 0;
   private running = false;
   private time = 0;
+  /** Seconds since the last sim tick, in RENDER time (freezes in hit-stop). */
+  private tickClock = 0;
   private lastFrame = 0;
   private camPan = 0;
   private shake = 0;
@@ -223,6 +229,7 @@ export class Renderer {
   onTick(state: GameState, events: GameEvent[]): void {
     this.state = state;
     this.lastTickAt = performance.now();
+    this.tickClock = 0;
     for (const e of events) this.consumeEvent(e);
   }
 
@@ -417,6 +424,7 @@ export class Renderer {
       this.hitStop = Math.max(0, this.hitStop - rawDt);
       const dt = this.hitStop > 0 ? rawDt * 0.1 : rawDt;
       this.time += dt;
+      this.tickClock += dt;
       this.frame(dt, now);
       this.raf = requestAnimationFrame(loop);
     };
@@ -786,7 +794,7 @@ export class Renderer {
     }
 
     // Stacked basalt monolith, narrowing upward.
-    const H = u * 1.85;
+    const H = u * 1.55;
     const slabs: Array<[number, number]> = [[0.62, 0.3], [0.5, 0.26], [0.38, 0.24], [0.24, 0.2]];
     let yCursor = 0;
     for (let i = 0; i < slabs.length; i++) {
@@ -872,7 +880,7 @@ export class Renderer {
     // Objective HP bar — bigger than unit bars; this IS the scoreboard.
     const hpw = u * 1.9;
     const hph = 7;
-    const hy = -H - u * 0.62;
+    const hy = -H - u * 0.5;
     ctx.fillStyle = 'rgba(4,3,8,0.82)';
     ctx.beginPath();
     ctx.roundRect(-hpw / 2 - 1.5, hy - 1.5, hpw + 3, hph + 3, 4.5);
@@ -1086,17 +1094,22 @@ export class Renderer {
       alive.add(u.id);
       let d = this.display.get(u.id);
       if (!d) {
-        d = { dx: u.x, dy: u.y, runPhase: (u.id * 0.7) % 4, age: 0, face: u.facing, faceHold: 0 };
+        d = { dx: u.x, dy: u.y, runPhase: (u.id * 0.7) % 4, age: 0, face: u.facing, faceHold: 0, lean: 0 };
         this.display.set(u.id, d);
       }
       d.age += dt;
 
-      // Visual catch-up interpolation toward the sim position.
-      const distW = Math.hypot(u.x - d.dx, u.y - d.dy);
-      const rate = clamp((4.2 + distW * 3.4) * dt, 0, 1);
-      d.dx = lerp(d.dx, u.x, rate);
-      d.dy = lerp(d.dy, u.y, rate);
-      const moving = distW > 0.05;
+      // CR-style constant-velocity interpolation across the tick window:
+      // px,py -> x,y at the exact sim pace, so motion glides with zero
+      // rubber-banding. Teleports (spawn repositions) snap via the same path.
+      // Uses the render clock so hit-stop freezes motion too.
+      const tickK = clamp((this.tickClock * 1000) / TICK_MS, 0, 1);
+      d.dx = lerp(u.px, u.x, tickK);
+      d.dy = lerp(u.py, u.y, tickK);
+      const stepX = u.x - u.px;
+      const stepY = u.y - u.py;
+      const stepLen = Math.hypot(stepX, stepY);
+      const moving = stepLen > 0.02;
 
       const stats = speciesDef(u.species).stats!;
       const flying = stats.flying;
@@ -1121,6 +1134,17 @@ export class Renderer {
       } else {
         d.faceHold = 0;
       }
+
+      // Body lean: pitch the side-profile art toward the direction of travel
+      // (clamped ~24°) so units heading up/down field read as running
+      // FORWARD, not strafing sideways.
+      const MAX_LEAN = 0.42;
+      let leanTarget = 0;
+      if (moving) {
+        const dyScreen = (this.localSeat === 1 ? -stepY : stepY) / stepLen;
+        leanTarget = clamp(dyScreen, -1, 1) * MAX_LEAN;
+      }
+      d.lean += (leanTarget - d.lean) * clamp(dt * 5, 0, 1);
 
       const p = this.worldToScreen(d.dx, d.dy);
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
@@ -1203,8 +1227,12 @@ export class Renderer {
 
       ctx.translate(p.x, p.y + hover - s * 0.55);
 
-      // Attack lunge (subtle now that real strike frames exist).
+      // Attack lunge + AIM: the body rotates toward the victim through the
+      // strike (up to ~40°), so a chomp visibly bites AT its target even when
+      // the target is up or down the field.
       let strikeStretch = 0;
+      let aimRot = 0;
+      let aimEnv = 0;
       if (d.atk) {
         const at = (this.time - d.atk.t0) / 0.55;
         if (at >= 1) {
@@ -1219,6 +1247,8 @@ export class Renderer {
           const amp = (d.atk.crit ? 1.35 : 1) * s;
           ctx.translate(d.atk.dirX * lunge * amp, d.atk.dirY * lunge * amp);
           strikeStretch = at >= 0.35 && at < 0.6 ? 0.06 : at < 0.35 ? -0.04 : 0;
+          aimEnv = at < 0.2 ? at / 0.2 : at < 0.75 ? 1 : (1 - at) / 0.25;
+          aimRot = clamp(d.atk.dirY, -0.95, 0.95) * 0.7;
         }
       }
       if (d.jig) {
@@ -1233,7 +1263,12 @@ export class Renderer {
 
       const face = this.localSeat === 1 ? -d.face : d.face;
       const native = frame ? frame.nativeFacing : 1;
-      if (face !== native) ctx.scale(-1, 1);
+      // Travel lean blends into the attack aim during a strike. The rotation
+      // sign flips with the mirror so the nose always pitches the right way.
+      const rot = d.lean * (1 - aimEnv) + aimRot * aimEnv;
+      const mirrored = face !== native;
+      if (rot !== 0) ctx.rotate(rot * (mirrored ? -1 : 1));
+      if (mirrored) ctx.scale(-1, 1);
 
       let sqx = 1;
       let sqy = 1;
