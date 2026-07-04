@@ -148,15 +148,38 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
     return grey || magenta;
   };
 
-  // Pure paper white (or separator magenta) — shaded wool/fur is bright but
-  // never this clean, so the fill can't take root inside a body.
+  // The propagation gate needs a per-image reference: animation sheets sit
+  // on pure ~253 paper, while portrait paintings fade to ~229 grey at the
+  // corners. Sample the border's bg-like pixels and take a low percentile —
+  // "pure background" is then anything at least as clean as the paper edge.
+  const borderMins: number[] = [];
+  const borderSample = (i: number): void => {
+    const r = px[i * 4];
+    const g = px[i * 4 + 1];
+    const b = px[i * 4 + 2];
+    if (bgLike(i * 4)) borderMins.push(Math.min(r, g, b));
+  };
+  for (let x = 0; x < w; x++) {
+    borderSample(x);
+    borderSample((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    borderSample(y * w);
+    borderSample(y * w + w - 1);
+  }
+  borderMins.sort((a, b) => a - b);
+  const paperRef = borderMins.length ? borderMins[Math.floor(borderMins.length * 0.25)] : 250;
+  const pureFloor = Math.max(200, paperRef - 14);
+
+  // Paper-clean pixels (or separator magenta) — shaded wool/fur is bright
+  // but noisier than the paper, so the fill can't take root inside a body.
   const pureBg = (i: number): boolean => {
     const r = px[i];
     const g = px[i + 1];
     const b = px[i + 2];
     const mx = Math.max(r, g, b);
     const mn = Math.min(r, g, b);
-    const white = mn > 242 && mx - mn < 8;
+    const white = mn > pureFloor && mx - mn < 10;
     const magenta = r > 150 && b > 150 && g < r * 0.7 && g < b * 0.7;
     return white || magenta;
   };
