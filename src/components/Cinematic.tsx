@@ -238,7 +238,9 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           ctx.shadowBlur = 34;
           const bob = Math.abs(Math.sin(phase * Math.PI * 0.5)) * -5;
           const drawHero = (f: typeof frames[number], alpha: number) => {
-            const scale = targetH / f.h;
+            // Height-fit, but never wider than ~78% of the screen — long
+            // poses (wolf mid-stride) must not swallow the frame.
+            const scale = Math.min(targetH / f.h, (W * 0.78) / f.w);
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
