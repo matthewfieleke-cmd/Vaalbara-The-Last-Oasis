@@ -1135,16 +1135,17 @@ export class Renderer {
         d.faceHold = 0;
       }
 
-      // Body lean: pitch the side-profile art toward the direction of travel
-      // (clamped ~24°) so units heading up/down field read as running
-      // FORWARD, not strafing sideways.
-      const MAX_LEAN = 0.42;
+      // Body lean: rotate the side-profile art toward the direction of
+      // travel — up to ~57° when running straight up/down field — so the
+      // animals read as running FORWARD along the ground, not strafing.
+      // (The team ring, shadow and HP bar stay screen-aligned.)
+      const MAX_LEAN = 1.0;
       let leanTarget = 0;
       if (moving) {
         const dyScreen = (this.localSeat === 1 ? -stepY : stepY) / stepLen;
         leanTarget = clamp(dyScreen, -1, 1) * MAX_LEAN;
       }
-      d.lean += (leanTarget - d.lean) * clamp(dt * 5, 0, 1);
+      d.lean += (leanTarget - d.lean) * clamp(dt * 6, 0, 1);
 
       const p = this.worldToScreen(d.dx, d.dy);
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
@@ -1159,17 +1160,36 @@ export class Renderer {
       ctx.save();
       ctx.globalAlpha = stealthAlpha;
 
-      // Team ring + contact shadow.
+      // Team ring + contact shadow. The shadow stretches slightly along the
+      // stride and darkens at footfall, planting the animal on the ground.
       const ringHue = mineUnit ? 190 : 6;
       ctx.strokeStyle = `hsla(${ringHue} 90% ${mineUnit ? 62 : 56}% / 0.5)`;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.ellipse(p.x, p.y + this.unit * 0.14, s * 0.75 * pop, s * 0.28 * pop, 0, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillStyle = `rgba(0,0,0,${flying ? 0.24 : 0.36})`;
+      const stride = moving && !flying ? Math.abs(Math.sin(d.runPhase * Math.PI * 0.5)) : 0;
+      ctx.fillStyle = `rgba(0,0,0,${flying ? 0.24 : 0.36 + stride * 0.06})`;
       ctx.beginPath();
-      ctx.ellipse(p.x, p.y + this.unit * 0.15, s * 0.62 * pop, s * 0.22 * pop, 0, 0, Math.PI * 2);
+      ctx.ellipse(
+        p.x, p.y + this.unit * 0.15,
+        s * (0.62 + stride * 0.1) * pop, s * (0.22 - stride * 0.02) * pop,
+        0, 0, Math.PI * 2,
+      );
       ctx.fill();
+
+      // Dust kicked up at the feet while running — the ground answers the
+      // stride, which sells actual contact (grey ash on basalt, green-brown
+      // scuff in the oasis).
+      if (moving && !flying && Math.random() < 0.5) {
+        const world = st.phase === 'oasis' || st.phase === 'transition' ? 'oasis' : 'basalt';
+        const back = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
+        this.burst(
+          p.x - back * s * 0.4 + (Math.random() - 0.5) * s * 0.3,
+          p.y + this.unit * 0.12,
+          1, 'ash', world === 'basalt' ? 30 : 95, 0.32,
+        );
+      }
 
       const framePair = this.pickFrames(u.species, d, moving, flying);
       const frame = framePair?.a ?? null;
