@@ -253,6 +253,8 @@ function spawnUnit(
     stompBank: 0,
     struckTargets: [],
     waypoint,
+    stall: 0,
+    stallRef: Infinity,
     buffs: freshBuffs(),
     stealthed: false,
     action: 'spawn',
@@ -725,17 +727,33 @@ function resolveLavaRain(st: GameState, ev: GameEvent[]): void {
 /* Movement — corridor routing + steering + wall slide                        */
 /* ------------------------------------------------------------------------ */
 
-function steerStep(st: GameState, u: RuntimeUnit, goalX: number, goalY: number, stepLen: number): boolean {
+/** True when any sample along the segment crosses non-walkable ground.
+ *  Marching the WHOLE line (0.2-unit steps) matters: a thin lava river is
+ *  invisible to a single end-point probe, which used to leave units grinding
+ *  against chokepoint walls instead of routing around them. */
+function groundLineBlocked(st: GameState, x0: number, y0: number, x1: number, y1: number): boolean {
+  const d = dist(x0, y0, x1, y1);
+  const steps = Math.max(1, Math.ceil(d / 0.2));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (!groundOpen(st, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return true;
+  }
+  return false;
+}
+
+function steerStep(
+  st: GameState, u: RuntimeUnit, goalX: number, goalY: number, stepLen: number, depth = 0,
+): boolean {
   const world = worldOf(st);
   // Route via corridors when the straight line to the goal is blocked ahead.
   let aimX = goalX;
   let aimY = goalY;
   if (!u.stats.flying) {
     const d = Math.max(0.001, dist(u.x, u.y, goalX, goalY));
-    const probe = Math.min(d, 1.0);
+    const probe = Math.min(d, 1.4);
     const lx = u.x + ((goalX - u.x) / d) * probe;
     const ly = u.y + ((goalY - u.y) / d) * probe;
-    if (!groundOpen(st, lx, ly)) {
+    if (groundLineBlocked(st, u.x, u.y, lx, ly)) {
       const wp = nextCorridor(world, u.x, u.y, goalX, goalY);
       if (wp) {
         aimX = wp.x;
@@ -759,19 +777,29 @@ function steerStep(st: GameState, u: RuntimeUnit, goalX: number, goalY: number, 
     return true;
   };
 
-  // Full step, then wall-slide on each axis, then probing diagonals.
+  // Full step, then wall-slide on each axis, then a widening deflection fan
+  // (45°, 90°, 120° either way — deterministic order biased by unit id).
   if (tryMove(sx, sy)) return true;
   if (tryMove(sx, 0)) return true;
   if (tryMove(0, sy)) return true;
-  // Deflect 45° either way (deterministic order biased by unit id).
   const rot = (vx: number, vy: number, ang: number) => ({
     x: vx * Math.cos(ang) - vy * Math.sin(ang),
     y: vx * Math.sin(ang) + vy * Math.cos(ang),
   });
-  const first = u.id % 2 === 0 ? 0.7853981633974483 : -0.7853981633974483;
-  for (const ang of [first, -first]) {
-    const v = rot(sx, sy, ang);
-    if (tryMove(v.x, v.y)) return true;
+  const sign = u.id % 2 === 0 ? 1 : -1;
+  for (const base of [0.7853981633974483, 1.5707963267948966, 2.0943951023931953]) {
+    for (const ang of [base * sign, -base * sign]) {
+      const v = rot(sx, sy, ang);
+      if (tryMove(v.x, v.y)) return true;
+    }
+  }
+  // Completely wedged: fall back to marching straight at the next corridor
+  // waypoint (once), which aims around the obstacle rather than through it.
+  if (depth === 0 && !u.stats.flying) {
+    const wp = nextCorridor(world, u.x, u.y, goalX, goalY);
+    if (wp && dist2(wp.x, wp.y, goalX, goalY) > 0.01) {
+      return steerStep(st, u, wp.x, wp.y, stepLen, 1);
+    }
   }
   return false;
 }
@@ -864,6 +892,13 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   const speed = effSpeed(st, u);
   if (speed <= 0) return;
 
+  // Standing in the deep pond IS the Phase-2 objective — hold the prize
+  // instead of grinding against the crowd for the exact centre pixel.
+  if (st.phase === 'oasis' && !u.waypoint && isDeep(worldOf(st), u.x, u.y)) {
+    u.stall = 0;
+    return;
+  }
+
   let goal: Vec2;
   if (target) {
     goal = { x: target.x, y: target.y };
@@ -895,6 +930,27 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
     }
   } else {
     u.traveled = 0;
+  }
+  // Waypoint give-up: measured as NET progress (best distance so far), so
+  // wall-wiggling can't masquerade as movement. A fling that lands behind a
+  // wall the fine grid can't cross is abandoned after ~3 s and the unit
+  // marches on the phase objective instead of grinding at a chokepoint.
+  if (u.waypoint) {
+    const dw = dist(u.x, u.y, u.waypoint.x, u.waypoint.y);
+    if (dw < u.stallRef - 0.05) {
+      u.stallRef = dw;
+      u.stall = 0;
+    } else {
+      u.stall++;
+      if (u.stall >= 10) {
+        u.waypoint = null;
+        u.stall = 0;
+        u.stallRef = Infinity;
+      }
+    }
+  } else {
+    u.stall = 0;
+    u.stallRef = Infinity;
   }
 }
 
@@ -950,6 +1006,8 @@ function beginTransition(st: GameState, ev: GameEvent[]): void {
   for (const u of st.units) {
     if (u.hp <= 0) continue;
     u.waypoint = { x: u.x, y: u.owner === 0 ? WORLD_H - 1 : 1 };
+    u.stall = 0;
+    u.stallRef = Infinity;
     u.targetId = null;
   }
   ev.push({ type: 'phaseChange', phase: 'transition' });
@@ -991,6 +1049,8 @@ function beginOasis(st: GameState, ev: GameEvent[]): void {
     u.px = col;
     u.py = row;
     u.waypoint = { x: WORLD_W / 2, y: WORLD_H / 2 };
+    u.stall = 0;
+    u.stallRef = Infinity;
     u.buffs = freshBuffs();
     if (st.players[u.owner].blessed) u.buffs.blessed = true;
     u.action = 'spawn';

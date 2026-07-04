@@ -25,10 +25,10 @@ export const TICK_MS = 300;
 export const WORLD_W = 9;
 export const WORLD_H = 15;
 
-/** Phase durations, in ticks. 2 min = 400, 1 min = 200 at 300 ms/tick. */
+/** Phase durations, in ticks. 2 min = 400, 2.5 min = 500 at 300 ms/tick. */
 export const PHASE1_TICKS = 400;
 export const TRANSITION_TICKS = 20; // 6 s marching cutscene
-export const PHASE2_TICKS = 200;
+export const PHASE2_TICKS = 500;
 
 /** Player seat. Seat 0 deploys along the bottom band, seat 1 along the top. */
 export type PlayerId = 0 | 1;
@@ -151,6 +151,10 @@ export interface UnitState {
   struckTargets: number[];
   /** Fling waypoint from vector spawning; unit paths here before free AI. */
   waypoint: Vec2 | null;
+  /** Ticks without net progress toward the waypoint (stuck detection). */
+  stall: number;
+  /** Best distance-to-waypoint achieved so far (progress reference). */
+  stallRef: number;
   buffs: UnitBuffs;
   /** True while inside reeds / thicket and not revealed. */
   stealthed: boolean;

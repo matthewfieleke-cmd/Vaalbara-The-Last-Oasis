@@ -122,7 +122,13 @@ function toCanvas(img: HTMLImageElement): HTMLCanvasElement {
   return cv;
 }
 
-/** Border flood-fill keying: connected bright/low-chroma pixels -> alpha 0. */
+/** Border flood-fill keying: connected bright/low-chroma pixels -> alpha 0.
+ *
+ *  Leak-resistant: the fill only PROPAGATES through "deep background"
+ *  (pixels whose whole 3×3 neighbourhood is bg-like), so it cannot squeeze
+ *  through 1–2 px anti-aliased bridges into bright fur/wool inside the body
+ *  (the Bighorn's white back). A final bounded dilation then eats the
+ *  anti-aliased rim the strict fill leaves behind. */
 function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
   const w = cv.width;
   const h = cv.height;
@@ -142,23 +148,57 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
     return grey || magenta;
   };
 
-  const reach = new Uint8Array(w * h);
-  const work: number[] = [];
-  for (let x = 0; x < w; x++) {
-    for (const s of [x, (h - 1) * w + x]) {
-      if (!reach[s] && bgLike(s * 4)) {
-        reach[s] = 1;
-        work.push(s);
+  // Pure paper white (or separator magenta) — shaded wool/fur is bright but
+  // never this clean, so the fill can't take root inside a body.
+  const pureBg = (i: number): boolean => {
+    const r = px[i];
+    const g = px[i + 1];
+    const b = px[i + 2];
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    const white = mn > 242 && mx - mn < 8;
+    const magenta = r > 150 && b > 150 && g < r * 0.7 && g < b * 0.7;
+    return white || magenta;
+  };
+
+  const bg = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) bg[i] = bgLike(i * 4) ? 1 : 0;
+
+  // Deep background: pure white/magenta with an entirely bg-like 3×3 window.
+  const deep = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!bg[i]) continue;
+      if (x === 0 || x === w - 1 || y === 0 || y === h - 1) {
+        deep[i] = 1; // sheet border counts as deep
+        continue;
       }
+      let ok = pureBg(i * 4) ? 1 : 0;
+      for (let dy = -1; dy <= 1 && ok; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!bg[i + dy * w + dx]) { ok = 0; break; }
+        }
+      }
+      deep[i] = ok;
     }
   }
-  for (let y = 0; y < h; y++) {
-    for (const s of [y * w, y * w + w - 1]) {
-      if (!reach[s] && bgLike(s * 4)) {
-        reach[s] = 1;
-        work.push(s);
-      }
+
+  const reach = new Uint8Array(w * h);
+  const work: number[] = [];
+  const seed = (s: number): void => {
+    if (!reach[s] && deep[s]) {
+      reach[s] = 1;
+      work.push(s);
     }
+  };
+  for (let x = 0; x < w; x++) {
+    seed(x);
+    seed((h - 1) * w + x);
+  }
+  for (let y = 0; y < h; y++) {
+    seed(y * w);
+    seed(y * w + w - 1);
   }
   while (work.length) {
     const cur = work.pop()!;
@@ -169,14 +209,28 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
       const ny = cy + dy;
       if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
       const ni = ny * w + nx;
-      if (reach[ni]) continue;
-      if (bgLike(ni * 4)) {
-        reach[ni] = 1;
-        work.push(ni);
-      } else {
-        reach[ni] = 2;
+      if (reach[ni] || !deep[ni]) continue;
+      reach[ni] = 1;
+      work.push(ni);
+    }
+  }
+  // Dilate the reached region into the remaining bg-like rim (anti-aliased
+  // halo around the silhouette) — bounded, so it can't re-enter the body.
+  for (let pass = 0; pass < 3; pass++) {
+    let grew = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (reach[i] || !bg[i]) continue;
+        if ((x > 0 && reach[i - 1] === 1) || (x < w - 1 && reach[i + 1] === 1)
+          || (y > 0 && reach[i - w] === 1) || (y < h - 1 && reach[i + w] === 1)) {
+          reach[i] = 2;
+          grew = true;
+        }
       }
     }
+    for (let i = 0; i < w * h; i++) if (reach[i] === 2) reach[i] = 1;
+    if (!grew) break;
   }
   for (let i = 0; i < w * h; i++) {
     if (reach[i] === 1) px[i * 4 + 3] = 0;
