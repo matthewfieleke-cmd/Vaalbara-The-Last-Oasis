@@ -36,6 +36,8 @@ interface FighterVis {
   species: SpeciesId;
   name: string;
   hue: number;
+  /** Bombardier special: turned rear-to-foe, venting the acid jet. */
+  spray?: boolean;
   /** Home anchor as a fraction of stage width. */
   homeX: number;
   face: 1 | -1;
@@ -61,7 +63,7 @@ interface FighterVis {
 interface Particle {
   x: number; y: number; vx: number; vy: number;
   life: number; t: number; size: number; hue: number;
-  kind: 'spark' | 'dust' | 'ember' | 'mote' | 'ring' | 'charge' | 'shock' | 'line';
+  kind: 'spark' | 'dust' | 'ember' | 'mote' | 'ring' | 'charge' | 'shock' | 'line' | 'glob';
   /** 'line': ray angle. 'charge': orbit angle around its target. */
   ang?: number;
   /** 'charge': the side whose champion is charging (follows the fighter). */
@@ -97,7 +99,7 @@ const FLOW_REGIONS: Record<DuelWorld, FlowRegionDef[]> = {
     { x: 0.575, y: 0.39, w: 0.095, h: 0.25, kind: 'fall', speed: 0.30 },
     { x: 0.715, y: 0.39, w: 0.085, h: 0.23, kind: 'fall', speed: 0.27 },
     // Molten pool at the base of the central cascade — slow lateral churn.
-    { x: 0.365, y: 0.625, w: 0.28, h: 0.065, kind: 'ripple', speed: 0.5, amp: 0.012 },
+    { x: 0.365, y: 0.625, w: 0.28, h: 0.065, kind: 'ripple', speed: 0.5, amp: 0.005 },
   ],
   oasis: [
     // The tall thin falls under the left tree line.
@@ -179,6 +181,14 @@ export class DuelStage {
   private zoomTarget = 1;
   private zoomCX = 0.5;
   private zoomCY = 0.6;
+
+  /** Bottom edge of the DOM HUD cards, as a fraction of canvas height.
+   *  Ribbon and floating texts are kept below this line. */
+  private hudBottom = 0.19;
+
+  setHudBottom(frac: number): void {
+    if (Number.isFinite(frac)) this.hudBottom = Math.min(0.42, Math.max(0.1, frac));
+  }
 
   /** Fires the moment an event's numbers should hit the HUD. */
   onEventApplied: ((ev: DuelEvent) => void) | null = null;
@@ -308,6 +318,7 @@ export class DuelStage {
           if (f && f.mode !== 'ko' && f.mode !== 'gone') {
             f.mode = 'idle';
             f.guarding = false;
+            f.spray = false;
           }
         }
         if (this.queue.length === 0) {
@@ -338,6 +349,7 @@ export class DuelStage {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.kind === 'dust' || p.kind === 'spark') p.vy += this.H * 0.7 * dt;
+      if (p.kind === 'glob') p.vy += this.H * 1.5 * dt;
       if (p.kind === 'ember') p.vy -= this.H * 0.02 * dt;
       return p.t < p.life;
     });
@@ -359,6 +371,54 @@ export class DuelStage {
     }
   }
 
+  /** The shared impact beat of a clash: hit-stop, FX, damage readout. */
+  private clashImpact(step: Step, A: FighterVis, D: FighterVis): void {
+    const ev = step.ev;
+    if (!A.spray) {
+      A.mode = 'attack';
+      A.animT = 0;
+    }
+    if (ev.evaded) {
+      D.mode = 'evade';
+      D.animT = 0;
+      this.fighterText(D, 'MISS', 200, false);
+    } else {
+      const dmg = ev.dmg ?? 0;
+      this.freeze = ev.special ? 0.22 : ev.crit ? 0.13 : 0.09;
+      this.shake = ev.special ? 20 : ev.crit ? 10 : 6;
+      this.flash = ev.special ? 1.1 : 0.45;
+      this.flashHue = A.hue;
+      D.tint = 1;
+      D.tintHue = 0;
+      const dp = this.fighterPx(D);
+      this.sparks(dp.x, dp.y - this.H * 0.12, ev.special ? 34 : 14, A.hue);
+      this.ring(dp.x, dp.y - this.H * 0.12, A.hue);
+      if (ev.special) {
+        // The big-hit language: shockwave, radial rays, camera slam.
+        this.particles.push({
+          x: dp.x, y: dp.y - this.H * 0.12, vx: 0, vy: 0,
+          life: 0.55, t: 0, size: 6, hue: A.hue, kind: 'shock',
+        });
+        for (let i = 0; i < 10; i++) {
+          this.particles.push({
+            x: dp.x, y: dp.y - this.H * 0.12, vx: 0, vy: 0,
+            life: 0.3 + Math.random() * 0.2, t: 0,
+            size: 1.5 + Math.random() * 2, hue: A.hue,
+            kind: 'line', ang: (i / 10) * Math.PI * 2 + Math.random() * 0.4,
+          });
+        }
+        this.dustBurst(dp.x, this.groundY(), 10);
+        this.zoomTarget = 1.12;
+        this.zoomCX = D.homeX;
+      }
+      this.fighterText(D, `${dmg}`, ev.blocked ? 200 : ev.crit ? 48 : 6, !!(ev.crit || ev.special));
+      if (ev.blocked) this.fighterText(D, 'BLOCKED', 200, false, true);
+      else if (ev.crit) this.fighterText(D, 'CRITICAL!', 48, false, true);
+      this.onImpact?.(A.species, !!ev.special, false);
+    }
+    this.onEventApplied?.(ev);
+  }
+
   /* ---------------------------------------------------------------------- */
   /* Living backdrop — the painting itself flows                             */
   /* ---------------------------------------------------------------------- */
@@ -368,29 +428,66 @@ export class DuelStage {
 
   /**
    * Cuts the hand-mapped fall/pond regions out of the painting at source
-   * resolution and bakes a feathered alpha border into each, so the
-   * animated copies blend invisibly into the still painting around them.
+   * resolution, then chroma-keys them so ONLY the fluid keeps alpha —
+   * glowing lava in the Basalt, white/turquoise water in the Oasis. The
+   * rock, moss and shore inside each rectangle are erased from the moving
+   * copy, so the land never appears to flow. A soft rectangular feather is
+   * baked on top so the copies blend invisibly at region borders.
    */
   private buildFlowRegions(art: HTMLImageElement): void {
     this.flowBuilt = true;
     this.flowRegions = [];
+    const basalt = this.world === 'basalt';
     for (const def of FLOW_REGIONS[this.world]) {
       const sw = Math.max(2, Math.round(def.w * art.width));
       const sh = Math.max(2, Math.round(def.h * art.height));
       const cv = document.createElement('canvas');
       cv.width = sw;
       cv.height = sh;
-      const c = cv.getContext('2d');
+      const c = cv.getContext('2d', { willReadFrequently: true });
       if (!c) continue;
       c.drawImage(
         art,
         Math.round(def.x * art.width), Math.round(def.y * art.height), sw, sh,
         0, 0, sw, sh,
       );
-      // Feather all four edges (destination-in gradients).
+
+      // Fluid-only chroma mask.
+      const px = c.getImageData(0, 0, sw, sh).data;
+      const mask = c.createImageData(sw, sh);
+      for (let i = 0; i < sw * sh; i++) {
+        const r = px[i * 4];
+        const g = px[i * 4 + 1];
+        const b = px[i * 4 + 2];
+        let s = 0;
+        if (basalt) {
+          // Molten: hot orange/yellow, red well above blue, decently bright.
+          s = clamp01((r - b - 30) / 90) * clamp01((r - 120) / 80);
+        } else {
+          // Water: foam is bright WITH real blue content (sunlit foliage is
+          // bright too, but starved of blue) — or open turquoise water.
+          const mn = Math.min(r, g, b);
+          const foam = clamp01((mn - 120) / 60) * clamp01((b - 135) / 55);
+          const turquoise = clamp01((Math.min(g, b) - 105) / 70) * clamp01((g * 0.88 - r) / 40);
+          s = Math.max(foam, turquoise);
+        }
+        mask.data[i * 4 + 3] = Math.round(255 * s);
+      }
+      const maskCv = document.createElement('canvas');
+      maskCv.width = sw;
+      maskCv.height = sh;
+      maskCv.getContext('2d')!.putImageData(mask, 0, 0);
+      // Cheap blur: bounce through quarter resolution so mask edges soften.
+      const lo = document.createElement('canvas');
+      lo.width = Math.max(1, sw >> 2);
+      lo.height = Math.max(1, sh >> 2);
+      lo.getContext('2d')!.drawImage(maskCv, 0, 0, lo.width, lo.height);
+      c.globalCompositeOperation = 'destination-in';
+      c.drawImage(lo, 0, 0, sw, sh);
+
+      // Feather all four edges so the copy fades out at region borders.
       const fx = Math.max(2, Math.round(sw * 0.16));
       const fy = Math.max(2, Math.round(sh * 0.12));
-      c.globalCompositeOperation = 'destination-in';
       for (const horizontal of [true, false]) {
         const g = horizontal
           ? c.createLinearGradient(0, 0, sw, 0)
@@ -430,7 +527,7 @@ export class DuelStage {
           const alpha = 1 - Math.abs(2 * k - 1); // triangle: in, out
           const off = (k - 0.5) * travel;
           // A whisper of lateral sway keeps the sheet from feeling stiff.
-          const sway = Math.sin(this.time * 1.7 + r.phase * 9 + stagger * 4) * dw * 0.008;
+          const sway = Math.sin(this.time * 1.7 + r.phase * 9 + stagger * 4) * dw * 0.004;
           ctx.globalAlpha = alpha * 0.85;
           ctx.drawImage(r.canvas, dx + sway, dy + off, dw, dh);
         }
@@ -545,6 +642,40 @@ export class DuelStage {
         }
         const wEnd = pre + 0.32;
         const dEnd = wEnd + 0.26;
+        // Bombardier Beetles fire their special like real artillery: they
+        // whip around rear-to-foe and hose boiling acid across the arena
+        // instead of charging in head-first.
+        const sprayer = !!ev.special && A.species === 'beetles';
+        if (sprayer && t >= wEnd) {
+          this.fire(step, 'spray', wEnd, () => {
+            A.mode = 'attack';
+            A.animT = 0;
+            A.spray = true;
+            this.zoomTarget = 1.06;
+            this.zoomCX = 0.5;
+          });
+          A.x = 0;
+          // Acid globs arc from the rear nozzle to the victim.
+          if (t < dEnd + 0.35 && Math.random() < 0.85) {
+            const ap = this.fighterPx(A);
+            const dp = this.fighterPx(D);
+            const sx = ap.x + A.face * this.W * 0.03;
+            const sy = ap.y - this.H * (0.1 + Math.random() * 0.04);
+            const T = 0.26 + Math.random() * 0.14;
+            const g = this.H * 1.5;
+            const txp = dp.x + (Math.random() - 0.5) * this.W * 0.05;
+            const typ = dp.y - this.H * (0.04 + Math.random() * 0.1);
+            this.particles.push({
+              x: sx, y: sy,
+              vx: (txp - sx) / T,
+              vy: (typ - sy - 0.5 * g * T * T) / T,
+              life: T, t: 0,
+              size: 2 + Math.random() * 2.5,
+              hue: 96 + Math.random() * 34,
+              kind: 'glob',
+            });
+          }
+        }
         // Wind-up: coil back and crouch.
         if (t < wEnd) {
           A.mode = 'idle';
@@ -552,6 +683,18 @@ export class DuelStage {
           A.squash = easeOut(ph(t, pre, wEnd)) * 0.12;
           D.guarding = !!ev.blocked;
           if (D.guarding) D.mode = 'guard';
+        } else if (sprayer) {
+          // Hold position and vent; the impact beat below still fires on
+          // schedule when the first globs land.
+          A.squash = 0;
+          if (t >= dEnd) {
+            this.fire(step, 'impact', dEnd, () => this.clashImpact(step, A, D));
+          }
+          if (!ev.evaded && t >= dEnd) {
+            const kb = Math.exp(-ph(t, dEnd, step.dur) * 5) * this.W * 0.04;
+            D.x = -D.face * kb;
+          }
+          A.aura = Math.max(0, A.aura - 0.03);
         } else if (t < dEnd) {
           // Dash across the arena (specials streak with afterimages).
           A.mode = 'dash';
@@ -566,49 +709,7 @@ export class DuelStage {
           if (Math.random() < 0.7) this.dust(this.fighterPx(A).x, this.groundY());
         } else {
           // Impact and recovery.
-          this.fire(step, 'impact', dEnd, () => {
-            A.mode = 'attack';
-            A.animT = 0;
-            if (ev.evaded) {
-              D.mode = 'evade';
-              D.animT = 0;
-              this.fighterText(D, 'MISS', 200, false);
-            } else {
-              const dmg = ev.dmg ?? 0;
-              this.freeze = ev.special ? 0.22 : ev.crit ? 0.13 : 0.09;
-              this.shake = ev.special ? 20 : ev.crit ? 10 : 6;
-              this.flash = ev.special ? 1.1 : 0.45;
-              this.flashHue = A.hue;
-              D.tint = 1;
-              D.tintHue = 0;
-              const dp = this.fighterPx(D);
-              this.sparks(dp.x, dp.y - this.H * 0.12, ev.special ? 34 : 14, A.hue);
-              this.ring(dp.x, dp.y - this.H * 0.12, A.hue);
-              if (ev.special) {
-                // The big-hit language: shockwave, radial rays, camera slam.
-                this.particles.push({
-                  x: dp.x, y: dp.y - this.H * 0.12, vx: 0, vy: 0,
-                  life: 0.55, t: 0, size: 6, hue: A.hue, kind: 'shock',
-                });
-                for (let i = 0; i < 10; i++) {
-                  this.particles.push({
-                    x: dp.x, y: dp.y - this.H * 0.12, vx: 0, vy: 0,
-                    life: 0.3 + Math.random() * 0.2, t: 0,
-                    size: 1.5 + Math.random() * 2, hue: A.hue,
-                    kind: 'line', ang: (i / 10) * Math.PI * 2 + Math.random() * 0.4,
-                  });
-                }
-                this.dustBurst(dp.x, this.groundY(), 10);
-                this.zoomTarget = 1.12;
-                this.zoomCX = D.homeX;
-              }
-              this.fighterText(D, `${dmg}`, ev.blocked ? 200 : ev.crit ? 48 : 6, !!(ev.crit || ev.special));
-              if (ev.blocked) this.fighterText(D, 'BLOCKED', 200, false, true);
-              else if (ev.crit) this.fighterText(D, 'CRITICAL!', 48, false, true);
-              this.onImpact?.(A.species, !!ev.special, false);
-            }
-            this.onEventApplied?.(ev);
-          });
+          this.fire(step, 'impact', dEnd, () => this.clashImpact(step, A, D));
           const k = easeOut(ph(t, dEnd + 0.18, step.dur));
           A.x = A.face * (gap - this.W * 0.13) * (1 - k);
           if (t > dEnd + 0.18) {
@@ -784,16 +885,22 @@ export class DuelStage {
       Math.max(this.W * (left ? 0.12 : 0.56), halfW),
       Math.min(Math.min(this.W * (left ? 0.44 : 0.88), this.W - halfW), p.x),
     );
-    const head = this.groundY() - fh - this.H * 0.045;
+    // Never spawn inside the HUD zone — tall species get pushed down.
+    const floor = this.hudBottom * this.H + this.H * 0.06;
+    const head = Math.max(this.groundY() - fh - this.H * 0.045, floor);
     // Stack over any live texts already occupying this side.
     let stack = 0;
     for (const t of this.texts) {
       const tLeft = t.x < this.W * 0.5;
       if (tLeft === left && t.t < 0.6) stack++;
     }
-    const y = subline
-      ? head + this.H * 0.042 // labels sit UNDER the number, never over the ribbon
-      : head - stack * this.H * 0.05;
+    let y: number;
+    if (subline) {
+      y = head + this.H * 0.042; // labels sit UNDER the number
+    } else {
+      y = head - stack * this.H * 0.05;
+      if (y < floor) y = head + stack * this.H * 0.05; // flip: stack downward
+    }
     this.texts.push({ x, y, txt, hue, t: 0, big, scale: subline ? 0.6 : 1 });
   }
 
@@ -832,11 +939,12 @@ export class DuelStage {
     const art = getDuelArt(this.world);
     if (art) {
       if (!this.flowBuilt) this.buildFlowRegions(art);
-      const drift = Math.sin(this.time * 0.07) * 0.006;
-      const scale = Math.max(W / art.width, H / art.height) * (1.03 + drift);
+      // The painting itself stays rock-still — any drift here reads as the
+      // land moving. Only the masked fluid overlays animate.
+      const scale = Math.max(W / art.width, H / art.height) * 1.02;
       const dw = art.width * scale;
       const dh = art.height * scale;
-      const dx = (W - dw) / 2 + Math.sin(this.time * 0.05) * W * 0.004;
+      const dx = (W - dw) / 2;
       const dy = H - dh;
       this.bd = { x: dx, y: dy, w: dw, h: dh };
       ctx.drawImage(art, dx, dy, dw, dh);
@@ -902,6 +1010,24 @@ export class DuelStage {
         ctx.beginPath();
         ctx.arc(p.x, p.y, r * 0.82, 0, Math.PI * 2);
         ctx.stroke();
+      } else if (p.kind === 'glob') {
+        // Boiling acid glob: an elongated drop streaking along its arc,
+        // with a hot bright core.
+        const a = 0.92 * (1 - k * 0.35);
+        const ang = Math.atan2(p.vy, p.vx);
+        const r = p.size * this.dpr;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(ang);
+        ctx.fillStyle = `hsla(${p.hue} 90% 52% / ${a})`;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r * 1.9, r, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `hsla(${p.hue} 95% 80% / ${a * 0.85})`;
+        ctx.beginPath();
+        ctx.ellipse(-r * 0.3, 0, r * 0.9, r * 0.55, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
       } else if (p.kind === 'line') {
         // Energy ray shooting out of an impact / power-up.
         const a = 0.85 * (1 - k);
@@ -937,32 +1063,46 @@ export class DuelStage {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Floating damage numbers.
+    ctx.restore();
+
+    // Floating damage numbers — screen-space so the camera zoom can never
+    // push them under the HUD cards. Positions are mapped through the zoom
+    // by hand, then clamped below the measured HUD bottom edge.
+    const hudPx = this.hudBottom * H;
     for (const t of this.texts) {
       const a = t.t < 0.15 ? t.t / 0.15 : 1 - Math.max(0, (t.t - 0.55) / 0.65);
       const pop = t.t < 0.18 ? 1 + (0.18 - t.t) * 2.2 : 1;
       const size = (t.big ? 0.062 : 0.042) * H * pop * (t.scale ?? 1);
+      // Map through the camera zoom (texts track the pushed-in action).
+      let tx = t.x;
+      let ty = t.y;
+      if (this.zoom > 1.001) {
+        tx = (tx - this.zoomCX * W) * this.zoom + this.zoomCX * W;
+        ty = (ty - this.zoomCY * H) * this.zoom + this.zoomCY * H;
+      }
       ctx.save();
       ctx.globalAlpha = clamp01(a);
       ctx.font = `900 ${size}px Georgia, 'Times New Roman', serif`;
       ctx.textAlign = 'center';
+      // Clamp fully on screen and below the HUD cards.
+      const half = ctx.measureText(t.txt).width / 2;
+      tx = Math.max(half + W * 0.015, Math.min(W - half - W * 0.015, tx));
+      ty = Math.max(hudPx + size * 1.05, ty);
       ctx.lineWidth = size * 0.14;
       ctx.strokeStyle = 'rgba(10,6,4,0.85)';
-      ctx.strokeText(t.txt, t.x, t.y);
+      ctx.strokeText(t.txt, tx, ty);
       ctx.fillStyle = `hsl(${t.hue} 95% 72%)`;
-      ctx.fillText(t.txt, t.x, t.y);
+      ctx.fillText(t.txt, tx, ty);
       ctx.restore();
     }
 
-    ctx.restore();
-
-    // Move ribbon — screen-space, in the clear band between the HUD panels
-    // and the fighters, so it never collides with either (and never shakes).
+    // Move ribbon — screen-space, directly below the measured HUD bottom,
+    // so the title cards can never cover it (and it never shakes).
     if (this.banner) {
       const b = this.banner;
       const a = b.t < 0.2 ? b.t / 0.2 : 1 - Math.max(0, (b.t - (b.dur - 0.4)) / 0.4);
       const slide = b.t < 0.25 ? (1 - b.t / 0.25) * H * 0.014 : 0;
-      const y = H * 0.235 - slide;
+      const y = hudPx + H * 0.064 - slide;
       ctx.save();
       ctx.globalAlpha = clamp01(a);
       const g = ctx.createLinearGradient(0, y - H * 0.052, 0, y + H * 0.052);
@@ -1007,6 +1147,12 @@ export class DuelStage {
       return p ? { a: p, b: null, mix: 0 } : null;
     }
     if (f.mode === 'attack') {
+      // Beetles only show the acid-spray art during their special — normal
+      // strikes are a clean scuttle-lunge on the run frames.
+      if (f.species === 'beetles' && !f.spray) {
+        const n = anim.run.length;
+        return { a: anim.run[Math.floor(f.runPhase) % n], b: null, mix: 0 };
+      }
       const at = clamp01(f.animT / 0.5);
       const idx = at < 0.35 ? 0 : at < 0.7 ? 1 : 2;
       return { a: anim.attack[Math.min(idx, anim.attack.length - 1)], b: null, mix: 0 };
@@ -1082,7 +1228,10 @@ export class DuelStage {
     const drawOne = (s: Sprite, alpha: number) => {
       const scale = targetH / s.h;
       ctx.save();
-      if (f.face !== s.nativeFacing) ctx.scale(-1, 1);
+      // Spraying beetles present their rear to the foe: invert the mirror
+      // so the abdomen nozzle (and its acid jet) points at the opponent.
+      const mirrored = (f.face !== s.nativeFacing) !== !!f.spray;
+      if (mirrored) ctx.scale(-1, 1);
       ctx.globalAlpha = alpha * f.alpha;
       ctx.drawImage(
         s.canvas,

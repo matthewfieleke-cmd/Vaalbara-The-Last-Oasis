@@ -105,6 +105,27 @@ export function DuelScreen({
   const [round, setRound] = useState(1);
   const [nonce, setNonce] = useState(0); // rematch remounts the arena
 
+  // Tell the stage where the DOM HUD cards end, so canvas text (ribbon,
+  // damage numbers) is always laid out below them. Panels grow when status
+  // chips appear, so re-measure on every HUD render and on resize.
+  useEffect(() => {
+    const measure = () => {
+      const canvas = canvasRef.current;
+      const stage = stageRef.current;
+      if (!canvas || !stage) return;
+      const cr = canvas.getBoundingClientRect();
+      if (cr.height <= 0) return;
+      let bottom = 0;
+      document.querySelectorAll('.duel-hud').forEach((el) => {
+        bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
+      });
+      if (bottom > 0) stage.setHudBottom((bottom - cr.top) / cr.height);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [hud, nonce]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
