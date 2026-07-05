@@ -59,9 +59,12 @@ const PORTRAIT_META: Record<SpeciesId, PortraitMeta> = {
   beetles: { file: 'beetles.webp', nativeFacing: -1, groundLift: 0.10 },
 };
 
-/** Animation sheet base names (all sheets face RIGHT). */
-const ANIM_FILES: Record<SpeciesId, { run: string; attack: string; swat?: string }> = {
-  trex: { run: 'trex-run', attack: 'trex-attack' },
+/** Animation sheet base names. Run sheets all face RIGHT; a couple of
+ *  attack sheets were painted facing LEFT — `attackFacing` records that so
+ *  the renderer mirrors them correctly (the T-Rex used to about-face
+ *  mid-chomp). */
+const ANIM_FILES: Record<SpeciesId, { run: string; attack: string; swat?: string; attackFacing?: 1 | -1 }> = {
+  trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1 },
   lion: { run: 'lion-run', attack: 'lion-attack' },
   eagle: { run: 'eagle-run', attack: 'eagle-attack' },
   honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack' },
@@ -72,7 +75,7 @@ const ANIM_FILES: Record<SpeciesId, { run: string; attack: string; swat?: string
   bees: { run: 'bees-run', attack: 'bees-attack' },
   wolves: { run: 'wolf-run', attack: 'wolf-attack' },
   porcupine: { run: 'porcupine-run', attack: 'porcupine-attack' },
-  beetles: { run: 'beetle-run', attack: 'beetle-attack' },
+  beetles: { run: 'beetle-run', attack: 'beetle-attack', attackFacing: -1 },
 };
 
 const SPRITES = new Map<SpeciesId, Sprite[]>(); // portraits (wolves: 2)
@@ -333,13 +336,46 @@ function sliceCanvas(cv: HTMLCanvasElement, x0: number, x1: number): HTMLCanvasE
  * back to N equal slices. Returns keyed, cropped frames.
  */
 function splitStrip(img: HTMLImageElement, expected: number): HTMLCanvasElement[] {
-  const w = img.naturalWidth;
-  const h = img.naturalHeight;
+  const fullW = img.naturalWidth;
+  const fullH = img.naturalHeight;
+  const full = document.createElement('canvas');
+  full.width = fullW;
+  full.height = fullH;
+  const fctx = full.getContext('2d', { willReadFrequently: true })!;
+  fctx.drawImage(img, 0, 0);
+  const fdata = fctx.getImageData(0, 0, fullW, fullH).data;
+
+  // Some sheets carry a full-width dark rule hugging the top/bottom edge.
+  // It survives white-keying (it isn't paper) and then reads as frame
+  // content, so the animal's ground anchor lands on the BAR instead of its
+  // feet — the whole species floats. Trim any near-edge row that is almost
+  // entirely dark ink before slicing.
+  const rowDark = (y: number): number => {
+    let n = 0;
+    let total = 0;
+    for (let x = 0; x < fullW; x += 3) {
+      const i = (y * fullW + x) * 4;
+      const lum = fdata[i] * 0.3 + fdata[i + 1] * 0.5 + fdata[i + 2] * 0.2;
+      if (lum < 70) n++;
+      total++;
+    }
+    return n / total;
+  };
+  let trimTop = 0;
+  while (trimTop < fullH * 0.12 && rowDark(trimTop) > 0.8) trimTop++;
+  let trimBot = fullH;
+  while (trimBot > fullH * 0.88 && rowDark(trimBot - 1) > 0.8) trimBot--;
+  // Also shave the anti-aliased fringe the rule leaves behind.
+  if (trimTop > 0) trimTop = Math.min(fullH, trimTop + 2);
+  if (trimBot < fullH) trimBot = Math.max(0, trimBot - 2);
+
+  const w = fullW;
+  const h = trimBot - trimTop;
   const probe = document.createElement('canvas');
   probe.width = w;
   probe.height = h;
   const pctx = probe.getContext('2d', { willReadFrequently: true })!;
-  pctx.drawImage(img, 0, 0);
+  pctx.drawImage(full, 0, trimTop, w, h, 0, 0, w, h);
   const data = pctx.getImageData(0, 0, w, h).data;
 
   // Column separator density. Sheets use either magenta rules or thin dark
@@ -429,7 +465,12 @@ function meanContentArea(frames: HTMLCanvasElement[]): number {
  *  `logicalH` overrides the set's own height so DIFFERENT sets of one
  *  species (run vs attack sheets, drawn at different sheet scales) render
  *  the animal at one consistent size — no more size-popping on attack. */
-function toFrameSprites(frames: HTMLCanvasElement[], groundLift = 0.03, logicalH?: number): Sprite[] {
+function toFrameSprites(
+  frames: HTMLCanvasElement[],
+  groundLift = 0.03,
+  logicalH?: number,
+  facing: 1 | -1 = 1,
+): Sprite[] {
   const maxH = Math.max(...frames.map((f) => f.height));
   return frames.map((f) => ({
     canvas: f,
@@ -437,7 +478,7 @@ function toFrameSprites(frames: HTMLCanvasElement[], groundLift = 0.03, logicalH
     // A shared logical height keeps scale steady across the cycle even when
     // individual frames crop differently.
     h: logicalH ?? maxH,
-    nativeFacing: 1 as const,
+    nativeFacing: facing,
     anchorX: f.width / 2,
     anchorY: f.height * (1 - groundLift),
   }));
@@ -504,7 +545,7 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           const atkFrames = splitStrip(atkImg, 3);
           const set: AnimSet = {
             run: toFrameSprites(runFrames),
-            attack: toFrameSprites(atkFrames, 0.03, crossH(atkFrames)),
+            attack: toFrameSprites(atkFrames, 0.03, crossH(atkFrames), files.attackFacing ?? 1),
           };
           if (swatImg) {
             const swatFrames = splitStrip(swatImg, 3);
