@@ -110,7 +110,9 @@ export function DuelScreen({
     if (!canvas) return;
     const m = createDuelMatch(faction, order);
     matchRef.current = m;
-    const world: DuelWorld = m.rng() < 0.5 ? 'basalt' : 'oasis';
+    const forced = new URLSearchParams(window.location.search).get('dworld');
+    const world: DuelWorld =
+      forced === 'basalt' || forced === 'oasis' ? forced : m.rng() < 0.5 ? 'basalt' : 'oasis';
     const stage = new DuelStage(canvas, world);
     stageRef.current = stage;
 

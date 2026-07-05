@@ -53,12 +53,33 @@ interface FighterVis {
   animT: number;
   runPhase: number;
   guarding: boolean;
+  /** Recent positions for special-dash afterimages. */
+  trail: { x: number; y: number }[];
 }
 
 interface Particle {
   x: number; y: number; vx: number; vy: number;
   life: number; t: number; size: number; hue: number;
-  kind: 'spark' | 'dust' | 'ember' | 'mote' | 'ring';
+  kind: 'spark' | 'dust' | 'ember' | 'mote' | 'ring' | 'charge' | 'streak' | 'glint' | 'shock' | 'line';
+  /** 'line': ray angle. 'charge': orbit angle around its target. */
+  ang?: number;
+  /** 'charge': the side whose champion is charging (follows the fighter). */
+  side?: DuelSide;
+}
+
+/** A luminous point sampled off the backdrop painting (lava vein, waterfall,
+ *  pond glint). Coordinates are fractions of the source image. */
+interface FlowPoint {
+  x: number;
+  y: number;
+  /** Strength 0–1 (how bright the sampled pixel was). */
+  w: number;
+  phase: number;
+  /** Pulse speed (rad/s). */
+  spd: number;
+  /** True for column-like features (waterfalls / lava falls) that shed
+   *  falling streaks rather than rising embers. */
+  fall: boolean;
 }
 
 interface FloatText {
@@ -104,6 +125,19 @@ export class DuelStage {
   private disposed = false;
   /** Offscreen scratch for silhouette-clipped tint flashes. */
   private scratch = document.createElement('canvas');
+
+  /* Living backdrop: luminous points sampled from the painting. */
+  private flowPoints: FlowPoint[] = [];
+  private flowBuilt = false;
+  private glowSprite: HTMLCanvasElement | null = null;
+
+  /* Special-move cinematography. */
+  private letterbox = 0;
+  private slowmo = 0;
+  private zoom = 1;
+  private zoomTarget = 1;
+  private zoomCX = 0.5;
+  private zoomCY = 0.6;
 
   /** Fires the moment an event's numbers should hit the HUD. */
   onEventApplied: ((ev: DuelEvent) => void) | null = null;
@@ -154,6 +188,7 @@ export class DuelStage {
       animT: 0,
       runPhase: 0,
       guarding: false,
+      trail: [],
     };
   }
 
@@ -165,7 +200,7 @@ export class DuelStage {
   playScript(events: DuelEvent[]): void {
     for (const ev of events) {
       let dur = 1.5;
-      if (ev.kind === 'clash') dur = ev.special ? 2.3 : 1.55;
+      if (ev.kind === 'clash') dur = ev.special ? 2.45 : 1.55;
       else if (ev.kind === 'counter') dur = 0.95;
       else if (ev.kind === 'clinch') dur = 1.5;
       else if (ev.kind === 'dot') dur = 0.9;
@@ -184,13 +219,27 @@ export class DuelStage {
     this.time += dt;
     this.shake = Math.max(0, this.shake - dt * 26);
     this.flash = Math.max(0, this.flash - dt * 3.2);
-    const wantVignette = this.queue[0]?.ev.special ? 1 : 0;
+    const special = !!this.queue[0]?.ev.special;
+    const wantVignette = special ? 1 : 0;
     this.vignette += (wantVignette - this.vignette) * Math.min(1, dt * 5);
+    // Cinematic letterbox slides in for the duration of a special.
+    this.letterbox += ((special ? 1 : 0) - this.letterbox) * Math.min(1, dt * 6);
+    // Camera zoom eases toward its current target.
+    this.zoom += (this.zoomTarget - this.zoom) * Math.min(1, dt * 4.5);
+    if (this.queue.length === 0) this.zoomTarget = 1;
 
     for (const f of this.fighters) {
       if (!f) continue;
       f.animT += dt;
       f.tint = Math.max(0, f.tint - dt * 2.4);
+      // Special-dash afterimages: record while streaking, fade out after.
+      if (f.mode === 'dash' && f.aura > 0.05) {
+        const p = this.fighterPx(f);
+        f.trail.unshift({ x: p.x, y: p.y });
+        if (f.trail.length > 5) f.trail.pop();
+      } else if (f.trail.length > 0 && Math.random() < 0.5) {
+        f.trail.pop();
+      }
       // Entrance walk-in.
       if (f.mode === 'idle' && this.queue.length === 0) {
         const speed = this.W * 0.55 * dt;
@@ -207,10 +256,12 @@ export class DuelStage {
       this.freeze -= dt;
     } else if (this.queue.length > 0) {
       const step = this.queue[0];
-      step.t += dt;
+      // Slow-mo stretches the charge-up so the power gathering reads.
+      step.t += dt * (1 - 0.6 * this.slowmo);
       this.runStep(step);
       if (step.t >= step.dur) {
         this.queue.shift();
+        this.slowmo = 0;
         for (const f of this.fighters) {
           if (f && f.mode !== 'ko' && f.mode !== 'gone') {
             f.mode = 'idle';
@@ -227,6 +278,21 @@ export class DuelStage {
     // Particles / texts.
     this.particles = this.particles.filter((p) => {
       p.t += dt;
+      if (p.kind === 'charge' && p.side !== undefined) {
+        // Charge motes spiral inward toward the charging champion's core.
+        const f = this.fighters[p.side];
+        if (f) {
+          const c = this.fighterPx(f);
+          const targetH = this.H * 0.26 * (DUEL_SCALE[f.species] ?? 0.9);
+          const cy = c.y - targetH * 0.45;
+          p.ang = (p.ang ?? 0) + dt * 4;
+          const k = clamp01(p.t / p.life);
+          const r = (1 - k) * targetH * 0.9;
+          p.x = c.x + Math.cos(p.ang) * r;
+          p.y = cy + Math.sin(p.ang) * r * 0.5 - (1 - k) * targetH * 0.2;
+          return p.t < p.life;
+        }
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.kind === 'dust' || p.kind === 'spark') p.vy += this.H * 0.7 * dt;
@@ -242,9 +308,202 @@ export class DuelStage {
       this.banner.t += dt;
       if (this.banner.t > this.banner.dur) this.banner = null;
     }
+  }
 
-    // Ambient atmosphere.
-    if (Math.random() < 0.3) {
+  private fire(step: Step, key: string, at: number, fn: () => void): void {
+    if (step.t >= at && !step.fired.has(key)) {
+      step.fired.add(key);
+      fn();
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Living backdrop — the painting itself flows                             */
+  /* ---------------------------------------------------------------------- */
+
+  /** Last cover-fit placement of the backdrop, for mapping flow points. */
+  private bd = { x: 0, y: 0, w: 1, h: 1 };
+
+  /**
+   * Samples the painted backdrop for luminous features — lava veins and
+   * falls in the Basalt world, waterfalls and pond glints in the Oasis —
+   * so the stage can animate them: pulsing glow, rising embers, falling
+   * streaks and twinkling glints. The painting starts to flow.
+   */
+  private buildFlowMap(art: HTMLImageElement): void {
+    this.flowBuilt = true;
+    const SW = 120;
+    const SH = Math.max(1, Math.round((art.height / art.width) * SW));
+    const cv = document.createElement('canvas');
+    cv.width = SW;
+    cv.height = SH;
+    const c = cv.getContext('2d', { willReadFrequently: true });
+    if (!c) return;
+    c.drawImage(art, 0, 0, SW, SH);
+    const px = c.getImageData(0, 0, SW, SH).data;
+
+    const strength = new Float32Array(SW * SH);
+    for (let i = 0; i < SW * SH; i++) {
+      const r = px[i * 4];
+      const g = px[i * 4 + 1];
+      const b = px[i * 4 + 2];
+      if (this.world === 'basalt') {
+        // Molten: strong red/orange dominance, bright.
+        if (r > 165 && r - b > 70 && g < r * 0.82) {
+          strength[i] = clamp01((r + g * 0.5 - 180) / 150);
+        }
+      } else {
+        // Water: bright turquoise, or white foam with a cool cast.
+        const turquoise = b > 120 && g > 120 && r < g * 0.9 && g + b > 300;
+        const foam = r > 195 && g > 205 && b > 195;
+        if (turquoise || foam) {
+          strength[i] = clamp01((g + b - 260) / 200) * (foam ? 0.7 : 1);
+        }
+      }
+    }
+
+    const pts: FlowPoint[] = [];
+    for (let y = 1; y < SH - 1; y++) {
+      for (let x = 0; x < SW; x++) {
+        const i = y * SW + x;
+        if (strength[i] < 0.25) continue;
+        // Columnar features (a bright run above AND below) behave like
+        // falls; everything else pulses/twinkles in place.
+        const fall = strength[i - SW] > 0.2 && strength[i + SW] > 0.2 && y < SH * 0.75;
+        pts.push({
+          x: (x + 0.5) / SW,
+          y: (y + 0.5) / SH,
+          w: strength[i],
+          phase: Math.random() * Math.PI * 2,
+          spd: 0.6 + Math.random() * 1.4,
+          fall,
+        });
+      }
+    }
+    // Keep a bounded, bright-biased subset so the effect stays cheap.
+    pts.sort((a, b) => b.w - a.w);
+    this.flowPoints = pts
+      .filter((_, i) => i < 60 || Math.random() < 140 / Math.max(1, pts.length))
+      .slice(0, 190);
+
+    // Prerendered soft radial glow (drawn with 'lighter').
+    const g = document.createElement('canvas');
+    g.width = 64;
+    g.height = 64;
+    const gc = g.getContext('2d');
+    if (gc) {
+      const grad = gc.createRadialGradient(32, 32, 1, 32, 32, 31);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.4, 'rgba(255,255,255,0.35)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      gc.fillStyle = grad;
+      gc.fillRect(0, 0, 64, 64);
+    }
+    this.glowSprite = g;
+  }
+
+  /** Map a flow point to current stage pixels (tracks the drift). */
+  private flowPx(p: FlowPoint): { x: number; y: number } {
+    return { x: this.bd.x + p.x * this.bd.w, y: this.bd.y + p.y * this.bd.h };
+  }
+
+  /** Additive pulsing glow over the painting's luminous features — makes
+   *  lava breathe and water shimmer without touching the pixels beneath. */
+  private drawFlowGlow(ctx: CanvasRenderingContext2D): void {
+    if (!this.glowSprite || this.flowPoints.length === 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const baseR = Math.max(this.W, this.H) * (this.world === 'basalt' ? 0.02 : 0.014);
+    for (const p of this.flowPoints) {
+      const pulse = 0.5 + 0.5 * Math.sin(this.time * p.spd + p.phase);
+      const a = p.w * (this.world === 'basalt' ? 0.16 : 0.1) * (0.35 + 0.65 * pulse);
+      if (a < 0.015) continue;
+      const at = this.flowPx(p);
+      const r = baseR * (0.7 + p.w) * (0.8 + 0.4 * pulse);
+      ctx.globalAlpha = a;
+      // Tint via a hue-shifted shadow trick is costly; instead rely on the
+      // white glow picking up the underlying saturated paint additively,
+      // with a faint colored core.
+      ctx.drawImage(this.glowSprite, at.x - r, at.y - r, r * 2, r * 2);
+      ctx.fillStyle = this.world === 'basalt' ? 'hsl(24 100% 55%)' : 'hsl(180 80% 75%)';
+      ctx.globalAlpha = a * 0.5;
+      ctx.beginPath();
+      ctx.arc(at.x, at.y, r * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  /** Spawns flowing-world particles: embers off lava, spray off falls,
+   *  glints on water. Called once per frame. */
+  private spawnFlow(): void {
+    if (this.flowPoints.length === 0) return;
+    const budget = this.world === 'basalt' ? 3 : 3;
+    for (let n = 0; n < budget; n++) {
+      if (Math.random() > 0.55) continue;
+      const p = this.flowPoints[(Math.random() * this.flowPoints.length) | 0];
+      const at = this.flowPx(p);
+      if (this.world === 'basalt') {
+        if (p.fall) {
+          // Molten droplets sliding down the falls.
+          this.particles.push({
+            x: at.x + (Math.random() - 0.5) * this.W * 0.008,
+            y: at.y,
+            vx: (Math.random() - 0.5) * this.W * 0.004,
+            vy: this.H * (0.05 + Math.random() * 0.06),
+            life: 0.8 + Math.random() * 0.7,
+            t: 0,
+            size: 1 + Math.random() * 1.6,
+            hue: 18 + Math.random() * 18,
+            kind: 'streak',
+          });
+        } else {
+          // Heat embers lifting off the veins.
+          this.particles.push({
+            x: at.x,
+            y: at.y,
+            vx: (Math.random() - 0.5) * this.W * 0.012,
+            vy: -this.H * (0.02 + Math.random() * 0.045),
+            life: 1.6 + Math.random() * 2.2,
+            t: 0,
+            size: 0.8 + Math.random() * 1.8,
+            hue: 16 + Math.random() * 26,
+            kind: 'ember',
+          });
+        }
+      } else {
+        if (p.fall) {
+          // White spray running down the waterfalls.
+          this.particles.push({
+            x: at.x + (Math.random() - 0.5) * this.W * 0.006,
+            y: at.y,
+            vx: (Math.random() - 0.5) * this.W * 0.003,
+            vy: this.H * (0.055 + Math.random() * 0.075),
+            life: 0.6 + Math.random() * 0.5,
+            t: 0,
+            size: 0.8 + Math.random() * 1.4,
+            hue: 185,
+            kind: 'streak',
+          });
+        } else {
+          // Sun glints twinkling on the pond.
+          this.particles.push({
+            x: at.x,
+            y: at.y,
+            vx: 0,
+            vy: 0,
+            life: 0.7 + Math.random() * 0.8,
+            t: 0,
+            size: 1.2 + Math.random() * 2.2,
+            hue: 60 + Math.random() * 120,
+            kind: 'glint',
+          });
+        }
+      }
+    }
+    // A little generic atmosphere on top.
+    if (Math.random() < 0.25) {
       this.particles.push({
         x: Math.random() * this.W,
         y: this.H * (0.3 + Math.random() * 0.6),
@@ -256,13 +515,6 @@ export class DuelStage {
         hue: this.world === 'basalt' ? 20 + Math.random() * 20 : 50 + Math.random() * 60,
         kind: this.world === 'basalt' ? 'ember' : 'mote',
       });
-    }
-  }
-
-  private fire(step: Step, key: string, at: number, fn: () => void): void {
-    if (step.t >= at && !step.fired.has(key)) {
-      step.fired.add(key);
-      fn();
     }
   }
 
@@ -288,13 +540,49 @@ export class DuelStage {
 
     switch (ev.kind) {
       case 'clash': {
-        // Timeline offsets: special moves get a charge-up prologue.
-        const pre = ev.special ? 0.7 : 0;
+        // Timeline offsets: special moves get a slow-motion charge-up
+        // prologue — the whole stage bends around the gathering power.
+        const pre = ev.special ? 1.05 : 0;
         if (ev.special) {
           this.fire(step, 'announce', 0, () => {
             this.banner = { txt: ev.label ?? 'SPECIAL', sub: undefined, t: 0, dur: step.dur, hue: A.hue };
+            // Camera pushes in on the charging champion; time dilates.
+            this.zoomTarget = 1.14;
+            this.zoomCX = A.homeX;
+            this.zoomCY = 0.62;
+            this.slowmo = 1;
           });
-          A.aura = Math.min(1, ph(t, 0, pre) * 1.2);
+          A.aura = Math.min(1, ph(t, 0, pre) * 1.3);
+          // Power motes spiral into the champion; the ground ignites.
+          if (t < pre && Math.random() < 0.55) {
+            const ap = this.fighterPx(A);
+            this.particles.push({
+              x: ap.x, y: ap.y, vx: 0, vy: 0,
+              life: 0.5 + Math.random() * 0.35, t: 0,
+              size: 1.4 + Math.random() * 2.2,
+              hue: A.hue + (Math.random() - 0.5) * 24,
+              kind: 'charge', ang: Math.random() * Math.PI * 2, side: ev.side,
+            });
+          }
+          if (t < pre && Math.random() < 0.3) {
+            const ap = this.fighterPx(A);
+            this.ring(ap.x, this.groundY() - this.H * 0.01, A.hue);
+          }
+          // Power crescendo: rays erupt and time snaps back to full speed.
+          this.fire(step, 'unleash', pre * 0.82, () => {
+            this.slowmo = 0;
+            this.flash = 0.5;
+            this.flashHue = A.hue;
+            const ap = this.fighterPx(A);
+            for (let i = 0; i < 14; i++) {
+              this.particles.push({
+                x: ap.x, y: ap.y - this.H * 0.12, vx: 0, vy: 0,
+                life: 0.35 + Math.random() * 0.2, t: 0,
+                size: 1 + Math.random() * 2, hue: A.hue,
+                kind: 'line', ang: (i / 14) * Math.PI * 2 + Math.random() * 0.3,
+              });
+            }
+          });
         }
         const wEnd = pre + 0.32;
         const dEnd = wEnd + 0.26;
@@ -306,12 +594,16 @@ export class DuelStage {
           D.guarding = !!ev.blocked;
           if (D.guarding) D.mode = 'guard';
         } else if (t < dEnd) {
-          // Dash across the arena.
+          // Dash across the arena (specials streak with afterimages).
           A.mode = 'dash';
           const k = easeIn(ph(t, wEnd, dEnd));
           A.x = A.face * (k * (gap - this.W * 0.13) - this.W * 0.05 * (1 - k));
           A.squash = 0;
           A.runPhase += 0.6;
+          if (ev.special) {
+            this.zoomTarget = 1.08;
+            this.zoomCX = 0.5;
+          }
           if (Math.random() < 0.7) this.dust(this.fighterPx(A).x, this.groundY());
         } else {
           // Impact and recovery.
@@ -324,18 +616,36 @@ export class DuelStage {
               this.text(this.fighterPx(D).x, this.groundY() - this.H * 0.3, 'MISS', 200, false);
             } else {
               const dmg = ev.dmg ?? 0;
-              this.freeze = ev.special ? 0.16 : ev.crit ? 0.13 : 0.09;
-              this.shake = ev.special ? 14 : ev.crit ? 10 : 6;
-              this.flash = ev.special ? 0.9 : 0.45;
+              this.freeze = ev.special ? 0.22 : ev.crit ? 0.13 : 0.09;
+              this.shake = ev.special ? 20 : ev.crit ? 10 : 6;
+              this.flash = ev.special ? 1.1 : 0.45;
               this.flashHue = A.hue;
               D.tint = 1;
               D.tintHue = 0;
               const dp = this.fighterPx(D);
-              this.sparks(dp.x - D.face * 0, dp.y - this.H * 0.12, ev.special ? 26 : 14, A.hue);
+              this.sparks(dp.x, dp.y - this.H * 0.12, ev.special ? 34 : 14, A.hue);
               this.ring(dp.x, dp.y - this.H * 0.12, A.hue);
+              if (ev.special) {
+                // The big-hit language: shockwave, radial rays, camera slam.
+                this.particles.push({
+                  x: dp.x, y: dp.y - this.H * 0.12, vx: 0, vy: 0,
+                  life: 0.55, t: 0, size: 6, hue: A.hue, kind: 'shock',
+                });
+                for (let i = 0; i < 10; i++) {
+                  this.particles.push({
+                    x: dp.x, y: dp.y - this.H * 0.12, vx: 0, vy: 0,
+                    life: 0.3 + Math.random() * 0.2, t: 0,
+                    size: 1.5 + Math.random() * 2, hue: A.hue,
+                    kind: 'line', ang: (i / 10) * Math.PI * 2 + Math.random() * 0.4,
+                  });
+                }
+                this.dustBurst(dp.x, this.groundY(), 10);
+                this.zoomTarget = 1.12;
+                this.zoomCX = D.homeX;
+              }
               this.text(
                 dp.x, dp.y - this.H * 0.34,
-                ev.blocked ? `${dmg}` : `${dmg}`,
+                `${dmg}`,
                 ev.blocked ? 200 : ev.crit ? 48 : 6,
                 !!(ev.crit || ev.special),
               );
@@ -353,7 +663,7 @@ export class DuelStage {
           }
           if (!ev.evaded) {
             // Defender knockback skid away from the attacker, then settle.
-            const kb = Math.exp(-ph(t, dEnd, step.dur) * 5) * this.W * (ev.special ? 0.045 : 0.028);
+            const kb = Math.exp(-ph(t, dEnd, step.dur) * 5) * this.W * (ev.special ? 0.055 : 0.028);
             D.x = -D.face * kb;
           } else {
             const e = ph(t, dEnd, dEnd + 0.5);
@@ -533,15 +843,27 @@ export class DuelStage {
         (Math.random() - 0.5) * this.shake * this.dpr,
       );
     }
+    // Camera zoom (specials push in on the action).
+    if (this.zoom > 1.001) {
+      ctx.translate(this.zoomCX * W, this.zoomCY * H);
+      ctx.scale(this.zoom, this.zoom);
+      ctx.translate(-this.zoomCX * W, -this.zoomCY * H);
+    }
 
     // Painted backdrop, cover-fit with a slow breathing drift.
     const art = getDuelArt(this.world);
     if (art) {
+      if (!this.flowBuilt) this.buildFlowMap(art);
       const drift = Math.sin(this.time * 0.07) * 0.006;
       const scale = Math.max(W / art.width, H / art.height) * (1.03 + drift);
       const dw = art.width * scale;
       const dh = art.height * scale;
-      ctx.drawImage(art, (W - dw) / 2 + Math.sin(this.time * 0.05) * W * 0.004, H - dh, dw, dh);
+      const dx = (W - dw) / 2 + Math.sin(this.time * 0.05) * W * 0.004;
+      const dy = H - dh;
+      this.bd = { x: dx, y: dy, w: dw, h: dh };
+      ctx.drawImage(art, dx, dy, dw, dh);
+      this.spawnFlow();
+      this.drawFlowGlow(ctx);
     } else {
       const g = ctx.createLinearGradient(0, 0, 0, H);
       if (this.world === 'basalt') {
@@ -564,15 +886,40 @@ export class DuelStage {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Back-to-front: far fighter first? Both on same ground line — draw
-    // ambient behind, then fighters, then FX.
+    // Back-to-front: ambient + backdrop flow behind, then fighters, then FX.
     for (const p of this.particles) {
-      if (p.kind !== 'ember' && p.kind !== 'mote') continue;
-      const a = 0.5 * (1 - p.t / p.life);
-      ctx.fillStyle = `hsla(${p.hue} 90% 65% / ${a})`;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * this.dpr * 0.7, 0, Math.PI * 2);
-      ctx.fill();
+      const k = p.t / p.life;
+      if (p.kind === 'ember' || p.kind === 'mote') {
+        const a = 0.5 * (1 - k);
+        ctx.fillStyle = `hsla(${p.hue} 90% 65% / ${a})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * this.dpr * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (p.kind === 'streak') {
+        // Falling droplet/spray: a short vertical smear.
+        const a = (this.world === 'basalt' ? 0.75 : 0.6) * Math.sin(Math.min(1, k) * Math.PI);
+        const len = Math.max(3, Math.abs(p.vy) * 0.09);
+        ctx.strokeStyle = this.world === 'basalt'
+          ? `hsla(${p.hue} 95% 62% / ${a})`
+          : `hsla(${p.hue} 60% 92% / ${a})`;
+        ctx.lineWidth = p.size * this.dpr * 0.8;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y - len);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      } else if (p.kind === 'glint') {
+        // Twinkle: a tiny 4-point star that blooms and dies.
+        const a = Math.sin(Math.min(1, k) * Math.PI);
+        const r = p.size * this.dpr * (0.8 + a);
+        ctx.strokeStyle = `hsla(${p.hue} 70% 90% / ${0.85 * a})`;
+        ctx.lineWidth = 1 * this.dpr;
+        ctx.beginPath();
+        ctx.moveTo(p.x - r, p.y);
+        ctx.lineTo(p.x + r, p.y);
+        ctx.moveTo(p.x, p.y - r);
+        ctx.lineTo(p.x, p.y + r);
+        ctx.stroke();
+      }
     }
 
     for (const side of [1, 0] as DuelSide[]) {
@@ -582,7 +929,7 @@ export class DuelStage {
 
     // Foreground FX.
     for (const p of this.particles) {
-      if (p.kind === 'ember' || p.kind === 'mote') continue;
+      if (p.kind === 'ember' || p.kind === 'mote' || p.kind === 'streak' || p.kind === 'glint') continue;
       const k = p.t / p.life;
       if (p.kind === 'ring') {
         ctx.strokeStyle = `hsla(${p.hue} 95% 70% / ${0.8 * (1 - k)})`;
@@ -590,6 +937,38 @@ export class DuelStage {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size + k * H * 0.16, 0, Math.PI * 2);
         ctx.stroke();
+      } else if (p.kind === 'shock') {
+        // Special-impact shockwave: a fat double ring that races outward.
+        const r = p.size + easeOut(k) * H * 0.34;
+        ctx.strokeStyle = `hsla(${p.hue} 95% 75% / ${0.9 * (1 - k)})`;
+        ctx.lineWidth = 7 * this.dpr * (1 - k) + 1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = `hsla(0 0% 100% / ${0.5 * (1 - k)})`;
+        ctx.lineWidth = 2.5 * this.dpr * (1 - k) + 0.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 0.82, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (p.kind === 'line') {
+        // Energy ray shooting out of an impact / power-up.
+        const a = 0.85 * (1 - k);
+        const r0 = H * 0.02 + easeOut(k) * H * 0.05;
+        const r1 = r0 + H * (0.06 + p.size * 0.02) * (1 - k * 0.4);
+        const ang = p.ang ?? 0;
+        ctx.strokeStyle = `hsla(${p.hue} 95% 78% / ${a})`;
+        ctx.lineWidth = (1.5 + p.size * 0.5) * this.dpr * (1 - k);
+        ctx.beginPath();
+        ctx.moveTo(p.x + Math.cos(ang) * r0, p.y + Math.sin(ang) * r0);
+        ctx.lineTo(p.x + Math.cos(ang) * r1, p.y + Math.sin(ang) * r1);
+        ctx.stroke();
+      } else if (p.kind === 'charge') {
+        // Power motes spiraling into the charging champion.
+        const a = 0.9 * Math.sin(Math.min(1, k) * Math.PI);
+        ctx.fillStyle = `hsla(${p.hue} 95% 74% / ${a})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * this.dpr * (0.6 + k), 0, Math.PI * 2);
+        ctx.fill();
       } else {
         const a = (p.kind === 'dust' ? 0.4 : 0.9) * (1 - k);
         const l = p.kind === 'dust' ? 45 : 65;
@@ -652,6 +1031,14 @@ export class DuelStage {
     }
 
     ctx.restore();
+
+    // Cinematic letterbox (drawn outside the shaken/zoomed camera).
+    if (this.letterbox > 0.01) {
+      const bar = this.letterbox * H * 0.065;
+      ctx.fillStyle = 'rgba(4,2,3,0.94)';
+      ctx.fillRect(0, 0, W, bar);
+      ctx.fillRect(0, H - bar, W, bar);
+    }
   }
 
   private pickFrames(f: FighterVis): { a: Sprite; b: Sprite | null; mix: number } | null {
@@ -701,6 +1088,27 @@ export class DuelStage {
     ctx.ellipse(x, this.groundY() + 3, targetH * 0.42, targetH * 0.09, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+
+    // Special-dash afterimages: hue-tinted ghosts streaking behind.
+    if (f.trail.length > 0) {
+      const ghost = frames.a;
+      const gScale = targetH / ghost.h;
+      for (let i = f.trail.length - 1; i >= 0; i--) {
+        const tp = f.trail[i];
+        ctx.save();
+        ctx.translate(tp.x, tp.y);
+        if (f.face !== ghost.nativeFacing) ctx.scale(-1, 1);
+        ctx.globalAlpha = 0.22 * (1 - i / f.trail.length) * f.alpha;
+        ctx.drawImage(
+          ghost.canvas,
+          -ghost.anchorX * gScale,
+          -ghost.anchorY * gScale + targetH * 0.06,
+          ghost.canvas.width * gScale,
+          ghost.canvas.height * gScale,
+        );
+        ctx.restore();
+      }
+    }
 
     // Idle breathing.
     const breathe = f.mode === 'idle' ? 1 + Math.sin(this.time * 2.2 + f.homeX * 9) * 0.012 : 1;
