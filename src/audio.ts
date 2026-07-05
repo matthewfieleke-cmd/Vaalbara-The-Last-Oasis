@@ -416,6 +416,20 @@ export function playResult(win: boolean): void {
   (win ? GLOBAL_SFX.victory : GLOBAL_SFX.defeat)();
 }
 
+/* Direct species hooks for the Duels mode stage. */
+
+export function playSpeciesAttack(sp: SpeciesId): void {
+  if (core.enabled) SPECIES_SFX[sp].attack();
+}
+
+export function playSpeciesSpawn(sp: SpeciesId): void {
+  if (core.enabled) SPECIES_SFX[sp].spawn();
+}
+
+export function playKo(): void {
+  if (core.enabled) GLOBAL_SFX.death();
+}
+
 /* ------------------------------------------------------------------------ */
 /* Event router — the game loop feeds sim events straight in                  */
 /* ------------------------------------------------------------------------ */

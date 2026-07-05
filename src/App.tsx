@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { FactionId, GameState, PlayerId, Profile, Screen } from './types';
+import type { FactionId, GameState, PlayerId, Profile, Screen, SpeciesId } from './types';
 import { loadProfile, recordResult } from './net';
 import type { MatchSession } from './net';
 import { music, playResult, setMuted, unlockAudio } from './audio';
@@ -10,6 +10,8 @@ import { FactionSelect } from './components/FactionSelect';
 import { Matchmaking } from './components/Matchmaking';
 import { GameScreen } from './components/GameScreen';
 import { Results } from './components/Results';
+import { DuelSetup } from './components/DuelSetup';
+import { DuelScreen } from './components/DuelScreen';
 
 const INTRO_SEEN_KEY = 'vaalbara.introSeen';
 
@@ -22,6 +24,7 @@ export function App() {
   const [muted, setMutedState] = useState(false);
   /** Forces a fresh GameScreen mount per match. */
   const [matchNonce, setMatchNonce] = useState(0);
+  const [duel, setDuel] = useState<{ faction: FactionId; order: SpeciesId[] } | null>(null);
 
   // Boot: preload the painted character sprites (capped wait — the vector
   // fallback covers anything that isn't ready), then intro or menu.
@@ -108,7 +111,33 @@ export function App() {
             music.setMode('menu');
             setScreen('faction');
           }}
+          onDuel={() => {
+            music.start();
+            music.setMode('menu');
+            setScreen('duel-setup');
+          }}
           onReplayIntro={() => setScreen('cinematic')}
+        />
+      )}
+
+      {screen === 'duel-setup' && (
+        <DuelSetup
+          onBack={() => setScreen('menu')}
+          onStart={(f, order) => {
+            setDuel({ faction: f, order });
+            setScreen('duel');
+          }}
+        />
+      )}
+
+      {screen === 'duel' && duel && (
+        <DuelScreen
+          faction={duel.faction}
+          order={duel.order}
+          onExit={() => {
+            music.setMode('menu');
+            setScreen('menu');
+          }}
         />
       )}
 
