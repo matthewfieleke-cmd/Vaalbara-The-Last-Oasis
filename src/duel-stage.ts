@@ -124,6 +124,8 @@ interface FlowRegion {
 
 interface FloatText {
   x: number; y: number; txt: string; hue: number; t: number; big: boolean;
+  /** Extra font scale — sublabels like BLOCKED render smaller. */
+  scale?: number;
 }
 
 interface Banner {
@@ -773,11 +775,14 @@ export class DuelStage {
   private fighterText(f: FighterVis, txt: string, hue: number, big: boolean, subline = false): void {
     const p = this.fighterPx(f);
     const fh = this.H * 0.26 * (DUEL_SCALE[f.species] ?? 0.9);
-    // Clamp into this fighter's half so texts never collide mid-arena.
+    // Clamp into this fighter's half so texts never collide mid-arena,
+    // then pull in far enough that the rendered word can't clip the edge.
     const left = f.homeX < 0.5;
+    const fontPx = (big ? 0.062 : 0.042) * this.H * (subline ? 0.6 : 1);
+    const halfW = txt.length * fontPx * 0.34 + this.W * 0.02;
     const x = Math.max(
-      this.W * (left ? 0.1 : 0.56),
-      Math.min(this.W * (left ? 0.44 : 0.9), p.x),
+      Math.max(this.W * (left ? 0.12 : 0.56), halfW),
+      Math.min(Math.min(this.W * (left ? 0.44 : 0.88), this.W - halfW), p.x),
     );
     const head = this.groundY() - fh - this.H * 0.045;
     // Stack over any live texts already occupying this side.
@@ -787,9 +792,9 @@ export class DuelStage {
       if (tLeft === left && t.t < 0.6) stack++;
     }
     const y = subline
-      ? head + this.H * 0.052 // labels sit UNDER the number, never over the ribbon
+      ? head + this.H * 0.042 // labels sit UNDER the number, never over the ribbon
       : head - stack * this.H * 0.05;
-    this.texts.push({ x, y, txt, hue, t: 0, big });
+    this.texts.push({ x, y, txt, hue, t: 0, big, scale: subline ? 0.6 : 1 });
   }
 
   /* ---------------------------------------------------------------------- */
@@ -936,7 +941,7 @@ export class DuelStage {
     for (const t of this.texts) {
       const a = t.t < 0.15 ? t.t / 0.15 : 1 - Math.max(0, (t.t - 0.55) / 0.65);
       const pop = t.t < 0.18 ? 1 + (0.18 - t.t) * 2.2 : 1;
-      const size = (t.big ? 0.075 : 0.045) * H * pop;
+      const size = (t.big ? 0.062 : 0.042) * H * pop * (t.scale ?? 1);
       ctx.save();
       ctx.globalAlpha = clamp01(a);
       ctx.font = `900 ${size}px Georgia, 'Times New Roman', serif`;

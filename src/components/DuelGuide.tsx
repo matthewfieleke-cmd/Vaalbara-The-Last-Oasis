@@ -27,7 +27,7 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       strike: 'Trade freely into tanks and bruisers: 98 ATK out-muscles any counter-blow they answer with.',
       guard: 'Guard early against fast strikers (Wolves, Bighorn, Eagle). You block 70%, counter hard, and bank Fury while they spend theirs.',
       special: 'Tyrant Chomp ignores DEF. Save it for the Bear and the Porcupine, where a normal strike loses a third of its bite to armor.',
-      beware: 'You act last at SPD 3 — never guard while the foe\u2019s Fury is full, because a special crushes straight through a guard.',
+      beware: 'You act last at SPD 3 — never guard while the foe’s Fury is full, because a special crushes straight through a guard.',
     },
     {
       species: 'lion',
@@ -35,14 +35,14 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       strike: 'Your default. SPD 6 outdraws every tank, so you hit first and force them to answer wounded.',
       guard: 'When low against heavy hitters — a blocked haymaker plus your counter often swings the round.',
       special: 'Ember Roar stuns. Fire it the exchange BEFORE the enemy meter fills: the stun wastes their entire special turn.',
-      beware: 'Don\u2019t slug colossi head-on for long — one crit from a Bear or T-Rex undoes two of your exchanges.',
+      beware: 'Don’t slug colossi head-on for long — one crit from a Bear or T-Rex undoes two of your exchanges.',
     },
     {
       species: 'eagle',
       role: 'Fastest Magma blade — first strike in almost every trade.',
       strike: 'Strike relentlessly into slower foes. Your hit lands first, and a foe that falls first never hits back.',
       guard: 'Rarely. At DEF 8 even a blocked hit stings; you defend better by killing faster or diving.',
-      special: 'Sky Dive evades EVERYTHING that exchange. Hold it as insurance: when the foe\u2019s meter fills, dodge their special and punish for 170%.',
+      special: 'Sky Dive evades EVERYTHING that exchange. Hold it as insurance: when the foe’s meter fills, dodge their special and punish for 170%.',
       beware: 'Guarded foes. The counter-blow costs you more than you can afford — read the turtle and wait it out.',
     },
     {
@@ -50,16 +50,16 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       role: 'Berserker that gets scarier as it bleeds.',
       strike: 'Below 35% HP your ATK jumps 40%. When wounded, strike — hiding wastes your best moments.',
       guard: 'Early, while healthy, to bait counters and build Fury for the berserk phase.',
-      special: 'Grudge Frenzy\u2019s three snaps shred low-DEF foes (Bees, Wolves, Eagle) — and every snap carries your berserk bonus.',
+      special: 'Grudge Frenzy’s three snaps shred low-DEF foes (Bees, Wolves, Eagle) — and every snap carries your berserk bonus.',
       beware: 'The Porcupine. Its quills tax every fast strike you land; force it to come to you instead.',
     },
     {
       species: 'scorpion',
       role: 'Flanker that wins the long game.',
       strike: 'Standard pressure at SPD 7 — you outdraw most of the Oasis roster.',
-      guard: 'Guard while venom does the work: it ticks 6% of the victim\u2019s max HP at the end of every exchange.',
-      special: 'Venom Sting scales with the victim\u2019s size. Sting the Bear (540 HP) and it bleeds ~32 a tick; stinging the Bees wastes it.',
-      beware: 'Don\u2019t sting something already dying — the venom outlives the victim and the Fury is gone.',
+      guard: 'Guard while venom does the work: it ticks 6% of the victim’s max HP at the end of every exchange.',
+      special: 'Venom Sting scales with the victim’s size. Sting the Bear (540 HP) and it bleeds ~32 a tick; stinging the Bees wastes it.',
+      beware: 'Don’t sting something already dying — the venom outlives the victim and the Fury is gone.',
     },
     {
       species: 'fireants',
@@ -75,7 +75,7 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       species: 'bear',
       role: 'The anchor — nothing pushes through faster.',
       strike: 'Trade into anything slower or staggered: 90 ATK breaks spirits even when blocked.',
-      guard: 'Against fast strikers. Your counter-blow hits as hard as other champions\u2019 strikes.',
+      guard: 'Against fast strikers. Your counter-blow hits as hard as other champions’ strikes.',
       special: 'Crushing Swat right before their big turn: −35% ATK for 2 exchanges defangs a berserk Badger or a charged T-Rex.',
       beware: 'Tyrant Chomp ignores your armor entirely. Against a full T-Rex meter, trade — never sit in guard.',
     },
@@ -84,7 +84,7 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       role: 'Explosive opener — the Comet strikes first.',
       strike: 'ALWAYS strike your first exchange after entering: the Comet Entrance passive adds 50% to it.',
       guard: 'Sparingly. Guarding wastes the tempo your SPD 8 buys you.',
-      special: 'Comet Charge is the game\u2019s biggest single hit (240%). Fire it the moment it\u2019s full — holding it is losing it.',
+      special: 'Comet Charge is the game’s biggest single hit (240%). Fire it the moment it’s full — holding it is losing it.',
       beware: 'Quills and thorns. A bristling Porcupine turns your all-out aggression into self-harm.',
     },
     {
@@ -92,8 +92,8 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       role: 'Untouchable tempo thief.',
       strike: 'First in every trade at SPD 10. Chip, drain, and stay ahead of the exchange count.',
       guard: 'Almost never — at DEF 4 a guard saves you little. Your defense is the Veil.',
-      special: 'Humming Veil when the foe\u2019s Fury is full: you evade their special outright AND drain 30 of their meter. The best defensive tool in the game.',
-      beware: 'Long slugfests. 230 HP evaporates against tanks — win on tempo or don\u2019t engage.',
+      special: 'Humming Veil when the foe’s Fury is full: you evade their special outright AND drain 30 of their meter. The best defensive tool in the game.',
+      beware: 'Long slugfests. 230 HP evaporates against tanks — win on tempo or don’t engage.',
     },
     {
       species: 'wolves',
@@ -116,7 +116,7 @@ const TIPS: Record<FactionId, ChampionTip[]> = {
       role: 'Chemical siege engine.',
       strike: 'Standard — but your damage is really the acid ledger, not the volley of the moment.',
       guard: 'While acid and allies do the work; you want to survive to cast the second Volley.',
-      special: 'Acid Volley strips 18 DEF permanently, stacking to 36. Open the match by melting the enemy tank\u2019s armor — the debt lasts the entire battle.',
+      special: 'Acid Volley strips 18 DEF permanently, stacking to 36. Open the match by melting the enemy tank’s armor — the debt lasts the entire battle.',
       beware: 'Fast blades. SPD 5 and modest HP means the Eagle and Wolves out-tempo you badly without an armor edge.',
     },
   ],
@@ -170,13 +170,13 @@ export function DuelGuide({
             </div>
             <div className="guide-tri-card special-c">
               <b>✦ Special</b>
-              <p>Needs a full Fury meter. Resolves <b>before</b> all strikes and smashes guards. Every champion\u2019s is different — read them below.</p>
+              <p>Needs a full Fury meter. Resolves <b>before</b> all strikes and smashes guards. Every champion’s is different — read them below.</p>
             </div>
           </div>
 
           <h4>Reading the fight</h4>
           <ul>
-            <li><b>Watch the foe\u2019s Fury bar.</b> When it\u2019s full, expect the special — never guard into it. Trade, or evade if your champion can.</li>
+            <li><b>Watch the foe’s Fury bar.</b> When it’s full, expect the special — never guard into it. Trade, or evade if your champion can.</li>
             <li><b>Both guard = standoff.</b> Nobody bleeds, both gain +20 Fury. Sometimes the patient play.</li>
             <li><b>Poison, burn and quills tick at the end of each exchange</b> — a stalling opponent still bleeds.</li>
             <li><b>Damage carries over.</b> Your winner keeps their wounds and Fury; the fresh challenger enters at full strength. Lead with fast, expendable chip fighters, hold your tank as the mid-battle anchor, and keep a fast closer for the end.</li>
