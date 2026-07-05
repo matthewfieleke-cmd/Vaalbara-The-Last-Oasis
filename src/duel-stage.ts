@@ -16,8 +16,8 @@ export type DuelWorld = 'basalt' | 'oasis';
 
 /** Relative draw height per species (fraction of stage height). */
 const DUEL_SCALE: Partial<Record<SpeciesId, number>> = {
-  trex: 1.5,
-  bear: 1.42,
+  trex: 1.32,
+  bear: 1.26,
   lion: 1.05,
   bighorn: 1.05,
   honeybadger: 0.82,
@@ -102,6 +102,8 @@ export class DuelStage {
   private texts: FloatText[] = [];
   private banner: Banner | null = null;
   private disposed = false;
+  /** Offscreen scratch for silhouette-clipped tint flashes. */
+  private scratch = document.createElement('canvas');
 
   /** Fires the moment an event's numbers should hit the HUD. */
   onEventApplied: ((ev: DuelEvent) => void) | null = null;
@@ -138,7 +140,7 @@ export class DuelStage {
     this.fighters[side] = {
       species,
       hue,
-      homeX: side === 0 ? 0.26 : 0.74,
+      homeX: side === 0 ? 0.24 : 0.76,
       face: side === 0 ? 1 : -1,
       x: entrance ? (side === 0 ? -this.W * 0.4 : this.W * 0.4) : 0,
       y: 0,
@@ -627,7 +629,7 @@ export class DuelStage {
       const a = b.t < 0.2 ? b.t / 0.2 : 1 - Math.max(0, (b.t - (b.dur - 0.4)) / 0.4);
       ctx.save();
       ctx.globalAlpha = clamp01(a);
-      const y = H * 0.16;
+      const y = H * 0.3;
       const g = ctx.createLinearGradient(0, y - H * 0.07, 0, y + H * 0.05);
       g.addColorStop(0, 'rgba(8,5,3,0)');
       g.addColorStop(0.5, 'rgba(8,5,3,0.66)');
@@ -722,21 +724,38 @@ export class DuelStage {
         s.canvas.width * scale,
         s.canvas.height * scale,
       );
+      // Damage flash: tint clipped to the sprite's own silhouette via a
+      // scratch canvas (source-atop on the main canvas would wash the
+      // whole opaque backdrop).
+      if (f.tint > 0.03) {
+        const sc = this.scratch;
+        if (sc.width < s.canvas.width || sc.height < s.canvas.height) {
+          sc.width = Math.max(sc.width, s.canvas.width);
+          sc.height = Math.max(sc.height, s.canvas.height);
+        }
+        const sctx = sc.getContext('2d');
+        if (sctx) {
+          sctx.clearRect(0, 0, sc.width, sc.height);
+          sctx.drawImage(s.canvas, 0, 0);
+          sctx.globalCompositeOperation = 'source-atop';
+          sctx.fillStyle = f.tintHue === 0 ? '#ffffff' : `hsl(${f.tintHue} 90% 60%)`;
+          sctx.fillRect(0, 0, s.canvas.width, s.canvas.height);
+          sctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = alpha * f.alpha * f.tint * 0.55;
+          ctx.drawImage(
+            sc,
+            0, 0, s.canvas.width, s.canvas.height,
+            -s.anchorX * scale,
+            -s.anchorY * scale + targetH * 0.06,
+            s.canvas.width * scale,
+            s.canvas.height * scale,
+          );
+        }
+      }
       ctx.restore();
     };
     drawOne(frames.a, 1);
     if (frames.b && frames.mix > 0.02) drawOne(frames.b, frames.mix);
-
-    // Damage tint flash overlay via composite.
-    if (f.tint > 0.03) {
-      ctx.globalCompositeOperation = 'source-atop';
-      const hue = f.tintHue;
-      ctx.globalAlpha = f.tint * 0.4;
-      ctx.fillStyle = hue === 0 ? '#ffffff' : `hsl(${hue} 90% 60%)`;
-      ctx.fillRect(-targetH, -targetH * 1.8, targetH * 2, targetH * 2.2);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 1;
-    }
     ctx.restore();
 
     // Guard stance: a glowing ward arc in front of the champion.
