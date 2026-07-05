@@ -464,10 +464,10 @@ export class DuelStage {
           // Molten: hot orange/yellow, red well above blue, decently bright.
           s = clamp01((r - b - 30) / 90) * clamp01((r - 120) / 80);
         } else {
-          // Water: white foam (bright, low saturation) or turquoise.
+          // Water: foam is bright WITH real blue content (sunlit foliage is
+          // bright too, but starved of blue) — or open turquoise water.
           const mn = Math.min(r, g, b);
-          const mx = Math.max(r, g, b);
-          const foam = clamp01((mn - 140) / 70) * clamp01(1 - (mx - mn) / 70);
+          const foam = clamp01((mn - 120) / 60) * clamp01((b - 135) / 55);
           const turquoise = clamp01((Math.min(g, b) - 105) / 70) * clamp01((g * 0.88 - r) / 40);
           s = Math.max(foam, turquoise);
         }
