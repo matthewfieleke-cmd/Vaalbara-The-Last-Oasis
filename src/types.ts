@@ -355,7 +355,9 @@ export type Screen =
   | 'faction'
   | 'matchmaking'
   | 'game'
-  | 'results';
+  | 'results'
+  | 'duel-setup'
+  | 'duel';
 
 export interface Profile {
   name: string;

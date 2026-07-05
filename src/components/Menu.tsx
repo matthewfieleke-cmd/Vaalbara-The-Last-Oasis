@@ -6,10 +6,12 @@ import { discoverFirebaseKeys } from '../net';
 export function Menu({
   profile,
   onPlay,
+  onDuel,
   onReplayIntro,
 }: {
   profile: Profile;
   onPlay: () => void;
+  onDuel: () => void;
   onReplayIntro: () => void;
 }) {
   const bgRef = useRef<HTMLCanvasElement>(null);
@@ -107,6 +109,10 @@ export function Menu({
       <div className="menu-actions">
         <button className="btn btn-primary" onClick={onPlay}>
           ⚔ Battle
+        </button>
+        <button className="btn btn-duel" onClick={onDuel}>
+          ⚜ Duels
+          <span className="btn-note">champion vs champion</span>
         </button>
         <button className="btn btn-ghost" onClick={onReplayIntro}>
           ▸ Replay intro cinematic

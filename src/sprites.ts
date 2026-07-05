@@ -81,6 +81,10 @@ let arenaArt: { basalt: HTMLImageElement | null; oasis: HTMLImageElement | null 
   basalt: null,
   oasis: null,
 };
+let duelArt: { basalt: HTMLImageElement | null; oasis: HTMLImageElement | null } = {
+  basalt: null,
+  oasis: null,
+};
 let loaded = false;
 
 export function spritesReady(): boolean {
@@ -99,6 +103,11 @@ export function getAnim(species: SpeciesId): AnimSet | null {
 
 export function getPhaseArt(world: 'basalt' | 'oasis'): HTMLImageElement | null {
   return arenaArt[world];
+}
+
+/** Side-view painted battlefield for the Duels mode. */
+export function getDuelArt(world: 'basalt' | 'oasis'): HTMLImageElement | null {
+  return duelArt[world];
 }
 
 /* ------------------------------------------------------------------------ */
@@ -520,6 +529,13 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           arenaArt.oasis = null;
         }
       })(),
+      ...(['basalt', 'oasis'] as const).map(async (w) => {
+        try {
+          duelArt[w] = await loadImage(`${baseUrl}duel-${w}.webp`);
+        } catch {
+          duelArt[w] = null;
+        }
+      }),
     ]);
     loaded = true;
   })();
