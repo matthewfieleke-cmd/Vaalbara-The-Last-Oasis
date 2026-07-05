@@ -125,8 +125,8 @@ export function DuelScreen({
 
     const a = activeDuelist(m, 0);
     const b = activeDuelist(m, 1);
-    stage.setFighter(0, a.species, a.hue, true);
-    stage.setFighter(1, b.species, b.hue, true);
+    stage.setFighter(0, a.species, a.hue, true, a.name);
+    stage.setFighter(1, b.species, b.hue, true, b.name);
     playSpeciesSpawn(a.species);
     syncHud();
     setRound(1);
@@ -159,7 +159,7 @@ export function DuelScreen({
         if (i >= 0) {
           sendNext(m, 1, i);
           const nb = activeDuelist(m, 1);
-          stage.setFighter(1, nb.species, nb.hue, true);
+          stage.setFighter(1, nb.species, nb.hue, true, nb.name);
           playSpeciesSpawn(nb.species);
         }
       }
@@ -198,7 +198,7 @@ export function DuelScreen({
     playUi('tap');
     sendNext(m, 0, teamIndex);
     const d = activeDuelist(m, 0);
-    stage.setFighter(0, d.species, d.hue, true);
+    stage.setFighter(0, d.species, d.hue, true, d.name);
     playSpeciesSpawn(d.species);
     setHud({
       hp: [d.hp, activeDuelist(m, 1).hp],
