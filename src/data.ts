@@ -80,7 +80,8 @@ export const OASIS_CARDS: CardDef[] = [
     id: 'bear', name: 'Bear', title: 'Warden of the Shallows', cost: 6, kind: 'unit', species: 'bear',
     stats: U({ hp: 530, dmg: 56, speed: 0.12, atkCd: 8, range: 1.1, canHitAir: true, heavy: true, radius: 0.52 }),
     blurb: 'Heavy sweeping tank. Each swipe rakes everything beside its target — and it rears up to swat flyers out of the air.',
-    hue: 25,
+    // Forest green (matches the cinematic) — hue 25 read as a Magma card.
+    hue: 140,
   },
   {
     id: 'bighorn', name: 'Bighorn Sheep', title: 'The Emerald Comet', cost: 4, kind: 'unit', species: 'bighorn',
