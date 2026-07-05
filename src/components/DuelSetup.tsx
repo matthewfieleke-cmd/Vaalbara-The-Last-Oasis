@@ -3,6 +3,7 @@ import type { FactionId, SpeciesId } from '../types';
 import { FACTIONS } from '../data';
 import { playUi } from '../audio';
 import { DuelStatCard } from './DuelCards';
+import { DuelGuide } from './DuelGuide';
 
 /**
  * Duels pre-fight: pick a coalition, study every champion's battle sheet,
@@ -18,6 +19,7 @@ export function DuelSetup({
 }) {
   const [faction, setFaction] = useState<FactionId>('magma');
   const [order, setOrder] = useState<SpeciesId[]>([]);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const roster = FACTIONS[faction].cards
     .map((c) => c.species)
@@ -56,6 +58,18 @@ export function DuelSetup({
           </button>
         ))}
       </div>
+
+      <button
+        className="duel-guide-btn"
+        onClick={() => {
+          setGuideOpen(true);
+          playUi('tap');
+        }}
+      >
+        📖 Strategy guide — when to Strike, Guard or unleash a Special
+      </button>
+
+      {guideOpen && <DuelGuide faction={faction} onClose={() => setGuideOpen(false)} />}
 
       <div className="duel-roster">
         {roster.map((sp) => (

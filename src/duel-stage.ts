@@ -34,6 +34,7 @@ const FLYERS = new Set<SpeciesId>(['eagle', 'bees']);
 
 interface FighterVis {
   species: SpeciesId;
+  name: string;
   hue: number;
   /** Home anchor as a fraction of stage width. */
   homeX: number;
@@ -60,26 +61,65 @@ interface FighterVis {
 interface Particle {
   x: number; y: number; vx: number; vy: number;
   life: number; t: number; size: number; hue: number;
-  kind: 'spark' | 'dust' | 'ember' | 'mote' | 'ring' | 'charge' | 'streak' | 'glint' | 'shock' | 'line';
+  kind: 'spark' | 'dust' | 'ember' | 'mote' | 'ring' | 'charge' | 'shock' | 'line';
   /** 'line': ray angle. 'charge': orbit angle around its target. */
   ang?: number;
   /** 'charge': the side whose champion is charging (follows the fighter). */
   side?: DuelSide;
 }
 
-/** A luminous point sampled off the backdrop painting (lava vein, waterfall,
- *  pond glint). Coordinates are fractions of the source image. */
-interface FlowPoint {
-  x: number;
-  y: number;
-  /** Strength 0–1 (how bright the sampled pixel was). */
-  w: number;
+/* --------------------------------------------------------------------------
+ * Living backdrop — cinemagraph flow.
+ * The paintings are single flattened images, so "real" motion is faked the
+ * way film cinemagraphs do it: inside hand-mapped regions (the waterfalls,
+ * the lava falls, the pond) the painting's OWN pixels scroll downward on a
+ * loop — two phase-staggered copies crossfading so the seam never shows —
+ * behind feathered edges. Everything outside the regions stays pixel-
+ * identical to the original painting.
+ * ------------------------------------------------------------------------ */
+
+interface FlowRegionDef {
+  /** Region in normalized image coordinates. */
+  x: number; y: number; w: number; h: number;
+  /** 'fall': material pours downward. 'ripple': surface shimmers in place. */
+  kind: 'fall' | 'ripple';
+  /** Loop speed (cycles/s for falls, wave speed for ripples). */
+  speed: number;
+  /** Ripple horizontal displacement, as a fraction of region width. */
+  amp?: number;
+}
+
+const FLOW_REGIONS: Record<DuelWorld, FlowRegionDef[]> = {
+  basalt: [
+    // Middle-distance lava cascades, left to right.
+    { x: 0.255, y: 0.42, w: 0.095, h: 0.27, kind: 'fall', speed: 0.30 },
+    { x: 0.445, y: 0.385, w: 0.115, h: 0.30, kind: 'fall', speed: 0.34 },
+    { x: 0.575, y: 0.39, w: 0.095, h: 0.25, kind: 'fall', speed: 0.30 },
+    { x: 0.715, y: 0.39, w: 0.085, h: 0.23, kind: 'fall', speed: 0.27 },
+    // Molten pool at the base of the central cascade — slow lateral churn.
+    { x: 0.365, y: 0.625, w: 0.28, h: 0.065, kind: 'ripple', speed: 0.5, amp: 0.012 },
+  ],
+  oasis: [
+    // The tall thin falls under the left tree line.
+    { x: 0.272, y: 0.19, w: 0.05, h: 0.37, kind: 'fall', speed: 0.5 },
+    // Left main cascade into the pond.
+    { x: 0.295, y: 0.405, w: 0.105, h: 0.165, kind: 'fall', speed: 0.55 },
+    // Center falls beneath the temple.
+    { x: 0.465, y: 0.295, w: 0.065, h: 0.265, kind: 'fall', speed: 0.5 },
+    { x: 0.515, y: 0.445, w: 0.095, h: 0.125, kind: 'fall', speed: 0.55 },
+    // Right cascades.
+    { x: 0.67, y: 0.425, w: 0.065, h: 0.145, kind: 'fall', speed: 0.5 },
+    { x: 0.745, y: 0.265, w: 0.055, h: 0.165, kind: 'fall', speed: 0.42 },
+    // The pond surface — a subtle refractive shimmer.
+    { x: 0.285, y: 0.548, w: 0.505, h: 0.068, kind: 'ripple', speed: 0.8, amp: 0.006 },
+  ],
+};
+
+interface FlowRegion {
+  def: FlowRegionDef;
+  /** Feathered crop of the painting (source-resolution pixels). */
+  canvas: HTMLCanvasElement;
   phase: number;
-  /** Pulse speed (rad/s). */
-  spd: number;
-  /** True for column-like features (waterfalls / lava falls) that shed
-   *  falling streaks rather than rising embers. */
-  fall: boolean;
 }
 
 interface FloatText {
@@ -126,10 +166,9 @@ export class DuelStage {
   /** Offscreen scratch for silhouette-clipped tint flashes. */
   private scratch = document.createElement('canvas');
 
-  /* Living backdrop: luminous points sampled from the painting. */
-  private flowPoints: FlowPoint[] = [];
+  /* Living backdrop: cinemagraph flow regions cut from the painting. */
+  private flowRegions: FlowRegion[] = [];
   private flowBuilt = false;
-  private glowSprite: HTMLCanvasElement | null = null;
 
   /* Special-move cinematography. */
   private letterbox = 0;
@@ -170,9 +209,10 @@ export class DuelStage {
     cancelAnimationFrame(this.raf);
   }
 
-  setFighter(side: DuelSide, species: SpeciesId, hue: number, entrance = true): void {
+  setFighter(side: DuelSide, species: SpeciesId, hue: number, entrance = true, name = ''): void {
     this.fighters[side] = {
       species,
+      name,
       hue,
       homeX: side === 0 ? 0.24 : 0.76,
       face: side === 0 ? 1 : -1,
@@ -321,189 +361,100 @@ export class DuelStage {
   /* Living backdrop — the painting itself flows                             */
   /* ---------------------------------------------------------------------- */
 
-  /** Last cover-fit placement of the backdrop, for mapping flow points. */
+  /** Last cover-fit placement of the backdrop, for mapping flow regions. */
   private bd = { x: 0, y: 0, w: 1, h: 1 };
 
   /**
-   * Samples the painted backdrop for luminous features — lava veins and
-   * falls in the Basalt world, waterfalls and pond glints in the Oasis —
-   * so the stage can animate them: pulsing glow, rising embers, falling
-   * streaks and twinkling glints. The painting starts to flow.
+   * Cuts the hand-mapped fall/pond regions out of the painting at source
+   * resolution and bakes a feathered alpha border into each, so the
+   * animated copies blend invisibly into the still painting around them.
    */
-  private buildFlowMap(art: HTMLImageElement): void {
+  private buildFlowRegions(art: HTMLImageElement): void {
     this.flowBuilt = true;
-    const SW = 120;
-    const SH = Math.max(1, Math.round((art.height / art.width) * SW));
-    const cv = document.createElement('canvas');
-    cv.width = SW;
-    cv.height = SH;
-    const c = cv.getContext('2d', { willReadFrequently: true });
-    if (!c) return;
-    c.drawImage(art, 0, 0, SW, SH);
-    const px = c.getImageData(0, 0, SW, SH).data;
+    this.flowRegions = [];
+    for (const def of FLOW_REGIONS[this.world]) {
+      const sw = Math.max(2, Math.round(def.w * art.width));
+      const sh = Math.max(2, Math.round(def.h * art.height));
+      const cv = document.createElement('canvas');
+      cv.width = sw;
+      cv.height = sh;
+      const c = cv.getContext('2d');
+      if (!c) continue;
+      c.drawImage(
+        art,
+        Math.round(def.x * art.width), Math.round(def.y * art.height), sw, sh,
+        0, 0, sw, sh,
+      );
+      // Feather all four edges (destination-in gradients).
+      const fx = Math.max(2, Math.round(sw * 0.16));
+      const fy = Math.max(2, Math.round(sh * 0.12));
+      c.globalCompositeOperation = 'destination-in';
+      for (const horizontal of [true, false]) {
+        const g = horizontal
+          ? c.createLinearGradient(0, 0, sw, 0)
+          : c.createLinearGradient(0, 0, 0, sh);
+        const f = horizontal ? fx / sw : fy / sh;
+        g.addColorStop(0, 'rgba(0,0,0,0)');
+        g.addColorStop(f, 'rgba(0,0,0,1)');
+        g.addColorStop(1 - f, 'rgba(0,0,0,1)');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = g;
+        c.fillRect(0, 0, sw, sh);
+      }
+      c.globalCompositeOperation = 'source-over';
+      this.flowRegions.push({ def, canvas: cv, phase: Math.random() });
+    }
+  }
 
-    const strength = new Float32Array(SW * SH);
-    for (let i = 0; i < SW * SH; i++) {
-      const r = px[i * 4];
-      const g = px[i * 4 + 1];
-      const b = px[i * 4 + 2];
-      if (this.world === 'basalt') {
-        // Molten: strong red/orange dominance, bright.
-        if (r > 165 && r - b > 70 && g < r * 0.82) {
-          strength[i] = clamp01((r + g * 0.5 - 180) / 150);
+  /**
+   * Draws the flowing overlays: falls pour downward via two phase-staggered
+   * copies of the region crossfading over a short travel (the film
+   * cinemagraph trick — constant motion, no visible seam); pond ripples via
+   * per-row sinusoidal displacement of the region's own pixels.
+   */
+  private drawFlow(ctx: CanvasRenderingContext2D): void {
+    for (const r of this.flowRegions) {
+      const def = r.def;
+      const dx = this.bd.x + def.x * this.bd.w;
+      const dy = this.bd.y + def.y * this.bd.h;
+      const dw = def.w * this.bd.w;
+      const dh = def.h * this.bd.h;
+
+      if (def.kind === 'fall') {
+        // Travel distance ~22% of the region height per cycle.
+        const travel = dh * 0.22;
+        for (const stagger of [0, 0.5]) {
+          const k = (this.time * def.speed + r.phase + stagger) % 1;
+          const alpha = 1 - Math.abs(2 * k - 1); // triangle: in, out
+          const off = (k - 0.5) * travel;
+          // A whisper of lateral sway keeps the sheet from feeling stiff.
+          const sway = Math.sin(this.time * 1.7 + r.phase * 9 + stagger * 4) * dw * 0.008;
+          ctx.globalAlpha = alpha * 0.85;
+          ctx.drawImage(r.canvas, dx + sway, dy + off, dw, dh);
         }
+        ctx.globalAlpha = 1;
       } else {
-        // Water: bright turquoise, or white foam with a cool cast.
-        const turquoise = b > 120 && g > 120 && r < g * 0.9 && g + b > 300;
-        const foam = r > 195 && g > 205 && b > 195;
-        if (turquoise || foam) {
-          strength[i] = clamp01((g + b - 260) / 200) * (foam ? 0.7 : 1);
+        // Ripple: slice the region into rows and slide each sideways.
+        const slices = 18;
+        const sh = r.canvas.height / slices;
+        const amp = (def.amp ?? 0.008) * dw;
+        for (let i = 0; i < slices; i++) {
+          const ny = i / slices;
+          const wob =
+            Math.sin(this.time * (1.1 + def.speed) + ny * 9 + r.phase * 7) * amp * (0.4 + ny);
+          ctx.drawImage(
+            r.canvas,
+            0, i * sh, r.canvas.width, sh,
+            dx + wob, dy + ny * dh, dw, dh / slices + 1,
+          );
         }
       }
     }
-
-    const pts: FlowPoint[] = [];
-    for (let y = 1; y < SH - 1; y++) {
-      for (let x = 0; x < SW; x++) {
-        const i = y * SW + x;
-        if (strength[i] < 0.25) continue;
-        // Columnar features (a bright run above AND below) behave like
-        // falls; everything else pulses/twinkles in place.
-        const fall = strength[i - SW] > 0.2 && strength[i + SW] > 0.2 && y < SH * 0.75;
-        pts.push({
-          x: (x + 0.5) / SW,
-          y: (y + 0.5) / SH,
-          w: strength[i],
-          phase: Math.random() * Math.PI * 2,
-          spd: 0.6 + Math.random() * 1.4,
-          fall,
-        });
-      }
-    }
-    // Keep a bounded, bright-biased subset so the effect stays cheap.
-    pts.sort((a, b) => b.w - a.w);
-    this.flowPoints = pts
-      .filter((_, i) => i < 60 || Math.random() < 140 / Math.max(1, pts.length))
-      .slice(0, 190);
-
-    // Prerendered soft radial glow (drawn with 'lighter').
-    const g = document.createElement('canvas');
-    g.width = 64;
-    g.height = 64;
-    const gc = g.getContext('2d');
-    if (gc) {
-      const grad = gc.createRadialGradient(32, 32, 1, 32, 32, 31);
-      grad.addColorStop(0, 'rgba(255,255,255,1)');
-      grad.addColorStop(0.4, 'rgba(255,255,255,0.35)');
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      gc.fillStyle = grad;
-      gc.fillRect(0, 0, 64, 64);
-    }
-    this.glowSprite = g;
   }
 
-  /** Map a flow point to current stage pixels (tracks the drift). */
-  private flowPx(p: FlowPoint): { x: number; y: number } {
-    return { x: this.bd.x + p.x * this.bd.w, y: this.bd.y + p.y * this.bd.h };
-  }
-
-  /** Additive pulsing glow over the painting's luminous features — makes
-   *  lava breathe and water shimmer without touching the pixels beneath. */
-  private drawFlowGlow(ctx: CanvasRenderingContext2D): void {
-    if (!this.glowSprite || this.flowPoints.length === 0) return;
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const baseR = Math.max(this.W, this.H) * (this.world === 'basalt' ? 0.02 : 0.014);
-    for (const p of this.flowPoints) {
-      const pulse = 0.5 + 0.5 * Math.sin(this.time * p.spd + p.phase);
-      const a = p.w * (this.world === 'basalt' ? 0.16 : 0.1) * (0.35 + 0.65 * pulse);
-      if (a < 0.015) continue;
-      const at = this.flowPx(p);
-      const r = baseR * (0.7 + p.w) * (0.8 + 0.4 * pulse);
-      ctx.globalAlpha = a;
-      // Tint via a hue-shifted shadow trick is costly; instead rely on the
-      // white glow picking up the underlying saturated paint additively,
-      // with a faint colored core.
-      ctx.drawImage(this.glowSprite, at.x - r, at.y - r, r * 2, r * 2);
-      ctx.fillStyle = this.world === 'basalt' ? 'hsl(24 100% 55%)' : 'hsl(180 80% 75%)';
-      ctx.globalAlpha = a * 0.5;
-      ctx.beginPath();
-      ctx.arc(at.x, at.y, r * 0.28, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-    ctx.globalAlpha = 1;
-  }
-
-  /** Spawns flowing-world particles: embers off lava, spray off falls,
-   *  glints on water. Called once per frame. */
-  private spawnFlow(): void {
-    if (this.flowPoints.length === 0) return;
-    const budget = this.world === 'basalt' ? 3 : 3;
-    for (let n = 0; n < budget; n++) {
-      if (Math.random() > 0.55) continue;
-      const p = this.flowPoints[(Math.random() * this.flowPoints.length) | 0];
-      const at = this.flowPx(p);
-      if (this.world === 'basalt') {
-        if (p.fall) {
-          // Molten droplets sliding down the falls.
-          this.particles.push({
-            x: at.x + (Math.random() - 0.5) * this.W * 0.008,
-            y: at.y,
-            vx: (Math.random() - 0.5) * this.W * 0.004,
-            vy: this.H * (0.05 + Math.random() * 0.06),
-            life: 0.8 + Math.random() * 0.7,
-            t: 0,
-            size: 1 + Math.random() * 1.6,
-            hue: 18 + Math.random() * 18,
-            kind: 'streak',
-          });
-        } else {
-          // Heat embers lifting off the veins.
-          this.particles.push({
-            x: at.x,
-            y: at.y,
-            vx: (Math.random() - 0.5) * this.W * 0.012,
-            vy: -this.H * (0.02 + Math.random() * 0.045),
-            life: 1.6 + Math.random() * 2.2,
-            t: 0,
-            size: 0.8 + Math.random() * 1.8,
-            hue: 16 + Math.random() * 26,
-            kind: 'ember',
-          });
-        }
-      } else {
-        if (p.fall) {
-          // White spray running down the waterfalls.
-          this.particles.push({
-            x: at.x + (Math.random() - 0.5) * this.W * 0.006,
-            y: at.y,
-            vx: (Math.random() - 0.5) * this.W * 0.003,
-            vy: this.H * (0.055 + Math.random() * 0.075),
-            life: 0.6 + Math.random() * 0.5,
-            t: 0,
-            size: 0.8 + Math.random() * 1.4,
-            hue: 185,
-            kind: 'streak',
-          });
-        } else {
-          // Sun glints twinkling on the pond.
-          this.particles.push({
-            x: at.x,
-            y: at.y,
-            vx: 0,
-            vy: 0,
-            life: 0.7 + Math.random() * 0.8,
-            t: 0,
-            size: 1.2 + Math.random() * 2.2,
-            hue: 60 + Math.random() * 120,
-            kind: 'glint',
-          });
-        }
-      }
-    }
-    // A little generic atmosphere on top.
-    if (Math.random() < 0.25) {
+  /** Ambient drifting embers (basalt) / pollen motes (oasis). */
+  private spawnAmbience(): void {
+    if (Math.random() < 0.3) {
       this.particles.push({
         x: Math.random() * this.W,
         y: this.H * (0.3 + Math.random() * 0.6),
@@ -545,7 +496,13 @@ export class DuelStage {
         const pre = ev.special ? 1.05 : 0;
         if (ev.special) {
           this.fire(step, 'announce', 0, () => {
-            this.banner = { txt: ev.label ?? 'SPECIAL', sub: undefined, t: 0, dur: step.dur, hue: A.hue };
+            this.banner = {
+              txt: ev.label ?? 'SPECIAL',
+              sub: A.name ? `${A.name}'s signature move` : undefined,
+              t: 0,
+              dur: step.dur,
+              hue: A.hue,
+            };
             // Camera pushes in on the charging champion; time dilates.
             this.zoomTarget = 1.14;
             this.zoomCX = A.homeX;
@@ -613,7 +570,7 @@ export class DuelStage {
             if (ev.evaded) {
               D.mode = 'evade';
               D.animT = 0;
-              this.text(this.fighterPx(D).x, this.groundY() - this.H * 0.3, 'MISS', 200, false);
+              this.fighterText(D, 'MISS', 200, false);
             } else {
               const dmg = ev.dmg ?? 0;
               this.freeze = ev.special ? 0.22 : ev.crit ? 0.13 : 0.09;
@@ -643,14 +600,9 @@ export class DuelStage {
                 this.zoomTarget = 1.12;
                 this.zoomCX = D.homeX;
               }
-              this.text(
-                dp.x, dp.y - this.H * 0.34,
-                `${dmg}`,
-                ev.blocked ? 200 : ev.crit ? 48 : 6,
-                !!(ev.crit || ev.special),
-              );
-              if (ev.blocked) this.text(dp.x, dp.y - this.H * 0.42, 'BLOCKED', 200, false);
-              else if (ev.crit) this.text(dp.x, dp.y - this.H * 0.42, 'CRITICAL!', 48, false);
+              this.fighterText(D, `${dmg}`, ev.blocked ? 200 : ev.crit ? 48 : 6, !!(ev.crit || ev.special));
+              if (ev.blocked) this.fighterText(D, 'BLOCKED', 200, false, true);
+              else if (ev.crit) this.fighterText(D, 'CRITICAL!', 48, false, true);
               this.onImpact?.(A.species, !!ev.special, false);
             }
             this.onEventApplied?.(ev);
@@ -689,8 +641,8 @@ export class DuelStage {
             D.tint = 0.8;
             const dp = this.fighterPx(D);
             this.sparks(dp.x, dp.y - this.H * 0.1, 8, A.hue);
-            this.text(dp.x, dp.y - this.H * 0.3, `${ev.dmg ?? 0}`, ev.label === 'QUILLS' ? 160 : 40, false);
-            if (ev.label) this.text(dp.x, dp.y - this.H * 0.38, ev.label, 160, false);
+            this.fighterText(D, `${ev.dmg ?? 0}`, ev.label === 'QUILLS' ? 160 : 40, false);
+            if (ev.label) this.fighterText(D, ev.label, 160, false, true);
             this.onImpact?.(A.species, false, false);
             this.onEventApplied?.(ev);
           });
@@ -734,9 +686,8 @@ export class DuelStage {
         this.fire(step, 'tick', 0.25, () => {
           F.tint = 1;
           F.tintHue = ev.label === 'VENOM' ? 120 : 25;
-          const p = this.fighterPx(F);
-          this.text(p.x, p.y - this.H * 0.32, `${ev.dmg ?? 0}`, ev.label === 'VENOM' ? 120 : 25, false);
-          if (ev.label) this.text(p.x, p.y - this.H * 0.4, ev.label, ev.label === 'VENOM' ? 120 : 25, false);
+          this.fighterText(F, `${ev.dmg ?? 0}`, ev.label === 'VENOM' ? 120 : 25, false);
+          if (ev.label) this.fighterText(F, ev.label, ev.label === 'VENOM' ? 120 : 25, false, true);
           this.onEventApplied?.(ev);
         });
         break;
@@ -747,8 +698,7 @@ export class DuelStage {
         const F = this.fighters[ev.side];
         if (!F) break;
         this.fire(step, 'show', 0.1, () => {
-          const p = this.fighterPx(F);
-          this.text(p.x, p.y - this.H * 0.38, ev.label ?? '', ev.kind === 'skip' ? 55 : 280, true);
+          this.fighterText(F, ev.label ?? '', ev.kind === 'skip' ? 55 : 280, false);
           this.onEventApplied?.(ev);
         });
         if (ev.kind === 'skip') F.squash = Math.sin(t * 18) * 0.03;
@@ -815,7 +765,30 @@ export class DuelStage {
     for (let i = 0; i < n; i++) this.dust(x, y);
   }
 
-  private text(x: number, y: number, txt: string, hue: number, big: boolean): void {
+  /**
+   * Combat text anchored to a fighter: numbers ride just above the
+   * champion's head, and concurrent texts on the same side stack upward
+   * instead of printing over each other (or over the move ribbon).
+   */
+  private fighterText(f: FighterVis, txt: string, hue: number, big: boolean, subline = false): void {
+    const p = this.fighterPx(f);
+    const fh = this.H * 0.26 * (DUEL_SCALE[f.species] ?? 0.9);
+    // Clamp into this fighter's half so texts never collide mid-arena.
+    const left = f.homeX < 0.5;
+    const x = Math.max(
+      this.W * (left ? 0.1 : 0.56),
+      Math.min(this.W * (left ? 0.44 : 0.9), p.x),
+    );
+    const head = this.groundY() - fh - this.H * 0.045;
+    // Stack over any live texts already occupying this side.
+    let stack = 0;
+    for (const t of this.texts) {
+      const tLeft = t.x < this.W * 0.5;
+      if (tLeft === left && t.t < 0.6) stack++;
+    }
+    const y = subline
+      ? head + this.H * 0.052 // labels sit UNDER the number, never over the ribbon
+      : head - stack * this.H * 0.05;
     this.texts.push({ x, y, txt, hue, t: 0, big });
   }
 
@@ -853,7 +826,7 @@ export class DuelStage {
     // Painted backdrop, cover-fit with a slow breathing drift.
     const art = getDuelArt(this.world);
     if (art) {
-      if (!this.flowBuilt) this.buildFlowMap(art);
+      if (!this.flowBuilt) this.buildFlowRegions(art);
       const drift = Math.sin(this.time * 0.07) * 0.006;
       const scale = Math.max(W / art.width, H / art.height) * (1.03 + drift);
       const dw = art.width * scale;
@@ -862,8 +835,8 @@ export class DuelStage {
       const dy = H - dh;
       this.bd = { x: dx, y: dy, w: dw, h: dh };
       ctx.drawImage(art, dx, dy, dw, dh);
-      this.spawnFlow();
-      this.drawFlowGlow(ctx);
+      this.drawFlow(ctx);
+      this.spawnAmbience();
     } else {
       const g = ctx.createLinearGradient(0, 0, 0, H);
       if (this.world === 'basalt') {
@@ -886,40 +859,14 @@ export class DuelStage {
       ctx.fillRect(0, 0, W, H);
     }
 
-    // Back-to-front: ambient + backdrop flow behind, then fighters, then FX.
+    // Back-to-front: ambience behind, then fighters, then FX.
     for (const p of this.particles) {
-      const k = p.t / p.life;
-      if (p.kind === 'ember' || p.kind === 'mote') {
-        const a = 0.5 * (1 - k);
-        ctx.fillStyle = `hsla(${p.hue} 90% 65% / ${a})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * this.dpr * 0.7, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (p.kind === 'streak') {
-        // Falling droplet/spray: a short vertical smear.
-        const a = (this.world === 'basalt' ? 0.75 : 0.6) * Math.sin(Math.min(1, k) * Math.PI);
-        const len = Math.max(3, Math.abs(p.vy) * 0.09);
-        ctx.strokeStyle = this.world === 'basalt'
-          ? `hsla(${p.hue} 95% 62% / ${a})`
-          : `hsla(${p.hue} 60% 92% / ${a})`;
-        ctx.lineWidth = p.size * this.dpr * 0.8;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y - len);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-      } else if (p.kind === 'glint') {
-        // Twinkle: a tiny 4-point star that blooms and dies.
-        const a = Math.sin(Math.min(1, k) * Math.PI);
-        const r = p.size * this.dpr * (0.8 + a);
-        ctx.strokeStyle = `hsla(${p.hue} 70% 90% / ${0.85 * a})`;
-        ctx.lineWidth = 1 * this.dpr;
-        ctx.beginPath();
-        ctx.moveTo(p.x - r, p.y);
-        ctx.lineTo(p.x + r, p.y);
-        ctx.moveTo(p.x, p.y - r);
-        ctx.lineTo(p.x, p.y + r);
-        ctx.stroke();
-      }
+      if (p.kind !== 'ember' && p.kind !== 'mote') continue;
+      const a = 0.5 * (1 - p.t / p.life);
+      ctx.fillStyle = `hsla(${p.hue} 90% 65% / ${a})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * this.dpr * 0.7, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     for (const side of [1, 0] as DuelSide[]) {
@@ -929,7 +876,7 @@ export class DuelStage {
 
     // Foreground FX.
     for (const p of this.particles) {
-      if (p.kind === 'ember' || p.kind === 'mote' || p.kind === 'streak' || p.kind === 'glint') continue;
+      if (p.kind === 'ember' || p.kind === 'mote') continue;
       const k = p.t / p.life;
       if (p.kind === 'ring') {
         ctx.strokeStyle = `hsla(${p.hue} 95% 70% / ${0.8 * (1 - k)})`;
@@ -1002,39 +949,46 @@ export class DuelStage {
       ctx.restore();
     }
 
-    // Move banner.
+    ctx.restore();
+
+    // Move ribbon — screen-space, in the clear band between the HUD panels
+    // and the fighters, so it never collides with either (and never shakes).
     if (this.banner) {
       const b = this.banner;
       const a = b.t < 0.2 ? b.t / 0.2 : 1 - Math.max(0, (b.t - (b.dur - 0.4)) / 0.4);
+      const slide = b.t < 0.25 ? (1 - b.t / 0.25) * H * 0.014 : 0;
+      const y = H * 0.235 - slide;
       ctx.save();
       ctx.globalAlpha = clamp01(a);
-      const y = H * 0.3;
-      const g = ctx.createLinearGradient(0, y - H * 0.07, 0, y + H * 0.05);
+      const g = ctx.createLinearGradient(0, y - H * 0.052, 0, y + H * 0.052);
       g.addColorStop(0, 'rgba(8,5,3,0)');
-      g.addColorStop(0.5, 'rgba(8,5,3,0.66)');
+      g.addColorStop(0.35, 'rgba(8,5,3,0.78)');
+      g.addColorStop(0.65, 'rgba(8,5,3,0.78)');
       g.addColorStop(1, 'rgba(8,5,3,0)');
       ctx.fillStyle = g;
-      ctx.fillRect(0, y - H * 0.07, W, H * 0.13);
-      ctx.font = `900 ${H * 0.058}px Georgia, serif`;
+      ctx.fillRect(0, y - H * 0.052, W, H * 0.104);
+      // Hairline rules give it a title-card finish.
+      ctx.fillStyle = `hsla(${b.hue} 80% 65% / 0.7)`;
+      ctx.fillRect(W * 0.2, y - H * 0.043, W * 0.6, 1.2 * this.dpr);
+      ctx.fillRect(W * 0.2, y + H * 0.041, W * 0.6, 1.2 * this.dpr);
+      ctx.font = `900 ${H * 0.04}px Georgia, serif`;
       ctx.textAlign = 'center';
-      ctx.lineWidth = H * 0.008;
+      ctx.lineWidth = H * 0.006;
       ctx.strokeStyle = 'rgba(10,6,4,0.9)';
-      ctx.strokeText(b.txt, W / 2, y + H * 0.012);
+      ctx.strokeText(b.txt, W / 2, y + (b.sub ? -H * 0.002 : H * 0.011));
       ctx.fillStyle = `hsl(${b.hue} 90% 70%)`;
-      ctx.fillText(b.txt, W / 2, y + H * 0.012);
+      ctx.fillText(b.txt, W / 2, y + (b.sub ? -H * 0.002 : H * 0.011));
       if (b.sub) {
-        ctx.font = `700 ${H * 0.026}px Georgia, serif`;
-        ctx.fillStyle = 'rgba(240,230,215,0.92)';
-        ctx.fillText(b.sub, W / 2, y + H * 0.052);
+        ctx.font = `700 ${H * 0.019}px Georgia, serif`;
+        ctx.fillStyle = 'rgba(240,230,215,0.9)';
+        ctx.fillText(b.sub.toUpperCase(), W / 2, y + H * 0.03);
       }
       ctx.restore();
     }
 
-    ctx.restore();
-
     // Cinematic letterbox (drawn outside the shaken/zoomed camera).
     if (this.letterbox > 0.01) {
-      const bar = this.letterbox * H * 0.065;
+      const bar = this.letterbox * H * 0.055;
       ctx.fillStyle = 'rgba(4,2,3,0.94)';
       ctx.fillRect(0, 0, W, bar);
       ctx.fillRect(0, H - bar, W, bar);
