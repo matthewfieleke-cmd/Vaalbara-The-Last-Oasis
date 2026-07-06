@@ -31,6 +31,10 @@ export interface AnimSet {
   attack: Sprite[];
   /** Bear only: rear-up anti-air swat. */
   swat?: Sprite[];
+  /** 3/4 rear view — marching away from the camera (up the field). */
+  up?: Sprite[];
+  /** 3/4 front view — marching toward the camera (down the field). */
+  down?: Sprite[];
 }
 
 /* ------------------------------------------------------------------------ */
@@ -63,19 +67,22 @@ const PORTRAIT_META: Record<SpeciesId, PortraitMeta> = {
  *  attack sheets were painted facing LEFT — `attackFacing` records that so
  *  the renderer mirrors them correctly (the T-Rex used to about-face
  *  mid-chomp). */
-const ANIM_FILES: Record<SpeciesId, { run: string; attack: string; swat?: string; attackFacing?: 1 | -1 }> = {
-  trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1 },
-  lion: { run: 'lion-run', attack: 'lion-attack' },
-  eagle: { run: 'eagle-run', attack: 'eagle-attack' },
-  honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack' },
-  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack' },
-  fireants: { run: 'fireants-run', attack: 'fireants-attack' },
-  bear: { run: 'bear-run', attack: 'bear-attack', swat: 'bear-swat' },
-  bighorn: { run: 'bighorn-run', attack: 'bighorn-attack' },
-  bees: { run: 'bees-run', attack: 'bees-attack' },
-  wolves: { run: 'wolf-run', attack: 'wolf-attack' },
-  porcupine: { run: 'porcupine-run', attack: 'porcupine-attack' },
-  beetles: { run: 'beetle-run', attack: 'beetle-attack', attackFacing: -1 },
+const ANIM_FILES: Record<SpeciesId, {
+  run: string; attack: string; swat?: string; attackFacing?: 1 | -1;
+  up: string; down: string;
+}> = {
+  trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1, up: 'trex-up', down: 'trex-down' },
+  lion: { run: 'lion-run', attack: 'lion-attack', up: 'lion-up', down: 'lion-down' },
+  eagle: { run: 'eagle-run', attack: 'eagle-attack', up: 'eagle-up', down: 'eagle-down' },
+  honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack', up: 'honeybadger-up', down: 'honeybadger-down' },
+  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', up: 'scorpion-up', down: 'scorpion-down' },
+  fireants: { run: 'fireants-run', attack: 'fireants-attack', up: 'fireants-up', down: 'fireants-down' },
+  bear: { run: 'bear-run', attack: 'bear-attack', swat: 'bear-swat', up: 'bear-up', down: 'bear-down' },
+  bighorn: { run: 'bighorn-run', attack: 'bighorn-attack', up: 'bighorn-up', down: 'bighorn-down' },
+  bees: { run: 'bees-run', attack: 'bees-attack', up: 'bees-up', down: 'bees-down' },
+  wolves: { run: 'wolf-run', attack: 'wolf-attack', up: 'wolf-up', down: 'wolf-down' },
+  porcupine: { run: 'porcupine-run', attack: 'porcupine-attack', up: 'porcupine-up', down: 'porcupine-down' },
+  beetles: { run: 'beetle-run', attack: 'beetle-attack', attackFacing: -1, up: 'beetle-up', down: 'beetle-down' },
 };
 
 const SPRITES = new Map<SpeciesId, Sprite[]>(); // portraits (wolves: 2)
@@ -529,10 +536,12 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
       ...species.map(async (sp) => {
         const files = ANIM_FILES[sp];
         try {
-          const [runImg, atkImg, swatImg] = await Promise.all([
+          const [runImg, atkImg, swatImg, upImg, downImg] = await Promise.all([
             loadImage(`${baseUrl}anim/${files.run}.webp`),
             loadImage(`${baseUrl}anim/${files.attack}.webp`),
             files.swat ? loadImage(`${baseUrl}anim/${files.swat}.webp`) : Promise.resolve(null),
+            loadImage(`${baseUrl}anim/${files.up}.webp`).catch(() => null),
+            loadImage(`${baseUrl}anim/${files.down}.webp`).catch(() => null),
           ]);
           // The run set defines the species' reference scale; attack/swat
           // sets are area-matched against it so the animal never changes
@@ -550,6 +559,14 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           if (swatImg) {
             const swatFrames = splitStrip(swatImg, 3);
             set.swat = toFrameSprites(swatFrames, 0.03, crossH(swatFrames));
+          }
+          if (upImg) {
+            const upFrames = splitStrip(upImg, 4);
+            set.up = toFrameSprites(upFrames, 0.03, crossH(upFrames));
+          }
+          if (downImg) {
+            const downFrames = splitStrip(downImg, 4);
+            set.down = toFrameSprites(downFrames, 0.03, crossH(downFrames));
           }
           ANIMS.set(sp, set);
         } catch (err) {

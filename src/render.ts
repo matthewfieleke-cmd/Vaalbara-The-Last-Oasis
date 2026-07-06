@@ -86,6 +86,10 @@ interface Ghost {
   t: number;
 }
 
+/** Which painted view a unit is currently showing: 3/4 rear (marching away),
+ *  3/4 front (marching toward the camera) or the side profile. */
+type ViewDir = 'up' | 'down' | 'side';
+
 interface DisplayUnit {
   dx: number; dy: number;
   runPhase: number;
@@ -96,6 +100,9 @@ interface DisplayUnit {
   /** Body pitch (canvas radians, unmirrored space) toward travel direction —
    *  side-profile art reads as "heading" up/down field instead of strafing. */
   lean: number;
+  /** Directional view with hysteresis — Clash-style marching art. */
+  dir: ViewDir;
+  dirHold: number;
   atk?: AttackAnim;
   jig?: Jiggle;
 }
@@ -279,13 +286,31 @@ export class Renderer {
           const dir = this.recallHitDir(e.x, e.y) ?? { x: 0.7, y: 0.3 };
           const d = this.display.get(e.unitId);
           if (d) d.jig = { t0: this.time, dirX: dir.x, dirY: dir.y, mag: clamp(2 + e.amount * 0.12, 2, 7) };
+          // Impact sparks fly AWAY from the blow, heavier hits ring a
+          // shockwave — melee reads like a real collision, not a tap.
+          const n = Math.round(clamp(4 + e.amount * 0.25, 4, 12));
+          for (let i = 0; i < n; i++) {
+            const spread = (Math.random() - 0.5) * 1.6;
+            const ca = Math.atan2(dir.y, dir.x) + spread;
+            const sp = (60 + Math.random() * 90) * clamp(0.6 + e.amount * 0.02, 0.6, 1.6);
+            this.particles.push({
+              x: p.x, y: p.y - this.unit * 0.3,
+              vx: Math.cos(ca) * sp, vy: Math.sin(ca) * sp - 30,
+              life: 0, maxLife: 0.3 + Math.random() * 0.25,
+              size: 1.4 + Math.random() * 2.2,
+              hue: e.kind === 'melee' ? 45 : 30, sat: 95, lit: 68,
+              kind: 'spark', alpha: 1, gravity: 200,
+            });
+          }
+          if (e.amount >= 22) this.burst(p.x, p.y - this.unit * 0.25, 1, 'shockwave', 40, 0.5);
           if (e.amount >= 30) this.hitStop = Math.max(this.hitStop, 0.05);
         }
+        const big = e.amount >= 26;
         this.floats.push({
           x: p.x + (Math.random() - 0.5) * 14, y: p.y - this.unit * 0.5,
-          text: `-${e.amount}`, life: 0, maxLife: 0.9,
-          color: e.kind === 'burn' ? '#ff9d45' : e.kind === 'reflect' ? '#6dffc9' : '#ffffff',
-          size: clamp(10 + e.amount * 0.12, 10, 20),
+          text: `-${e.amount}`, life: 0, maxLife: big ? 1.05 : 0.9,
+          color: e.kind === 'burn' ? '#ff9d45' : e.kind === 'reflect' ? '#6dffc9' : big ? '#ffd24a' : '#ffffff',
+          size: clamp(10 + e.amount * 0.16, 10, 24),
         });
         break;
       }
@@ -1046,34 +1071,47 @@ export class Renderer {
 
   /* ------------------------------- units --------------------------------- */
 
-  /** Current frame pair: `a` blends into `b` by `mix` for smooth motion. */
+  /** Current frame pair: `a` blends into `b` by `mix` for smooth motion.
+   *  `view` reports which painted angle was used so the caller can skip
+   *  mirroring/lean for the directional (up/down) art. */
   private pickFrames(
     species: SpeciesId, d: DisplayUnit, moving: boolean, flying: boolean,
-  ): { a: Sprite; b: Sprite | null; mix: number } | null {
+  ): { a: Sprite; b: Sprite | null; mix: number; view: ViewDir } | null {
     const anim = getAnim(species);
     if (!anim) {
       const s = getSprite(species, 0);
-      return s ? { a: s, b: null, mix: 0 } : null;
+      return s ? { a: s, b: null, mix: 0, view: 'side' } : null;
     }
+    const dirFrames = d.dir === 'up' ? anim.up : d.dir === 'down' ? anim.down : undefined;
     // Attack timeline: anticipation -> strike -> recoil over 0.55 s.
     // Strikes cut hard (no blending) so impacts stay crisp.
     if (d.atk) {
       const at = (this.time - d.atk.t0) / 0.55;
       if (at < 1) {
+        // Strikes aimed mostly up/down the field play on the directional art
+        // (the lunge + aim pitch supply the "bite"); side strikes use the
+        // painted attack sheets.
+        const vertical = Math.abs(d.atk.dirY) > Math.abs(d.atk.dirX) * 1.15;
+        if (vertical && dirFrames && d.dir !== 'side') {
+          const idx = at < 0.35 ? 0 : at < 0.65 ? 2 : 3;
+          return { a: dirFrames[Math.min(idx, dirFrames.length - 1)], b: null, mix: 0, view: d.dir };
+        }
         const frames = species === 'bear' && d.atk.air && anim.swat ? anim.swat : anim.attack;
         const idx = at < 0.35 ? 0 : at < 0.65 ? 1 : 2;
-        return { a: frames[Math.min(idx, frames.length - 1)], b: null, mix: 0 };
+        return { a: frames[Math.min(idx, frames.length - 1)], b: null, mix: 0, view: 'side' };
       }
     }
+    const cycle = dirFrames && d.dir !== 'side' ? dirFrames : anim.run;
+    const view: ViewDir = cycle === anim.run ? 'side' : d.dir;
     // Flyers always flap; grounded units stride when moving, else hold contact.
     if (flying || moving) {
-      const n = anim.run.length;
+      const n = cycle.length;
       const i = Math.floor(d.runPhase) % n;
       const frac = d.runPhase - Math.floor(d.runPhase);
       const mix = frac * frac * (3 - 2 * frac); // smoothstep crossfade
-      return { a: anim.run[i], b: anim.run[(i + 1) % n], mix };
+      return { a: cycle[i], b: cycle[(i + 1) % n], mix, view };
     }
-    return { a: anim.run[0], b: null, mix: 0 };
+    return { a: cycle[0], b: null, mix: 0, view };
   }
 
   private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number): void {
@@ -1094,7 +1132,13 @@ export class Renderer {
       alive.add(u.id);
       let d = this.display.get(u.id);
       if (!d) {
-        d = { dx: u.x, dy: u.y, runPhase: (u.id * 0.7) % 4, age: 0, face: u.facing, faceHold: 0, lean: 0 };
+        d = {
+          dx: u.x, dy: u.y, runPhase: (u.id * 0.7) % 4, age: 0, face: u.facing, faceHold: 0, lean: 0,
+          // Fresh troops march toward the enemy: yours away from the camera,
+          // theirs toward it.
+          dir: u.owner === this.localSeat ? 'up' : 'down',
+          dirHold: 0,
+        };
         this.display.set(u.id, d);
       }
       d.age += dt;
@@ -1135,21 +1179,61 @@ export class Renderer {
         d.faceHold = 0;
       }
 
-      // Body lean: rotate the side-profile art toward the direction of
-      // travel — up to ~57° when running straight up/down field — so the
-      // animals read as running FORWARD along the ground, not strafing.
-      // (The team ring, shadow and HP bar stay screen-aligned.)
+      // Directional view: pick the painted angle that matches the travel
+      // (or strike) direction in SCREEN space, with hysteresis so steering
+      // wobble can't strobe between angles. Marching up-field shows the 3/4
+      // rear art, down-field the 3/4 front art, sideways the profile art.
+      const anim = getAnim(u.species);
+      if (anim?.up && anim.down) {
+        let wantDir: ViewDir | null = null;
+        let vx = 0;
+        let vy = 0;
+        if (d.atk) {
+          vx = d.atk.dirX;
+          vy = d.atk.dirY;
+        } else if (moving) {
+          vx = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
+          vy = (this.localSeat === 1 ? -stepY : stepY) / stepLen;
+        }
+        if (vx !== 0 || vy !== 0) {
+          if (Math.abs(vy) > Math.abs(vx) * 0.85) wantDir = vy < 0 ? 'up' : 'down';
+          else if (Math.abs(vx) > Math.abs(vy) * 1.35) wantDir = 'side';
+        }
+        if (wantDir && wantDir !== d.dir) {
+          d.dirHold += dt;
+          if (d.dirHold > 0.18 || d.atk) {
+            d.dir = wantDir;
+            d.dirHold = 0;
+          }
+        } else {
+          d.dirHold = 0;
+        }
+      } else {
+        d.dir = 'side';
+      }
+
+      // Body lean. Side-profile art pitches toward the direction of travel
+      // (so it reads as heading up/down field); the directional art already
+      // faces the right way and only takes a whisper of sideways tilt while
+      // drifting laterally.
       const MAX_LEAN = 1.0;
       let leanTarget = 0;
       if (moving) {
+        const dxScreen = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
         const dyScreen = (this.localSeat === 1 ? -stepY : stepY) / stepLen;
-        leanTarget = clamp(dyScreen, -1, 1) * MAX_LEAN;
+        leanTarget = d.dir === 'side'
+          ? clamp(dyScreen, -1, 1) * MAX_LEAN
+          : clamp(dxScreen, -1, 1) * 0.12 * (d.dir === 'up' ? 1 : -1);
       }
       d.lean += (leanTarget - d.lean) * clamp(dt * 6, 0, 1);
 
       const p = this.worldToScreen(d.dx, d.dy);
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
-      const s = this.unit * unitScale(stats.colossal, stats.heavy);
+      // Clash-style depth: actors shrink slightly toward the far end of the
+      // field and grow toward the near edge, selling the 3/4 camera.
+      const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
+      const depthScale = 0.9 + depthK * 0.2;
+      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale;
 
       const popT = clamp(d.age / 0.45, 0, 1);
       const pb = popT - 1;
@@ -1247,9 +1331,12 @@ export class Renderer {
 
       ctx.translate(p.x, p.y + hover - s * 0.55);
 
+      const view: ViewDir = framePair?.view ?? 'side';
+
       // Attack lunge + AIM: the body rotates toward the victim through the
       // strike (up to ~40°), so a chomp visibly bites AT its target even when
-      // the target is up or down the field.
+      // the target is up or down the field. Directional art already faces
+      // its victim, so it only takes a light sideways tilt.
       let strikeStretch = 0;
       let aimRot = 0;
       let aimEnv = 0;
@@ -1268,7 +1355,9 @@ export class Renderer {
           ctx.translate(d.atk.dirX * lunge * amp, d.atk.dirY * lunge * amp);
           strikeStretch = at >= 0.35 && at < 0.6 ? 0.06 : at < 0.35 ? -0.04 : 0;
           aimEnv = at < 0.2 ? at / 0.2 : at < 0.75 ? 1 : (1 - at) / 0.25;
-          aimRot = clamp(d.atk.dirY, -0.95, 0.95) * 0.7;
+          aimRot = view === 'side'
+            ? clamp(d.atk.dirY, -0.95, 0.95) * 0.7
+            : clamp(d.atk.dirX, -1, 1) * 0.18;
         }
       }
       if (d.jig) {
@@ -1285,8 +1374,9 @@ export class Renderer {
       const native = frame ? frame.nativeFacing : 1;
       // Travel lean blends into the attack aim during a strike. The rotation
       // sign flips with the mirror so the nose always pitches the right way.
+      // Directional (up/down) art never mirrors — it faces the camera axis.
       const rot = d.lean * (1 - aimEnv) + aimRot * aimEnv;
-      const mirrored = face !== native;
+      const mirrored = view === 'side' && face !== native;
       if (rot !== 0) ctx.rotate(rot * (mirrored ? -1 : 1));
       if (mirrored) ctx.scale(-1, 1);
 
