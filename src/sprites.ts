@@ -35,6 +35,8 @@ export interface AnimSet {
   up?: Sprite[];
   /** 3/4 front view — marching toward the camera (down the field). */
   down?: Sprite[];
+  /** Duels defeat: 4-frame side-profile collapse (standing -> lying down). */
+  ko?: Sprite[];
 }
 
 /* ------------------------------------------------------------------------ */
@@ -69,22 +71,20 @@ const PORTRAIT_META: Record<SpeciesId, PortraitMeta> = {
  *  mid-chomp). */
 const ANIM_FILES: Record<SpeciesId, {
   run: string; attack: string; swat?: string; attackFacing?: 1 | -1;
-  up: string; down: string;
-  /** Play the run cycle in reverse — fixes gaits painted moonwalking. */
-  runReverse?: boolean;
+  up: string; down: string; ko: string;
 }> = {
-  trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1, up: 'trex-up', down: 'trex-down' },
-  lion: { run: 'lion-run', attack: 'lion-attack', up: 'lion-up', down: 'lion-down' },
-  eagle: { run: 'eagle-run', attack: 'eagle-attack', up: 'eagle-up', down: 'eagle-down' },
-  honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack', up: 'honeybadger-up', down: 'honeybadger-down' },
-  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', runReverse: true, up: 'scorpion-up', down: 'scorpion-down' },
-  fireants: { run: 'fireants-run', attack: 'fireants-attack', up: 'fireants-up', down: 'fireants-down' },
-  bear: { run: 'bear-run', attack: 'bear-attack', swat: 'bear-swat', up: 'bear-up', down: 'bear-down' },
-  bighorn: { run: 'bighorn-run', attack: 'bighorn-attack', up: 'bighorn-up', down: 'bighorn-down' },
-  bees: { run: 'bees-run', attack: 'bees-attack', up: 'bees-up', down: 'bees-down' },
-  wolves: { run: 'wolf-run', attack: 'wolf-attack', up: 'wolf-up', down: 'wolf-down' },
-  porcupine: { run: 'porcupine-run', attack: 'porcupine-attack', up: 'porcupine-up', down: 'porcupine-down' },
-  beetles: { run: 'beetle-run', attack: 'beetle-attack', attackFacing: -1, up: 'beetle-up', down: 'beetle-down' },
+  trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1, up: 'trex-up', down: 'trex-down', ko: 'trex-ko' },
+  lion: { run: 'lion-run', attack: 'lion-attack', up: 'lion-up', down: 'lion-down', ko: 'lion-ko' },
+  eagle: { run: 'eagle-run', attack: 'eagle-attack', up: 'eagle-up', down: 'eagle-down', ko: 'eagle-ko' },
+  honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack', up: 'honeybadger-up', down: 'honeybadger-down', ko: 'honeybadger-ko' },
+  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', up: 'scorpion-up', down: 'scorpion-down', ko: 'scorpion-ko' },
+  fireants: { run: 'fireants-run', attack: 'fireants-attack', up: 'fireants-up', down: 'fireants-down', ko: 'fireants-ko' },
+  bear: { run: 'bear-run', attack: 'bear-attack', swat: 'bear-swat', up: 'bear-up', down: 'bear-down', ko: 'bear-ko' },
+  bighorn: { run: 'bighorn-run', attack: 'bighorn-attack', up: 'bighorn-up', down: 'bighorn-down', ko: 'bighorn-ko' },
+  bees: { run: 'bees-run', attack: 'bees-attack', up: 'bees-up', down: 'bees-down', ko: 'bees-ko' },
+  wolves: { run: 'wolf-run', attack: 'wolf-attack', up: 'wolf-up', down: 'wolf-down', ko: 'wolf-ko' },
+  porcupine: { run: 'porcupine-run', attack: 'porcupine-attack', up: 'porcupine-up', down: 'porcupine-down', ko: 'porcupine-ko' },
+  beetles: { run: 'beetle-run', attack: 'beetle-attack', attackFacing: -1, up: 'beetle-up', down: 'beetle-down', ko: 'beetle-ko' },
 };
 
 const SPRITES = new Map<SpeciesId, Sprite[]>(); // portraits (wolves: 2)
@@ -538,18 +538,18 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
       ...species.map(async (sp) => {
         const files = ANIM_FILES[sp];
         try {
-          const [runImg, atkImg, swatImg, upImg, downImg] = await Promise.all([
+          const [runImg, atkImg, swatImg, upImg, downImg, koImg] = await Promise.all([
             loadImage(`${baseUrl}anim/${files.run}.webp`),
             loadImage(`${baseUrl}anim/${files.attack}.webp`),
             files.swat ? loadImage(`${baseUrl}anim/${files.swat}.webp`) : Promise.resolve(null),
             loadImage(`${baseUrl}anim/${files.up}.webp`).catch(() => null),
             loadImage(`${baseUrl}anim/${files.down}.webp`).catch(() => null),
+            loadImage(`${baseUrl}anim/${files.ko}.webp`).catch(() => null),
           ]);
           // The run set defines the species' reference scale; attack/swat
           // sets are area-matched against it so the animal never changes
           // size when it switches animation.
           const runFrames = splitStrip(runImg, 4);
-          if (files.runReverse) runFrames.reverse();
           const runH = Math.max(...runFrames.map((f) => f.height));
           const runArea = meanContentArea(runFrames);
           const crossH = (frames: HTMLCanvasElement[]): number =>
@@ -570,6 +570,13 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           if (downImg) {
             const downFrames = splitStrip(downImg, 4);
             set.down = toFrameSprites(downFrames, 0.03, crossH(downFrames));
+          }
+          if (koImg) {
+            const koFrames = splitStrip(koImg, 4);
+            // KO frames must NOT share a logical height: each pose is
+            // anchored at its own bottom so the body visibly sinks. But they
+            // do share the run set's scale via per-frame area matching.
+            set.ko = koFrames.map((f) => toFrameSprites([f], 0.02, crossH([f]))[0]);
           }
           ANIMS.set(sp, set);
         } catch (err) {

@@ -584,7 +584,11 @@ export class DuelStage {
   }
 
   private fighterPx(f: FighterVis): { x: number; y: number } {
-    const fly = FLYERS.has(f.species) ? -this.H * 0.1 : 0;
+    let fly = FLYERS.has(f.species) ? -this.H * 0.1 : 0;
+    // A KO'd flyer drops out of its hover onto the ground.
+    if (fly !== 0 && (f.mode === 'ko' || f.mode === 'gone')) {
+      fly *= 1 - clamp01(f.animT / 0.55);
+    }
     return { x: this.W * f.homeX + f.x, y: this.groundY() + f.y + fly };
   }
 
@@ -904,13 +908,20 @@ export class DuelStage {
           this.onImpact?.(F.species, false, true);
           this.onEventApplied?.(ev);
         });
-        // The defeated champion SLUMPS: knees buckle and the body sinks
-        // straight down into itself with a slight head bow — no stiff
-        // tip-over. A dust puff answers the moment the body settles.
-        const k = ph(t, 0.1, 0.85);
-        F.rot = F.face * easeOut(k) * 0.22;
-        F.squash = easeOut(k) * 0.52;
-        F.y = easeIn(k) * this.H * 0.012;
+        // The defeated champion COLLAPSES via painted KO frames — legs
+        // buckle, chest drops, body lies down (never deflates). Species
+        // without a KO sheet fall back to a gentle procedural slump.
+        const hasKo = !!getAnim(F.species)?.ko?.length;
+        if (hasKo) {
+          F.rot = 0;
+          F.squash = 0;
+          F.y = 0;
+        } else {
+          const k = ph(t, 0.1, 0.85);
+          F.rot = F.face * easeOut(k) * 0.2;
+          F.squash = easeOut(k) * 0.3;
+          F.y = easeIn(k) * this.H * 0.012;
+        }
         this.fire(step, 'settle', 0.8, () => {
           const p = this.fighterPx(F);
           this.dustBurst(p.x, this.groundY(), 10);
@@ -1233,6 +1244,17 @@ export class DuelStage {
     if (!anim || anim.run.length === 0) {
       const p = getSprite(f.species);
       return p ? { a: p, b: null, mix: 0 } : null;
+    }
+    if (f.mode === 'ko' && anim.ko && anim.ko.length > 0) {
+      // Painted collapse: sweep through the KO frames over ~1.1s with a
+      // short crossfade between poses, then hold the final lying pose.
+      const n = anim.ko.length;
+      const k = clamp01((f.animT - 0.06) / 1.05) * (n - 1);
+      const i = Math.min(n - 1, Math.floor(k));
+      const j = Math.min(n - 1, i + 1);
+      const frac = k - i;
+      const mix = frac * frac * (3 - 2 * frac);
+      return { a: anim.ko[i], b: j > i && mix > 0.02 ? anim.ko[j] : null, mix };
     }
     if (f.mode === 'attack') {
       // Beetles only show the acid-spray art during their special — normal
