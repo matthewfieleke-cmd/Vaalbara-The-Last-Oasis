@@ -793,40 +793,39 @@ export class Renderer {
     const jx = flash > 0 ? (Math.random() - 0.5) * flash * 26 : 0;
     const t = this.time;
 
+    // Same depth perspective the units obey: the far obelisk renders
+    // smaller and the near one larger — which also keeps the far tower's
+    // top clear of the HUD.
+    const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
+    const dsc = 0.88 + depthK * 0.24;
+
+    // Deterministic per-owner jitter — the crag is rugged but never crawls.
+    let rs = ob.owner === 0 ? 0x9e3779b9 : 0x1c8f4a2d;
+    const rand = (): number => {
+      rs ^= rs << 13; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0;
+      return (rs & 0xffff) / 0x10000;
+    };
+
     ctx.save();
     ctx.translate(p.x + jx, p.y);
+    ctx.scale(dsc, dsc);
 
     // Ground shadow.
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 0.92, u * 0.34, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, u * 0.1, u * 0.95, u * 0.35, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Runic ground circle: a slowly counter-rotating double ring with glyph
-    // ticks — the tower's power is anchored into the earth itself.
+    // Claim ring: one slow ember-lit ring scribed into the rock floor.
     ctx.save();
-    ctx.strokeStyle = `hsla(${hue} 85% 58% / ${0.4 + Math.sin(t * 1.8) * 0.12})`;
-    ctx.lineWidth = 2.2;
-    ctx.setLineDash([u * 0.14, u * 0.1]);
-    ctx.lineDashOffset = t * u * 0.12;
+    ctx.strokeStyle = `hsla(${hue} 80% 55% / ${0.3 + Math.sin(t * 1.8) * 0.1})`;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([u * 0.16, u * 0.11]);
+    ctx.lineDashOffset = t * u * 0.1;
     ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 1.02, u * 0.4, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.lineWidth = 1.2;
-    ctx.setLineDash([u * 0.05, u * 0.13]);
-    ctx.lineDashOffset = -t * u * 0.2;
-    ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 0.82, u * 0.31, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, u * 0.1, u * 1.0, u * 0.38, 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    // Glyph ticks marching around the outer ring.
-    for (let gI = 0; gI < 6; gI++) {
-      const a = t * 0.5 + (gI / 6) * Math.PI * 2;
-      const gx = Math.cos(a) * u * 1.02;
-      const gy = u * 0.1 + Math.sin(a) * u * 0.4;
-      ctx.fillStyle = `hsla(${hue} 95% 70% / ${0.35 + Math.sin(t * 3 + gI * 2.1) * 0.2})`;
-      ctx.fillRect(gx - 1.6, gy - u * 0.045, 3.2, u * 0.09);
-    }
     ctx.restore();
 
     if (ob.hp <= 0) {
@@ -847,181 +846,189 @@ export class Renderer {
       return;
     }
 
-    const H = u * 1.85;               // taller: this is a monument, not a post
-    const glow = 0.55 + Math.sin(t * 2.4 + (mine ? 0 : 2)) * 0.2;
+    const H = u * 1.52;
+    const glow = 0.55 + Math.sin(t * 2.2 + (mine ? 0 : 2)) * 0.2;
+    const baseY = -u * 0.18;
+    const apexY = baseY - H;
 
-    // Aura: the tower radiates its owner's power into the air behind it.
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const aura = ctx.createRadialGradient(0, -H * 0.5, u * 0.1, 0, -H * 0.5, u * 1.35);
-    aura.addColorStop(0, `hsla(${hue} 90% 55% / ${0.10 + glow * 0.06})`);
-    aura.addColorStop(1, `hsla(${hue} 90% 55% / 0)`);
-    ctx.fillStyle = aura;
-    ctx.fillRect(-u * 1.4, -H - u * 1.2, u * 2.8, H + u * 1.6);
-    ctx.restore();
+    // ---- The crag: rugged stacked basalt. Each of the N strata is its own
+    // slab with a stepped, ledged silhouette (per-slab lateral drift plus
+    // midpoint jags), so the tower reads as ancient piled rock, not a cone.
+    const N = 5;
+    const L: Array<[number, number]> = [];
+    const R: Array<[number, number]> = [];
+    const C: Array<[number, number]> = [];
+    for (let i = 0; i <= N; i++) {
+      const f = i / N;
+      const y = baseY - H * f - (rand() - 0.5) * u * 0.05;
+      // Loose taper with per-level swell: some beds jut wider than the one
+      // below (overhangs), which is what kills the neat cone read.
+      const hw = u * (0.4 - 0.25 * f) * (0.82 + rand() * 0.36);
+      const drift = (rand() - 0.5) * u * 0.12;                // whole-level shift
+      L.push([drift - hw - (rand() - 0.5) * u * 0.1, y]);
+      R.push([drift + hw + (rand() - 0.5) * u * 0.1, y]);
+      C.push([drift + u * 0.05 + (rand() - 0.5) * u * 0.09, y]);
+    }
+    // Broken twin-peak crown: blunt snapped-off spike, lower shoulder right.
+    const peakA: [number, number] = [(L[N][0] + C[N][0]) / 2, apexY - u * (0.13 + rand() * 0.07)];
+    const peakB: [number, number] = [(C[N][0] + R[N][0]) / 2, apexY - u * (0.04 + rand() * 0.07)];
 
-    // Stepped plinth: two beveled stone tiers the monolith rises from.
-    for (const [pw, ph, py] of [[0.62, 0.16, 0], [0.46, 0.14, -0.14]] as const) {
-      const g = ctx.createLinearGradient(-pw * u, 0, pw * u, 0);
-      g.addColorStop(0, 'hsl(256 14% 9%)');
-      g.addColorStop(0.42, 'hsl(252 12% 22%)');
-      g.addColorStop(1, 'hsl(258 16% 7%)');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(-pw * u, (py - ph) * u, pw * u * 2, ph * u * 1.35, u * 0.04);
-      ctx.fill();
-      // Lit top edge.
-      ctx.fillStyle = 'hsla(250 20% 55% / 0.5)';
-      ctx.fillRect(-pw * u + 2, (py - ph) * u, pw * u * 2 - 4, 1.6);
+    // Midpoint jags along each slab's outer edges — chips and ledges.
+    const midL: Array<[number, number]> = [];
+    const midR: Array<[number, number]> = [];
+    for (let i = 0; i < N; i++) {
+      midL.push([
+        (L[i][0] + L[i + 1][0]) / 2 - rand() * u * 0.08,
+        (L[i][1] + L[i + 1][1]) / 2 + (rand() - 0.5) * u * 0.04,
+      ]);
+      midR.push([
+        (R[i][0] + R[i + 1][0]) / 2 + rand() * u * 0.08,
+        (R[i][1] + R[i + 1][1]) / 2 + (rand() - 0.5) * u * 0.04,
+      ]);
     }
 
-    // The monolith: a tapered obsidian shard drawn as TWO faces sharing a
-    // centre arris — front-left catches the light, front-right falls into
-    // shadow — so it reads as a solid, massive 3D block.
-    const baseY = -u * 0.26;
-    const topW = u * 0.15;
-    const botW = u * 0.34;
-    const apexY = baseY - H;
-    const face = (x0: number, x1: number, x2: number, x3: number, lit: boolean) => {
-      const g = ctx.createLinearGradient(Math.min(x0, x1), 0, Math.max(x2, x3), 0);
-      if (lit) {
-        g.addColorStop(0, 'hsl(254 14% 18%)');
-        g.addColorStop(0.5, 'hsl(250 13% 33%)');
-        g.addColorStop(1, 'hsl(252 14% 22%)');
-      } else {
-        g.addColorStop(0, 'hsl(258 16% 11%)');
-        g.addColorStop(1, 'hsl(260 18% 5%)');
-      }
-      ctx.fillStyle = g;
+    const tracePath = (pts: Array<[number, number]>) => {
       ctx.beginPath();
-      ctx.moveTo(x0, apexY);           // top edge left
-      ctx.lineTo(x2, baseY);           // base left
-      ctx.lineTo(x3, baseY);           // base right
-      ctx.lineTo(x1, apexY);           // top edge right
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
       ctx.closePath();
-      ctx.fill();
     };
-    face(-topW, topW * 0.1, -botW, botW * 0.12, true);   // lit front-left face
-    face(topW * 0.1, topW, botW * 0.12, botW, false);    // shadowed right face
-    // The arris (centre edge) catches the crystal light.
-    ctx.strokeStyle = `hsla(${hue} 60% 70% / ${0.2 + glow * 0.2})`;
-    ctx.lineWidth = 1.4;
+    const silhouette: Array<[number, number]> = [];
+    for (let i = 0; i < N; i++) silhouette.push(L[i], midL[i]);
+    silhouette.push(L[N], peakA, C[N], peakB, R[N]);
+    for (let i = N - 1; i >= 0; i--) silhouette.push(midR[i], R[i]);
+
+    // Rough plinth mound the crag erupts from.
+    ctx.fillStyle = 'hsl(255 12% 12%)';
     ctx.beginPath();
-    ctx.moveTo(topW * 0.1, apexY);
-    ctx.lineTo(botW * 0.12, baseY);
-    ctx.stroke();
-    // Beveled capstone.
-    ctx.fillStyle = 'hsl(252 14% 30%)';
+    ctx.ellipse(0, baseY + u * 0.16, u * 0.66, u * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'hsla(250 16% 34% / 0.5)';
     ctx.beginPath();
-    ctx.moveTo(-topW, apexY);
-    ctx.lineTo(0, apexY - u * 0.14);
-    ctx.lineTo(topW, apexY);
-    ctx.closePath();
+    ctx.ellipse(-u * 0.06, baseY + u * 0.1, u * 0.52, u * 0.1, -0.06, 0, Math.PI * 2);
     ctx.fill();
 
-    // Carved runes running down the lit face, each pulsing in sequence —
-    // power travelling up the stone toward the crystal.
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const runeN = 5;
-    for (let rI = 0; rI < runeN; rI++) {
-      const fy = 0.16 + rI * 0.16;                       // 0 top .. 1 bottom
-      const ry = apexY + (baseY - apexY) * fy;
-      const halfW = topW + (botW - topW) * fy;
-      const rx = -halfW * 0.5;
-      const pulse = 0.55 + Math.max(0, Math.sin(t * 2.6 - rI * 0.9)) * 0.45;
-      const a = pulse * (0.45 + frac * 0.5);
-      ctx.strokeStyle = `hsla(${hue} 100% 72% / ${a})`;
-      ctx.lineWidth = Math.max(1.4, u * 0.022);
-      ctx.lineCap = 'round';
-      const s = u * 0.06;
+    // Slab-by-slab fill: every stratum gets its own light so the beds read
+    // as separate stones. Lit front-left face, shadowed right face.
+    for (let i = 0; i < N; i++) {
+      const litL = 20 + rand() * 12;                          // per-slab tone
+      ctx.fillStyle = `hsl(${249 + rand() * 6} ${11 + rand() * 5}% ${litL}%)`;
+      tracePath([L[i], midL[i], L[i + 1], C[i + 1], C[i]]);
+      ctx.fill();
+      ctx.fillStyle = `hsl(${256 + rand() * 6} ${13 + rand() * 6}% ${6 + rand() * 6}%)`;
+      tracePath([C[i], C[i + 1], R[i + 1], midR[i], R[i]]);
+      ctx.fill();
+      // Weathered top ledge of the slab below peeking out.
+      ctx.strokeStyle = `hsla(246 20% ${38 + rand() * 14}% / 0.55)`;
+      ctx.lineWidth = Math.max(1.2, u * 0.018);
       ctx.beginPath();
-      // Small angular glyphs, varied per row.
-      if (rI % 3 === 0) {
-        ctx.moveTo(rx - s, ry + s); ctx.lineTo(rx, ry - s); ctx.lineTo(rx + s, ry + s);
-        ctx.moveTo(rx, ry - s); ctx.lineTo(rx, ry + s * 0.4);
-      } else if (rI % 3 === 1) {
-        ctx.moveTo(rx - s, ry - s); ctx.lineTo(rx + s, ry - s); ctx.lineTo(rx - s, ry + s); ctx.lineTo(rx + s, ry + s);
-      } else {
-        ctx.moveTo(rx, ry - s); ctx.lineTo(rx + s, ry); ctx.lineTo(rx, ry + s); ctx.lineTo(rx - s, ry); ctx.closePath();
-      }
+      ctx.moveTo(L[i][0] + u * 0.02, L[i][1]);
+      ctx.lineTo(C[i][0], C[i][1]);
       ctx.stroke();
     }
-
-    // The heart band: a molten seam of the owner's colour across the stone.
-    const bandY = apexY + (baseY - apexY) * 0.52;
-    ctx.fillStyle = `hsla(${hue} 95% 58% / ${glow * (0.3 + frac * 0.35)})`;
-    const bandHalf = topW + (botW - topW) * 0.52;
-    ctx.beginPath();
-    ctx.roundRect(-bandHalf, bandY - u * 0.045, bandHalf * 2, u * 0.09, u * 0.03);
+    // Crown block.
+    ctx.fillStyle = 'hsl(250 12% 26%)';
+    tracePath([L[N], peakA, C[N]]);
     ctx.fill();
-    ctx.restore();
-
-    // Sky beam: a soft column of light rising off the crystal, breathing.
-    const crysY = apexY - u * 0.42 + Math.sin(t * 1.6 + (mine ? 0 : 3)) * u * 0.05;
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    const beamA = (0.1 + glow * 0.12) * (0.35 + frac * 0.65);
-    const beam = ctx.createLinearGradient(0, crysY, 0, crysY - u * 1.5);
-    beam.addColorStop(0, `hsla(${hue} 95% 68% / ${beamA})`);
-    beam.addColorStop(1, `hsla(${hue} 95% 68% / 0)`);
-    ctx.fillStyle = beam;
-    const bw = u * (0.1 + glow * 0.05);
-    ctx.beginPath();
-    ctx.moveTo(-bw, crysY);
-    ctx.lineTo(-bw * 0.35, crysY - u * 1.5);
-    ctx.lineTo(bw * 0.35, crysY - u * 1.5);
-    ctx.lineTo(bw, crysY);
-    ctx.closePath();
+    ctx.fillStyle = 'hsl(258 15% 9%)';
+    tracePath([C[N], peakB, R[N]]);
     ctx.fill();
 
-    // Crown crystal: a levitating shard slowly turning above the capstone,
-    // with orbiting splinters.
-    const cg = ctx.createRadialGradient(0, crysY, 1, 0, crysY, u * 0.55);
-    cg.addColorStop(0, `hsla(${hue} 100% 78% / ${0.7 * glow})`);
-    cg.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
-    ctx.fillStyle = cg;
-    ctx.beginPath();
-    ctx.arc(0, crysY, u * 0.55, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    const spin = Math.sin(t * 1.3);   // apparent rotation via width scaling
-    const cw = u * 0.13 * (0.35 + Math.abs(spin) * 0.65);
-    const ch = u * 0.26;
-    ctx.fillStyle = `hsl(${hue} 90% ${66 + Math.sin(t * 3) * 8}%)`;
-    ctx.beginPath();
-    ctx.moveTo(0, crysY - ch);
-    ctx.lineTo(cw, crysY);
-    ctx.lineTo(0, crysY + ch);
-    ctx.lineTo(-cw, crysY);
-    ctx.closePath();
-    ctx.fill();
-    // Specular sliver on the crystal.
-    ctx.fillStyle = `hsla(${hue} 100% 92% / 0.85)`;
-    ctx.beginPath();
-    ctx.moveTo(0, crysY - ch * 0.7);
-    ctx.lineTo(cw * 0.3, crysY - ch * 0.1);
-    ctx.lineTo(0, crysY + ch * 0.2);
-    ctx.closePath();
-    ctx.fill();
-    // Orbiting splinters.
-    for (let sI = 0; sI < 3; sI++) {
-      const a = t * 1.7 + (sI / 3) * Math.PI * 2;
-      const ox2 = Math.cos(a) * u * 0.34;
-      const oy2 = Math.sin(a) * u * 0.1;
-      const front = Math.sin(a) > 0;
-      ctx.fillStyle = `hsla(${hue} 95% 74% / ${front ? 0.9 : 0.4})`;
+    // Strata fractures: jagged seams between slabs, with the owner's fire
+    // smouldering deep inside every seam.
+    for (let i = 1; i < N; i++) {
+      const sag = (rand() - 0.5) * u * 0.06;
+      const seam = (off: number, style: string, lw: number) => {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        ctx.moveTo(L[i][0] + u * 0.02, L[i][1] + off);
+        ctx.lineTo(C[i][0] - u * 0.05, C[i][1] + sag + off);
+        ctx.lineTo(C[i][0] + u * 0.03, C[i][1] + sag - u * 0.025 + off);
+        ctx.lineTo(R[i][0] - u * 0.02, R[i][1] + off);
+        ctx.stroke();
+      };
+      seam(0, 'rgba(4,2,8,0.75)', Math.max(1.5, u * 0.026));
+      // Ember light deep inside the seam: a short smoulder around the crack's
+      // heart, not a stripe across the stone. Pulses slowly, independently.
+      const emberA = (0.28 + Math.max(0, Math.sin(t * 1.4 + i * 1.7)) * 0.38) * (0.35 + frac * 0.65);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = `hsla(${hue} 95% 58% / ${emberA})`;
+      ctx.lineWidth = Math.max(1.2, u * 0.018);
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(ox2, crysY + oy2 - u * 0.05);
-      ctx.lineTo(ox2 + u * 0.025, crysY + oy2);
-      ctx.lineTo(ox2, crysY + oy2 + u * 0.05);
-      ctx.lineTo(ox2 - u * 0.025, crysY + oy2);
+      ctx.moveTo((L[i][0] + C[i][0]) * 0.55, (L[i][1] + C[i][1]) / 2 + sag * 0.5 + u * 0.012);
+      ctx.lineTo(C[i][0] - u * 0.05, C[i][1] + sag + u * 0.012);
+      ctx.lineTo(C[i][0] + u * 0.03, C[i][1] + sag - u * 0.013);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Vertical fracture down the shadow face + chipped facets for depth.
+    ctx.strokeStyle = 'rgba(3,2,7,0.55)';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(C[N - 1][0] + u * 0.09, C[N - 1][1]);
+    ctx.lineTo(R[3][0] - u * 0.08, R[3][1] + u * 0.05);
+    ctx.lineTo(R[1][0] - u * 0.05, R[1][1]);
+    ctx.stroke();
+    for (let k = 0; k < 5; k++) {
+      const i = 1 + Math.floor(rand() * (N - 1));
+      const onLit = rand() < 0.5;
+      const bx = onLit ? (L[i][0] + C[i][0]) / 2 : (C[i][0] + R[i][0]) / 2;
+      const by = L[i][1] - u * (0.05 + rand() * 0.12);
+      const s = u * (0.05 + rand() * 0.07);
+      ctx.fillStyle = onLit ? 'hsla(248 14% 44% / 0.5)' : 'hsla(260 18% 4% / 0.6)';
+      ctx.beginPath();
+      ctx.moveTo(bx, by - s);
+      ctx.lineTo(bx + s * (0.6 + rand() * 0.6), by + s * 0.4);
+      ctx.lineTo(bx - s * (0.5 + rand() * 0.6), by + s * (0.3 + rand() * 0.4));
       ctx.closePath();
       ctx.fill();
     }
-    // Rising motes of power.
-    if (Math.random() < 0.1) {
-      this.burst(p.x + (Math.random() - 0.5) * u * 0.5, p.y - Math.random() * H, 1, 'mote', hue, 0.7);
+    // Dark outline around the whole crag so it separates from the field.
+    ctx.strokeStyle = 'rgba(2,1,5,0.6)';
+    ctx.lineWidth = 1.6;
+    tracePath(silhouette);
+    ctx.stroke();
+
+    // The heart ember: one deep gash mid-height where the mountain's fire
+    // burns brightest — the only "magic" left is geology.
+    const hy2 = baseY - H * 0.5;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const heart = ctx.createRadialGradient(u * 0.01, hy2, 1, u * 0.01, hy2, u * 0.3);
+    heart.addColorStop(0, `hsla(${hue} 95% 60% / ${glow * 0.24 * (0.3 + frac * 0.7)})`);
+    heart.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
+    ctx.fillStyle = heart;
+    ctx.fillRect(-u * 0.35, hy2 - u * 0.32, u * 0.72, u * 0.64);
+    ctx.restore();
+
+    // Fallen boulders scattered around the base.
+    for (let k = 0; k < 5; k++) {
+      const bx = (rand() - 0.5) * u * 1.5;
+      const by = u * 0.02 + rand() * u * 0.16;
+      const br = u * (0.07 + rand() * 0.09);
+      ctx.fillStyle = `hsl(${252 + rand() * 8} ${11 + rand() * 5}% ${10 + rand() * 8}%)`;
+      ctx.beginPath();
+      ctx.moveTo(bx - br, by);
+      ctx.lineTo(bx - br * 0.4, by - br * (0.5 + rand() * 0.4));
+      ctx.lineTo(bx + br * 0.5, by - br * (0.4 + rand() * 0.4));
+      ctx.lineTo(bx + br, by + br * 0.15);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = 'hsla(248 16% 40% / 0.4)';
+      ctx.beginPath();
+      ctx.moveTo(bx - br * 0.4, by - br * 0.75);
+      ctx.lineTo(bx + br * 0.45, by - br * 0.6);
+      ctx.lineTo(bx + br * 0.1, by - br * 0.35);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // The rare ember drifting off the seams.
+    if (Math.random() < 0.06) {
+      this.burst(p.x + (Math.random() - 0.5) * u * 0.4 * dsc, p.y - Math.random() * H * 0.8 * dsc, 1, 'mote', hue, 0.6);
     }
 
     // Battle damage: cracks spider out as HP falls, glowing at low health.
@@ -1047,27 +1054,22 @@ export class Renderer {
       }
     }
 
-    // Hit flash.
+    // Hit flash lights the whole crag.
     if (flash > 0) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = Math.min(1, flash / 0.24) * 0.55;
       ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.moveTo(-topW, apexY);
-      ctx.lineTo(topW, apexY);
-      ctx.lineTo(botW, baseY);
-      ctx.lineTo(-botW, baseY);
-      ctx.closePath();
+      tracePath(silhouette);
       ctx.fill();
       ctx.restore();
     }
 
     // Objective HP bar — bigger than unit bars; this IS the scoreboard.
-    // Sits above the levitating crown crystal.
+    // Sits just above the broken crown.
     const hpw = u * 1.9;
     const hph = 7;
-    const hy = -H - u * 1.12;
+    const hy = peakA[1] - u * 0.22;
     ctx.fillStyle = 'rgba(4,3,8,0.82)';
     ctx.beginPath();
     ctx.roundRect(-hpw / 2 - 1.5, hy - 1.5, hpw + 3, hph + 3, 4.5);

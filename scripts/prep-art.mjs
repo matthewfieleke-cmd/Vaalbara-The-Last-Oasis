@@ -208,10 +208,69 @@ async function convertSheet(src, out, maxW) {
   console.log(`${out}  ${width}px  ${kb} KB${notes ? `  (${notes})` : ''}`);
 }
 
+/* Intro parade cycles are painted as 2x4 GRIDS (8 frames — twice the poses
+ * of the battle sheets, for film-smooth crossfades in the cinematic). Split
+ * the grid at its horizontal magenta rule, lay the two rows side by side
+ * with a fresh separator, and push the result through the same strip
+ * sanitizer as every other sheet. */
+async function convertGridSheet(src, out, maxW) {
+  const { data, info } = await sharp(src).ensureAlpha().raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width: w, height: h } = info;
+  const isMag = (i) =>
+    data[i] > 120 && data[i + 2] > 120
+    && data[i + 1] < data[i] * 0.85 && data[i + 1] < data[i + 2] * 0.85;
+  const rowMag = (y) => {
+    let n = 0, t = 0;
+    for (let x = 0; x < w; x += 3) {
+      if (isMag((y * w + x) * 4)) n++;
+      t++;
+    }
+    return n / t;
+  };
+  // The row separator: a horizontal magenta band near mid-height.
+  let bandA = -1, bandB = -1;
+  for (let y = Math.floor(h * 0.3); y < h * 0.7; y++) {
+    if (rowMag(y) > 0.3) {
+      bandA = y;
+      let y2 = y;
+      while (y2 < h - 1 && rowMag(y2 + 1) > 0.1) y2++;
+      bandB = y2;
+      break;
+    }
+  }
+  const halves = bandA >= 0
+    ? [[0, bandA - 1], [bandB + 2, h]]
+    : [[0, Math.floor(h / 2)], [Math.ceil(h / 2), h]];
+  const raw = sharp(data, { raw: { width: w, height: h, channels: 4 } });
+  const rowH = Math.min(halves[0][1] - halves[0][0], halves[1][1] - halves[1][0]);
+  const parts = [];
+  for (const [y0, y1] of halves) {
+    parts.push(await raw.clone()
+      .extract({ left: 0, top: y0, width: w, height: y1 - y0 })
+      .resize({ height: rowH })
+      .png().toBuffer());
+  }
+  const rule = 8;
+  const joined = await sharp({
+    create: { width: w * 2 + rule, height: rowH, channels: 4, background: '#ffffff' },
+  }).composite([
+    { input: parts[0], left: 0, top: 0 },
+    { input: { create: { width: rule, height: rowH, channels: 4, background: '#ff00ff' } }, left: w, top: 0 },
+    { input: parts[1], left: w + rule, top: 0 },
+  ]).png().toBuffer();
+  const tmp = `${out}.strip.png`;
+  fs.writeFileSync(tmp, joined);
+  await convertSheet(tmp, out, maxW);
+  fs.unlinkSync(tmp);
+}
+
 for (const [src, out, w] of portraits) await convert(src, out, w);
 for (const [src, out, w] of arenas) await convert(src, out, w);
 for (const f of animSheets) {
-  await convertSheet(`art-src/anim/${f}`, `public/art/anim/${f.replace('.png', '.webp')}`, 1280);
+  const out = `public/art/anim/${f.replace('.png', '.webp')}`;
+  if (f.includes('-intro')) await convertGridSheet(`art-src/anim/${f}`, out, 2400);
+  else await convertSheet(`art-src/anim/${f}`, out, 1280);
 }
 
 /* iOS Home Screen + PWA icons from the dedicated app icon painting. */

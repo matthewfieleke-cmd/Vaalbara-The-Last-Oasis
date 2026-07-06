@@ -37,6 +37,9 @@ export interface AnimSet {
   down?: Sprite[];
   /** Duels defeat: 4-frame side-profile collapse (standing -> lying down). */
   ko?: Sprite[];
+  /** Cinematic parade: 8-frame slow gait cycle — twice the poses of the
+   *  battle run, for film-smooth crossfades in the intro. */
+  intro?: Sprite[];
 }
 
 /* ------------------------------------------------------------------------ */
@@ -280,6 +283,36 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
     if (reach[i] === 1) px[i * 4 + 3] = 0;
   }
 
+  // ENCLOSED PAPER POCKETS — legs crossing under a belly can seal a pocket
+  // of raw paper off from the border (the wolf intro's belly gap), and the
+  // border fill can never reach it, so it survives as a solid white blob.
+  // Any unreached DEEP region of meaningful size passes the same strict
+  // paper gate the fill propagates through — genuine pale fur is shaded and
+  // fails it — so it is paper: clear it. Tiny glints stay.
+  const minPocket = Math.max(120, Math.round(w * h * 0.002));
+  for (let s = 0; s < w * h; s++) {
+    if (!deep[s] || reach[s]) continue;
+    const comp: number[] = [s];
+    reach[s] = 3;
+    for (let k = 0; k < comp.length; k++) {
+      const cur = comp[k];
+      const cy = (cur / w) | 0;
+      const cxp = cur % w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = cxp + dx;
+        const ny = cy + dy;
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        const ni = ny * w + nx;
+        if (reach[ni] || !deep[ni]) continue;
+        reach[ni] = 3;
+        comp.push(ni);
+      }
+    }
+    if (comp.length >= minPocket) {
+      for (const i of comp) px[i * 4 + 3] = 0;
+    }
+  }
+
   // HALO EROSION — kill the white ghost around legs and bellies.
   // The bounded dilation above only eats pixels the fill FLAGGED as bg-like;
   // anti-aliased paper blends (e.g. 220-grey between white paper and a dark
@@ -499,6 +532,53 @@ function splitStrip(img: HTMLImageElement, expected: number): HTMLCanvasElement[
   return panels.map((p) => autoCrop(keyBackground(p)));
 }
 
+/** Alpha-weighted content centroid — the visual centre of mass. */
+function contentCentroid(cv: HTMLCanvasElement): { x: number; y: number } {
+  const data = cv.getContext('2d', { willReadFrequently: true })!
+    .getImageData(0, 0, cv.width, cv.height).data;
+  let sx = 0, sy = 0, sw = 0;
+  for (let y = 0; y < cv.height; y += 2) {
+    for (let x = 0; x < cv.width; x += 2) {
+      const a = data[(y * cv.width + x) * 4 + 3];
+      if (a > 16) {
+        sx += x * a;
+        sy += y * a;
+        sw += a;
+      }
+    }
+  }
+  return sw > 0 ? { x: sx / sw, y: sy / sw } : { x: cv.width / 2, y: cv.height / 2 };
+}
+
+/** Vertical centre of the ink in the rightmost content band — for a bird
+ *  drawn facing right this is the HEAD, the one part of a flyer that should
+ *  hold still while the wings sweep around it. */
+function rightBandCenterY(cv: HTMLCanvasElement): number {
+  const data = cv.getContext('2d', { willReadFrequently: true })!
+    .getImageData(0, 0, cv.width, cv.height).data;
+  let maxX = 0;
+  for (let y = 0; y < cv.height; y += 2) {
+    for (let x = cv.width - 1; x > maxX; x--) {
+      if (data[(y * cv.width + x) * 4 + 3] > 16) {
+        if (x > maxX) maxX = x;
+        break;
+      }
+    }
+  }
+  const x0 = Math.max(0, Math.round(maxX - cv.width * 0.1));
+  let sy = 0, sw = 0;
+  for (let y = 0; y < cv.height; y++) {
+    for (let x = x0; x <= maxX; x += 2) {
+      const a = data[(y * cv.width + x) * 4 + 3];
+      if (a > 16) {
+        sy += y * a;
+        sw += a;
+      }
+    }
+  }
+  return sw > 0 ? sy / sw : cv.height / 2;
+}
+
 /** Mean opaque-pixel area of a frame set — a pose-invariant proxy for the
  *  animal's drawn scale (a rearing pose is taller but covers ~the same ink). */
 function meanContentArea(frames: HTMLCanvasElement[]): number {
@@ -581,13 +661,14 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
       ...species.map(async (sp) => {
         const files = ANIM_FILES[sp];
         try {
-          const [runImg, atkImg, swatImg, upImg, downImg, koImg] = await Promise.all([
+          const [runImg, atkImg, swatImg, upImg, downImg, koImg, introImg] = await Promise.all([
             loadImage(`${baseUrl}anim/${files.run}.webp`),
             loadImage(`${baseUrl}anim/${files.attack}.webp`),
             files.swat ? loadImage(`${baseUrl}anim/${files.swat}.webp`) : Promise.resolve(null),
             loadImage(`${baseUrl}anim/${files.up}.webp`).catch(() => null),
             loadImage(`${baseUrl}anim/${files.down}.webp`).catch(() => null),
             loadImage(`${baseUrl}anim/${files.ko}.webp`).catch(() => null),
+            loadImage(`${baseUrl}anim/${files.run.split('-')[0]}-intro.webp`).catch(() => null),
           ]);
           // The run set defines the species' reference scale; attack/swat
           // sets are area-matched against it so the animal never changes
@@ -613,6 +694,29 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           if (downImg) {
             const downFrames = splitStrip(downImg, 4);
             set.down = toFrameSprites(downFrames, 0.03, crossH(downFrames));
+          }
+          if (introImg) {
+            const introFrames = splitStrip(introImg, 8);
+            // Intro frames are only ever shown alone (the cinematic), so
+            // they normalise against their own tallest frame.
+            set.intro = toFrameSprites(introFrames);
+            // Flyers must NOT be bottom-anchored: the crop bottom is talons
+            // on one frame and a downswept wingtip on the next, so the body
+            // would leap between frames and the crossfade would double it.
+            // Pin the eagle by its head (the still point of a wingbeat) and
+            // the bee swarm by its centre of mass.
+            if (sp === 'eagle') {
+              for (const s of set.intro) {
+                s.anchorX = s.canvas.width * 0.82;
+                s.anchorY = rightBandCenterY(s.canvas);
+              }
+            } else if (sp === 'bees') {
+              for (const s of set.intro) {
+                const c = contentCentroid(s.canvas);
+                s.anchorX = c.x;
+                s.anchorY = c.y;
+              }
+            }
           }
           if (koImg) {
             const koFrames = splitStrip(koImg, 4);
