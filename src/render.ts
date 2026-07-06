@@ -103,6 +103,8 @@ interface DisplayUnit {
   /** Directional view with hysteresis — Clash-style marching art. */
   dir: ViewDir;
   dirHold: number;
+  /** Water immersion 0–1: how deep the legs sit below the pond surface. */
+  wet: number;
   atk?: AttackAnim;
   jig?: Jiggle;
 }
@@ -1139,18 +1141,29 @@ export class Renderer {
           // theirs toward it.
           dir: u.owner === this.localSeat ? 'up' : 'down',
           dirHold: 0,
+          wet: 0,
         };
         this.display.set(u.id, d);
       }
       d.age += dt;
 
-      // CR-style constant-velocity interpolation across the tick window:
-      // px,py -> x,y at the exact sim pace, so motion glides with zero
-      // rubber-banding. Teleports (spawn repositions) snap via the same path.
+      // CR-style constant-velocity interpolation across the tick window
+      // (px,py -> x,y at the exact sim pace), then a light exponential
+      // smoothing pass on top: per-tick steering corrections stop reading
+      // as micro-jerks and paths round off into continuous curves.
       // Uses the render clock so hit-stop freezes motion too.
       const tickK = clamp((this.tickClock * 1000) / TICK_MS, 0, 1);
-      d.dx = lerp(u.px, u.x, tickK);
-      d.dy = lerp(u.py, u.y, tickK);
+      const wantX = lerp(u.px, u.x, tickK);
+      const wantY = lerp(u.py, u.y, tickK);
+      if (Math.hypot(wantX - d.dx, wantY - d.dy) > 1.6) {
+        // Teleports (spawn repositions, corrections) snap.
+        d.dx = wantX;
+        d.dy = wantY;
+      } else {
+        const sk = 1 - Math.exp(-dt * 13);
+        d.dx += (wantX - d.dx) * sk;
+        d.dy += (wantY - d.dy) * sk;
+      }
       const stepX = u.x - u.px;
       const stepY = u.y - u.py;
       const stepLen = Math.hypot(stepX, stepY);
@@ -1244,6 +1257,25 @@ export class Renderer {
 
       const p = this.worldToScreen(d.dx, d.dy);
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
+
+      // Pond immersion. Walking animals wading into the oasis pond sink:
+      // shallow rim wets the paws, and the deeper the water (toward the
+      // pond's centre) the further the legs disappear below the surface.
+      // The depth value eases so shorelines never pop.
+      const world: WorldId = st.phase === 'oasis' || st.phase === 'ended' ? 'oasis' : 'basalt';
+      let wetTarget = 0;
+      if (!flying && world === 'oasis') {
+        const c = cellAt(world, d.dx, d.dy);
+        if (c === CELL.SHALLOW || c === CELL.DEEP) {
+          const centerness = clamp(
+            1 - Math.hypot(d.dx - WORLD_W / 2, d.dy - WORLD_H / 2) / 2.6, 0, 1,
+          );
+          wetTarget = (c === CELL.DEEP ? 0.62 : 0.3) + centerness * 0.38;
+        }
+      }
+      const wasWet = d.wet > 0.06;
+      d.wet += (wetTarget - d.wet) * clamp(dt * 4.5, 0, 1);
+      const isWet = d.wet > 0.06;
       // Clash-style depth: actors shrink slightly toward the far end of the
       // field and grow toward the near edge, selling the 3/4 camera.
       const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
@@ -1253,6 +1285,15 @@ export class Renderer {
       const popT = clamp(d.age / 0.45, 0, 1);
       const pb = popT - 1;
       const pop = 1 + 2.70158 * pb * pb * pb + 1.70158 * pb * pb;
+
+      // Entry splash: the moment paws break the surface, water leaps.
+      if (isWet && !wasWet && wetTarget > 0) {
+        const wl = p.y + this.unit * 0.13;
+        this.burst(p.x, wl, 12, 'spark', 197, 1.15);
+        this.burst(p.x, wl, 5, 'bubble', 192, 0.8);
+        this.burst(p.x, wl, 2, 'ripple', 195, 0.6);
+        this.burst(p.x, wl - 2, 4, 'mist', 195, 0.9);
+      }
 
       const stealthAlpha = u.stealthed ? (u.owner === this.localSeat ? 0.45 : 0.08) : 1;
       const mineUnit = u.owner === this.localSeat;
@@ -1268,7 +1309,8 @@ export class Renderer {
       ctx.ellipse(p.x, p.y + this.unit * 0.14, s * 0.75 * pop, s * 0.28 * pop, 0, 0, Math.PI * 2);
       ctx.stroke();
       const stride = moving && !flying ? Math.abs(Math.sin(d.runPhase * Math.PI * 0.5)) : 0;
-      ctx.fillStyle = `rgba(0,0,0,${flying ? 0.24 : 0.36 + stride * 0.06})`;
+      // In water the contact shadow gives way to the surface disturbance.
+      ctx.fillStyle = `rgba(0,0,0,${(flying ? 0.24 : 0.36 + stride * 0.06) * (1 - d.wet * 0.75)})`;
       ctx.beginPath();
       ctx.ellipse(
         p.x, p.y + this.unit * 0.15,
@@ -1277,17 +1319,22 @@ export class Renderer {
       );
       ctx.fill();
 
-      // Dust kicked up at the feet while running — the ground answers the
-      // stride, which sells actual contact (grey ash on basalt, green-brown
-      // scuff in the oasis).
+      // The ground answers the stride, which sells actual contact: dry land
+      // kicks up dust (grey ash on basalt, green-brown scuff in the oasis);
+      // wading throws droplets and drags ripple rings off each step.
       if (moving && !flying && Math.random() < 0.35) {
-        const world = st.phase === 'oasis' || st.phase === 'transition' ? 'oasis' : 'basalt';
         const back = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
-        this.burst(
-          p.x - back * s * 0.4 + (Math.random() - 0.5) * s * 0.3,
-          p.y + this.unit * 0.12,
-          1, 'ash', world === 'basalt' ? 30 : 95, 0.32,
-        );
+        const fx = p.x - back * s * 0.4 + (Math.random() - 0.5) * s * 0.3;
+        if (isWet) {
+          this.burst(fx, p.y + this.unit * 0.13, 1, 'spark', 197, 0.45 + d.wet * 0.4);
+          if (Math.random() < 0.5) this.burst(fx, p.y + this.unit * 0.13, 1, 'ripple', 195, 0.5);
+          if (Math.random() < 0.25) this.burst(fx, p.y + this.unit * 0.12, 1, 'bubble', 192, 0.5);
+        } else {
+          this.burst(fx, p.y + this.unit * 0.12, 1, 'ash', world === 'basalt' ? 30 : 95, 0.32);
+        }
+      } else if (isWet && !flying && Math.random() < 0.04) {
+        // Even standing still, the pond laps gently around the body.
+        this.burst(p.x + (Math.random() - 0.5) * s * 0.5, p.y + this.unit * 0.13, 1, 'ripple', 195, 0.4);
       }
 
       const framePair = this.pickFrames(u.species, d, moving, flying);
@@ -1306,13 +1353,19 @@ export class Renderer {
       ac.clearRect(0, 0, size, size);
       if (frame && framePair) {
         const targetH = spriteHeight(s, u.species, stats.colossal, stats.heavy);
+        // Wading: the body settles below the surface plane in proportion to
+        // the water depth (with a slow buoyant bob), and everything under
+        // the waterline is cut away — the pond itself hides the legs.
+        const sinkPx = d.wet > 0.01
+          ? d.wet * targetH * 0.24 + Math.sin(this.time * 2.6 + u.id * 1.3) * d.wet * s * 0.03
+          : 0;
         const drawFrame = (f: Sprite, alpha: number) => {
           const scale = targetH / f.h;
           ac.globalAlpha = alpha;
           ac.drawImage(
             f.canvas,
             pad - f.anchorX * scale,
-            pad + s * 0.55 - f.anchorY * scale,
+            pad + s * 0.55 - f.anchorY * scale + sinkPx,
             f.canvas.width * scale,
             f.canvas.height * scale,
           );
@@ -1324,6 +1377,10 @@ export class Renderer {
           drawFrame(framePair.b, framePair.mix);
         } else {
           drawFrame(framePair.a, 1);
+        }
+        if (sinkPx > 0.5) {
+          const waterY = Math.round(pad + s * 0.55) + 1;
+          ac.clearRect(0, waterY, size, size - waterY);
         }
         ac.globalAlpha = 1;
       } else {
@@ -1344,7 +1401,10 @@ export class Renderer {
         tc.fillRect(0, 0, size, size);
       }
 
-      ctx.translate(p.x, p.y + hover - s * 0.55);
+      // Ground units plant their feet at the shadow's centre — the sprite's
+      // bottom anchor lands on the contact ellipse, never floating above it.
+      const groundDrop = flying ? 0 : this.unit * 0.13;
+      ctx.translate(p.x, p.y + hover - s * 0.55 + groundDrop);
 
       const view: ViewDir = framePair?.view ?? 'side';
 
@@ -1434,6 +1494,36 @@ export class Renderer {
         ctx.globalAlpha = stealthAlpha;
       }
       ctx.restore();
+
+      // Waterline: a bright foam collar hugging the body where it meets the
+      // surface, wobbling with the wading motion, plus a soft cool sheen
+      // just below so the submerged legs read as UNDER the water.
+      if (isWet && !flying) {
+        const wl = p.y + this.unit * 0.13;
+        const bodyW = s * (0.5 + d.wet * 0.22);
+        const wob = Math.sin(this.time * 5.2 + u.id * 2.1) * s * 0.02
+          + (moving ? Math.sin(d.runPhase * Math.PI) * s * 0.025 : 0);
+        ctx.save();
+        ctx.globalAlpha = stealthAlpha;
+        const sheen = ctx.createRadialGradient(p.x, wl + 2, 1, p.x, wl + 2, bodyW * 1.3);
+        sheen.addColorStop(0, `hsla(192 70% 62% / ${0.16 + d.wet * 0.1})`);
+        sheen.addColorStop(1, 'hsla(195 70% 55% / 0)');
+        ctx.fillStyle = sheen;
+        ctx.beginPath();
+        ctx.ellipse(p.x, wl + 2, bodyW * 1.3, bodyW * 0.42, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = `hsla(190 60% 92% / ${0.4 + d.wet * 0.25})`;
+        ctx.lineWidth = 1.6 + d.wet;
+        ctx.beginPath();
+        ctx.ellipse(p.x, wl + wob * 0.4, bodyW + wob, (bodyW + wob) * 0.3, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = `hsla(190 55% 85% / ${0.2 + d.wet * 0.15})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.ellipse(p.x, wl + 1.5 - wob * 0.4, (bodyW + wob) * 1.28, (bodyW + wob) * 0.36, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       // Status FX.
       if (u.buffs.burnStacks > 0 && Math.random() < 0.3) {
