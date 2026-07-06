@@ -796,95 +796,250 @@ export class Renderer {
     ctx.save();
     ctx.translate(p.x + jx, p.y);
 
-    // Ground shadow + claim ring.
-    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    // Ground shadow.
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 0.78, u * 0.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, u * 0.1, u * 0.92, u * 0.34, 0, 0, Math.PI * 2);
     ctx.fill();
+
+    // Runic ground circle: a slowly counter-rotating double ring with glyph
+    // ticks — the tower's power is anchored into the earth itself.
+    ctx.save();
     ctx.strokeStyle = `hsla(${hue} 85% 58% / ${0.4 + Math.sin(t * 1.8) * 0.12})`;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.2;
+    ctx.setLineDash([u * 0.14, u * 0.1]);
+    ctx.lineDashOffset = t * u * 0.12;
     ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 0.88, u * 0.34, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, u * 0.1, u * 1.02, u * 0.4, 0, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([u * 0.05, u * 0.13]);
+    ctx.lineDashOffset = -t * u * 0.2;
+    ctx.beginPath();
+    ctx.ellipse(0, u * 0.1, u * 0.82, u * 0.31, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Glyph ticks marching around the outer ring.
+    for (let gI = 0; gI < 6; gI++) {
+      const a = t * 0.5 + (gI / 6) * Math.PI * 2;
+      const gx = Math.cos(a) * u * 1.02;
+      const gy = u * 0.1 + Math.sin(a) * u * 0.4;
+      ctx.fillStyle = `hsla(${hue} 95% 70% / ${0.35 + Math.sin(t * 3 + gI * 2.1) * 0.2})`;
+      ctx.fillRect(gx - 1.6, gy - u * 0.045, 3.2, u * 0.09);
+    }
+    ctx.restore();
 
     if (ob.hp <= 0) {
-      // Rubble: the broken tower.
+      // Rubble: the broken tower, its power bleeding out as a dying glow.
       ctx.fillStyle = 'hsl(255 10% 16%)';
       for (const [rx, ry, rs] of [[-0.3, 0, 0.3], [0.25, 0.02, 0.26], [0, -0.14, 0.34], [-0.05, 0.08, 0.2]] as const) {
         ctx.beginPath();
         ctx.ellipse(rx * u, ry * u, rs * u, rs * u * 0.6, rx * 2, 0, Math.PI * 2);
         ctx.fill();
       }
+      const dg = ctx.createRadialGradient(0, -u * 0.1, 2, 0, -u * 0.1, u * 0.7);
+      dg.addColorStop(0, `hsla(${hue} 80% 50% / ${0.12 + Math.sin(t * 1.2) * 0.05})`);
+      dg.addColorStop(1, `hsla(${hue} 80% 50% / 0)`);
+      ctx.fillStyle = dg;
+      ctx.fillRect(-u, -u, u * 2, u * 1.4);
       if (Math.random() < 0.12) this.burst(p.x, p.y - u * 0.2, 1, 'ash', 30, 0.8);
       ctx.restore();
       return;
     }
 
-    // Stacked basalt monolith, narrowing upward.
-    const H = u * 1.55;
-    const slabs: Array<[number, number]> = [[0.62, 0.3], [0.5, 0.26], [0.38, 0.24], [0.24, 0.2]];
-    let yCursor = 0;
-    for (let i = 0; i < slabs.length; i++) {
-      const [w, hh] = slabs[i];
-      const w2 = w * u;
-      const h2 = hh * H;
-      const shade = 16 + i * 3.5;
-      const g = ctx.createLinearGradient(-w2, 0, w2, 0);
-      g.addColorStop(0, `hsl(256 14% ${shade - 5}%)`);
-      g.addColorStop(0.4, `hsl(254 12% ${shade + 5}%)`);
-      g.addColorStop(1, `hsl(258 16% ${shade - 7}%)`);
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(-w2, yCursor - h2, w2 * 2, h2, u * 0.07);
-      ctx.fill();
-      yCursor -= h2;
-    }
+    const H = u * 1.85;               // taller: this is a monument, not a post
+    const glow = 0.55 + Math.sin(t * 2.4 + (mine ? 0 : 2)) * 0.2;
 
-    // Rune band: the tower's heart, in the owner's colour.
-    const bandY = -H * 0.42;
-    const bandGlow = 0.55 + Math.sin(t * 2.4 + (mine ? 0 : 2)) * 0.2;
+    // Aura: the tower radiates its owner's power into the air behind it.
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = `hsla(${hue} 95% 58% / ${bandGlow * (0.35 + frac * 0.4)})`;
-    ctx.beginPath();
-    ctx.roundRect(-u * 0.42, bandY - u * 0.09, u * 0.84, u * 0.18, u * 0.05);
-    ctx.fill();
-    for (let r2 = 0; r2 < 3; r2++) {
-      ctx.fillStyle = `hsla(${hue} 100% 75% / ${bandGlow})`;
-      ctx.fillRect(-u * 0.3 + r2 * u * 0.26, bandY - u * 0.045, u * 0.09, u * 0.09);
-    }
-    // Crown crystal.
-    const cg = ctx.createRadialGradient(0, -H - u * 0.12, 1, 0, -H - u * 0.12, u * 0.4);
-    cg.addColorStop(0, `hsla(${hue} 100% 78% / ${0.85 * bandGlow})`);
-    cg.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
-    ctx.fillStyle = cg;
-    ctx.beginPath();
-    ctx.arc(0, -H - u * 0.12, u * 0.4, 0, Math.PI * 2);
-    ctx.fill();
+    const aura = ctx.createRadialGradient(0, -H * 0.5, u * 0.1, 0, -H * 0.5, u * 1.35);
+    aura.addColorStop(0, `hsla(${hue} 90% 55% / ${0.10 + glow * 0.06})`);
+    aura.addColorStop(1, `hsla(${hue} 90% 55% / 0)`);
+    ctx.fillStyle = aura;
+    ctx.fillRect(-u * 1.4, -H - u * 1.2, u * 2.8, H + u * 1.6);
     ctx.restore();
-    ctx.fillStyle = `hsl(${hue} 90% ${64 + Math.sin(t * 3) * 8}%)`;
+
+    // Stepped plinth: two beveled stone tiers the monolith rises from.
+    for (const [pw, ph, py] of [[0.62, 0.16, 0], [0.46, 0.14, -0.14]] as const) {
+      const g = ctx.createLinearGradient(-pw * u, 0, pw * u, 0);
+      g.addColorStop(0, 'hsl(256 14% 9%)');
+      g.addColorStop(0.42, 'hsl(252 12% 22%)');
+      g.addColorStop(1, 'hsl(258 16% 7%)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.roundRect(-pw * u, (py - ph) * u, pw * u * 2, ph * u * 1.35, u * 0.04);
+      ctx.fill();
+      // Lit top edge.
+      ctx.fillStyle = 'hsla(250 20% 55% / 0.5)';
+      ctx.fillRect(-pw * u + 2, (py - ph) * u, pw * u * 2 - 4, 1.6);
+    }
+
+    // The monolith: a tapered obsidian shard drawn as TWO faces sharing a
+    // centre arris — front-left catches the light, front-right falls into
+    // shadow — so it reads as a solid, massive 3D block.
+    const baseY = -u * 0.26;
+    const topW = u * 0.15;
+    const botW = u * 0.34;
+    const apexY = baseY - H;
+    const face = (x0: number, x1: number, x2: number, x3: number, lit: boolean) => {
+      const g = ctx.createLinearGradient(Math.min(x0, x1), 0, Math.max(x2, x3), 0);
+      if (lit) {
+        g.addColorStop(0, 'hsl(254 14% 18%)');
+        g.addColorStop(0.5, 'hsl(250 13% 33%)');
+        g.addColorStop(1, 'hsl(252 14% 22%)');
+      } else {
+        g.addColorStop(0, 'hsl(258 16% 11%)');
+        g.addColorStop(1, 'hsl(260 18% 5%)');
+      }
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(x0, apexY);           // top edge left
+      ctx.lineTo(x2, baseY);           // base left
+      ctx.lineTo(x3, baseY);           // base right
+      ctx.lineTo(x1, apexY);           // top edge right
+      ctx.closePath();
+      ctx.fill();
+    };
+    face(-topW, topW * 0.1, -botW, botW * 0.12, true);   // lit front-left face
+    face(topW * 0.1, topW, botW * 0.12, botW, false);    // shadowed right face
+    // The arris (centre edge) catches the crystal light.
+    ctx.strokeStyle = `hsla(${hue} 60% 70% / ${0.2 + glow * 0.2})`;
+    ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.moveTo(0, -H - u * 0.26);
-    ctx.lineTo(u * 0.1, -H - u * 0.1);
-    ctx.lineTo(0, -H + u * 0.06);
-    ctx.lineTo(-u * 0.1, -H - u * 0.1);
+    ctx.moveTo(topW * 0.1, apexY);
+    ctx.lineTo(botW * 0.12, baseY);
+    ctx.stroke();
+    // Beveled capstone.
+    ctx.fillStyle = 'hsl(252 14% 30%)';
+    ctx.beginPath();
+    ctx.moveTo(-topW, apexY);
+    ctx.lineTo(0, apexY - u * 0.14);
+    ctx.lineTo(topW, apexY);
     ctx.closePath();
     ctx.fill();
 
-    // Battle damage: cracks spider out as HP falls.
+    // Carved runes running down the lit face, each pulsing in sequence —
+    // power travelling up the stone toward the crystal.
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const runeN = 5;
+    for (let rI = 0; rI < runeN; rI++) {
+      const fy = 0.16 + rI * 0.16;                       // 0 top .. 1 bottom
+      const ry = apexY + (baseY - apexY) * fy;
+      const halfW = topW + (botW - topW) * fy;
+      const rx = -halfW * 0.5;
+      const pulse = 0.55 + Math.max(0, Math.sin(t * 2.6 - rI * 0.9)) * 0.45;
+      const a = pulse * (0.45 + frac * 0.5);
+      ctx.strokeStyle = `hsla(${hue} 100% 72% / ${a})`;
+      ctx.lineWidth = Math.max(1.4, u * 0.022);
+      ctx.lineCap = 'round';
+      const s = u * 0.06;
+      ctx.beginPath();
+      // Small angular glyphs, varied per row.
+      if (rI % 3 === 0) {
+        ctx.moveTo(rx - s, ry + s); ctx.lineTo(rx, ry - s); ctx.lineTo(rx + s, ry + s);
+        ctx.moveTo(rx, ry - s); ctx.lineTo(rx, ry + s * 0.4);
+      } else if (rI % 3 === 1) {
+        ctx.moveTo(rx - s, ry - s); ctx.lineTo(rx + s, ry - s); ctx.lineTo(rx - s, ry + s); ctx.lineTo(rx + s, ry + s);
+      } else {
+        ctx.moveTo(rx, ry - s); ctx.lineTo(rx + s, ry); ctx.lineTo(rx, ry + s); ctx.lineTo(rx - s, ry); ctx.closePath();
+      }
+      ctx.stroke();
+    }
+
+    // The heart band: a molten seam of the owner's colour across the stone.
+    const bandY = apexY + (baseY - apexY) * 0.52;
+    ctx.fillStyle = `hsla(${hue} 95% 58% / ${glow * (0.3 + frac * 0.35)})`;
+    const bandHalf = topW + (botW - topW) * 0.52;
+    ctx.beginPath();
+    ctx.roundRect(-bandHalf, bandY - u * 0.045, bandHalf * 2, u * 0.09, u * 0.03);
+    ctx.fill();
+    ctx.restore();
+
+    // Sky beam: a soft column of light rising off the crystal, breathing.
+    const crysY = apexY - u * 0.42 + Math.sin(t * 1.6 + (mine ? 0 : 3)) * u * 0.05;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const beamA = (0.1 + glow * 0.12) * (0.35 + frac * 0.65);
+    const beam = ctx.createLinearGradient(0, crysY, 0, crysY - u * 1.5);
+    beam.addColorStop(0, `hsla(${hue} 95% 68% / ${beamA})`);
+    beam.addColorStop(1, `hsla(${hue} 95% 68% / 0)`);
+    ctx.fillStyle = beam;
+    const bw = u * (0.1 + glow * 0.05);
+    ctx.beginPath();
+    ctx.moveTo(-bw, crysY);
+    ctx.lineTo(-bw * 0.35, crysY - u * 1.5);
+    ctx.lineTo(bw * 0.35, crysY - u * 1.5);
+    ctx.lineTo(bw, crysY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Crown crystal: a levitating shard slowly turning above the capstone,
+    // with orbiting splinters.
+    const cg = ctx.createRadialGradient(0, crysY, 1, 0, crysY, u * 0.55);
+    cg.addColorStop(0, `hsla(${hue} 100% 78% / ${0.7 * glow})`);
+    cg.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.arc(0, crysY, u * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    const spin = Math.sin(t * 1.3);   // apparent rotation via width scaling
+    const cw = u * 0.13 * (0.35 + Math.abs(spin) * 0.65);
+    const ch = u * 0.26;
+    ctx.fillStyle = `hsl(${hue} 90% ${66 + Math.sin(t * 3) * 8}%)`;
+    ctx.beginPath();
+    ctx.moveTo(0, crysY - ch);
+    ctx.lineTo(cw, crysY);
+    ctx.lineTo(0, crysY + ch);
+    ctx.lineTo(-cw, crysY);
+    ctx.closePath();
+    ctx.fill();
+    // Specular sliver on the crystal.
+    ctx.fillStyle = `hsla(${hue} 100% 92% / 0.85)`;
+    ctx.beginPath();
+    ctx.moveTo(0, crysY - ch * 0.7);
+    ctx.lineTo(cw * 0.3, crysY - ch * 0.1);
+    ctx.lineTo(0, crysY + ch * 0.2);
+    ctx.closePath();
+    ctx.fill();
+    // Orbiting splinters.
+    for (let sI = 0; sI < 3; sI++) {
+      const a = t * 1.7 + (sI / 3) * Math.PI * 2;
+      const ox2 = Math.cos(a) * u * 0.34;
+      const oy2 = Math.sin(a) * u * 0.1;
+      const front = Math.sin(a) > 0;
+      ctx.fillStyle = `hsla(${hue} 95% 74% / ${front ? 0.9 : 0.4})`;
+      ctx.beginPath();
+      ctx.moveTo(ox2, crysY + oy2 - u * 0.05);
+      ctx.lineTo(ox2 + u * 0.025, crysY + oy2);
+      ctx.lineTo(ox2, crysY + oy2 + u * 0.05);
+      ctx.lineTo(ox2 - u * 0.025, crysY + oy2);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Rising motes of power.
+    if (Math.random() < 0.1) {
+      this.burst(p.x + (Math.random() - 0.5) * u * 0.5, p.y - Math.random() * H, 1, 'mote', hue, 0.7);
+    }
+
+    // Battle damage: cracks spider out as HP falls, glowing at low health.
     if (frac < 0.999) {
       const dmg = 1 - frac;
-      ctx.strokeStyle = `rgba(5,3,10,${0.35 + dmg * 0.45})`;
+      ctx.strokeStyle = dmg > 0.6
+        ? `hsla(${hue} 90% 60% / ${0.3 + dmg * 0.4})`
+        : `rgba(5,3,10,${0.35 + dmg * 0.45})`;
       ctx.lineWidth = 1.6;
       const cracks = Math.ceil(dmg * 5);
       for (let c = 0; c < cracks; c++) {
         const seed = c * 137 + (ob.owner === 0 ? 7 : 31);
-        let cx = ((seed % 10) / 10 - 0.5) * u * 0.8;
-        let cy = -((seed % 7) / 7) * H * 0.8;
+        let cx = ((seed % 10) / 10 - 0.5) * u * 0.5;
+        let cy = baseY - ((seed % 7) / 7) * H * 0.8;
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         for (let seg = 0; seg < 4; seg++) {
-          cx += (((seed * (seg + 3)) % 9) / 9 - 0.5) * u * 0.3;
+          cx += (((seed * (seg + 3)) % 9) / 9 - 0.5) * u * 0.24;
           cy += ((seed * (seg + 7)) % 5) / 5 * u * 0.22 + 2;
           ctx.lineTo(cx, cy);
         }
@@ -899,15 +1054,20 @@ export class Renderer {
       ctx.globalAlpha = Math.min(1, flash / 0.24) * 0.55;
       ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.roundRect(-u * 0.62, -H, u * 1.24, H, u * 0.07);
+      ctx.moveTo(-topW, apexY);
+      ctx.lineTo(topW, apexY);
+      ctx.lineTo(botW, baseY);
+      ctx.lineTo(-botW, baseY);
+      ctx.closePath();
       ctx.fill();
       ctx.restore();
     }
 
     // Objective HP bar — bigger than unit bars; this IS the scoreboard.
+    // Sits above the levitating crown crystal.
     const hpw = u * 1.9;
     const hph = 7;
-    const hy = -H - u * 0.5;
+    const hy = -H - u * 1.12;
     ctx.fillStyle = 'rgba(4,3,8,0.82)';
     ctx.beginPath();
     ctx.roundRect(-hpw / 2 - 1.5, hy - 1.5, hpw + 3, hph + 3, 4.5);
