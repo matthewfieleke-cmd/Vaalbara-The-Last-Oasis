@@ -1116,6 +1116,7 @@ export class Renderer {
 
   private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number): void {
     const alive = new Set<number>();
+    const unitById = new Map(st.units.map((u) => [u.id, u]));
     const order = [...st.units].sort((a, b) => {
       const da = this.display.get(a.id)?.dy ?? a.y;
       const db = this.display.get(b.id)?.dy ?? b.y;
@@ -1157,14 +1158,15 @@ export class Renderer {
 
       const stats = speciesDef(u.species).stats!;
       const flying = stats.flying;
-      // Deliberate stride cadence: ~1 to 1.5 full 4-frame cycles per second,
-      // rising a touch with actual ground speed. Frame-to-frame crossfading
-      // (below) keeps it smooth instead of strobing.
+      // Plodding stride cadence: under one full 4-frame cycle per second,
+      // rising only slightly with ground speed — every footfall is a
+      // deliberate, weighted step. Frame-to-frame crossfading (below)
+      // keeps the slow cadence smooth instead of strobing.
       const wps = (stats.speed / TICK_MS) * 1000;
       d.runPhase += dt * (
         flying ? (u.species === 'bees' ? 10 : 4.6)
-          : moving ? 3.0 + wps * 4.5
-            : 0.6
+          : moving ? 2.0 + wps * 3.2
+            : 0.5
       );
 
       // Facing hysteresis: only flip after the sim holds a direction ~0.22 s,
@@ -1194,6 +1196,19 @@ export class Renderer {
         } else if (moving) {
           vx = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
           vy = (this.localSeat === 1 ? -stepY : stepY) / stepLen;
+        } else if (u.targetId !== null) {
+          // Locked in a clash but between swings: square off toward the
+          // opponent instead of holding a stale march direction.
+          const tgt = unitById.get(u.targetId);
+          if (tgt) {
+            const tx = (this.localSeat === 1 ? -(tgt.x - d.dx) : tgt.x - d.dx);
+            const ty = (this.localSeat === 1 ? -(tgt.y - d.dy) : tgt.y - d.dy);
+            const tl = Math.hypot(tx, ty);
+            if (tl > 0.001) {
+              vx = tx / tl;
+              vy = ty / tl;
+            }
+          }
         }
         if (vx !== 0 || vy !== 0) {
           if (Math.abs(vy) > Math.abs(vx) * 0.85) wantDir = vy < 0 ? 'up' : 'down';
@@ -1265,7 +1280,7 @@ export class Renderer {
       // Dust kicked up at the feet while running — the ground answers the
       // stride, which sells actual contact (grey ash on basalt, green-brown
       // scuff in the oasis).
-      if (moving && !flying && Math.random() < 0.5) {
+      if (moving && !flying && Math.random() < 0.35) {
         const world = st.phase === 'oasis' || st.phase === 'transition' ? 'oasis' : 'basalt';
         const back = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
         this.burst(
@@ -1345,11 +1360,13 @@ export class Renderer {
         if (at >= 1) {
           d.atk = undefined;
         } else {
+          // Deeper anticipation: the body visibly coils back before the
+          // strike snaps forward — each blow reads as its own event.
           let lunge: number;
-          if (at < 0.35) lunge = -0.09 * (at / 0.35);
+          if (at < 0.35) lunge = -0.13 * (at / 0.35);
           else if (at < 0.6) {
             const kk = (at - 0.35) / 0.25;
-            lunge = -0.09 + 0.34 * (1 - (1 - kk) * (1 - kk));
+            lunge = -0.13 + 0.38 * (1 - (1 - kk) * (1 - kk));
           } else lunge = 0.25 * (1 - (at - 0.6) / 0.4);
           const amp = (d.atk.crit ? 1.35 : 1) * s;
           ctx.translate(d.atk.dirX * lunge * amp, d.atk.dirY * lunge * amp);
@@ -1383,11 +1400,20 @@ export class Renderer {
       let sqx = 1;
       let sqy = 1;
       if (moving && !flying) {
-        const q = Math.sin(d.runPhase * Math.PI * 0.5) * 0.03;
+        // A soft weight-shift, not a hop — the body barely oscillates while
+        // the legs (painted frames) do the marching.
+        const q = Math.sin(d.runPhase * Math.PI * 0.5) * 0.012;
         sqx = 1 + q;
         sqy = 1 - q;
       } else if (!moving && !d.atk) {
-        sqy *= 1 + Math.sin(this.time * 2 + u.id * 1.7) * 0.012;
+        if (u.targetId !== null) {
+          // Braced combat stance between swings: a low coiled crouch with a
+          // faster, tighter breath — squared off for the next blow.
+          sqy *= 0.975 + Math.sin(this.time * 5 + u.id * 1.7) * 0.008;
+          sqx *= 1.012;
+        } else {
+          sqy *= 1 + Math.sin(this.time * 2 + u.id * 1.7) * 0.012;
+        }
       }
       sqx *= 1 + strikeStretch;
       sqy *= 1 - strikeStretch * 0.5;

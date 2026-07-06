@@ -360,7 +360,7 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
     const spawned: UnitState[] = [];
     if (stats.formation === 'line' && stats.count > 1) {
       for (let i = 0; i < stats.count; i++) {
-        const off = (i - Math.floor(stats.count / 2)) * 0.7;
+        const off = (i - (stats.count - 1) / 2) * 0.7;
         const u = spawnUnit(st, ev, input.player, def.species, sx + off, sy, wp);
         if (u) spawned.push(u);
       }
