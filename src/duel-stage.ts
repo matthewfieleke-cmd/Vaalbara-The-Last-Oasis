@@ -186,6 +186,11 @@ export class DuelStage {
    *  Ribbon and floating texts are kept below this line. */
   private hudBottom = 0.19;
 
+  /** Pairing auto-fit: shrinks both champions when their combined sprite
+   *  width would crowd the arena, so tails never clip and a clear gap
+   *  always separates the opponents. Eased for smooth swaps. */
+  private fitScale = 1;
+
   setHudBottom(frac: number): void {
     if (Number.isFinite(frac)) this.hudBottom = Math.min(0.42, Math.max(0.1, frac));
   }
@@ -242,6 +247,10 @@ export class DuelStage {
       guarding: false,
       trail: [],
     };
+    // Fresh pairing at match start (both still walking in): snap the fit
+    // so the champions never visibly pop between sizes.
+    const other = this.fighters[(1 - side) as DuelSide];
+    if (entrance && other && Math.abs(other.x) > 2) this.fitScale = this.fitTarget();
   }
 
   /** True while a script is still playing out. */
@@ -279,6 +288,8 @@ export class DuelStage {
     // Camera zoom eases toward its current target.
     this.zoom += (this.zoomTarget - this.zoom) * Math.min(1, dt * 4.5);
     if (this.queue.length === 0) this.zoomTarget = 1;
+    // Pairing auto-fit eases so mid-match champion swaps resize smoothly.
+    this.fitScale += (this.fitTarget() - this.fitScale) * Math.min(1, dt * 3);
 
     for (const f of this.fighters) {
       if (!f) continue;
@@ -336,7 +347,7 @@ export class DuelStage {
         const f = this.fighters[p.side];
         if (f) {
           const c = this.fighterPx(f);
-          const targetH = this.H * 0.26 * (DUEL_SCALE[f.species] ?? 0.9);
+          const targetH = this.fighterH(f.species);
           const cy = c.y - targetH * 0.45;
           p.ang = (p.ang ?? 0) + dt * 4;
           const k = clamp01(p.t / p.life);
@@ -575,6 +586,46 @@ export class DuelStage {
   private fighterPx(f: FighterVis): { x: number; y: number } {
     const fly = FLYERS.has(f.species) ? -this.H * 0.1 : 0;
     return { x: this.W * f.homeX + f.x, y: this.groundY() + f.y + fly };
+  }
+
+  /** Final drawn height for a species, including the pairing auto-fit. */
+  private fighterH(species: SpeciesId): number {
+    return this.H * 0.26 * (DUEL_SCALE[species] ?? 0.9) * this.fitScale;
+  }
+
+  /** Widest half-width this species can render at fit 1, across its run and
+   *  attack frames (anchors sit at the sprite's horizontal center). */
+  private baseHalfW(species: SpeciesId): number {
+    const baseH = this.H * 0.26 * (DUEL_SCALE[species] ?? 0.9);
+    const anim = getAnim(species);
+    const frames = anim && anim.run.length ? [...anim.run, ...anim.attack] : [];
+    if (frames.length === 0) {
+      const p = getSprite(species);
+      if (!p) return baseH * 0.55;
+      return (p.canvas.width / 2) * (baseH / p.h);
+    }
+    let half = 0;
+    for (const s of frames) half = Math.max(half, (s.canvas.width / 2) * (baseH / s.h));
+    return half;
+  }
+
+  /** How much both champions must shrink so each fits fully on screen with
+   *  clear air between them — 1 when the pairing already fits. */
+  private fitTarget(): number {
+    const a = this.fighters[0];
+    const b = this.fighters[1];
+    if (!a || !b || a.mode === 'gone' || b.mode === 'gone') return this.fitScale;
+    const ha = this.baseHalfW(a.species);
+    const hb = this.baseHalfW(b.species);
+    const W = this.W;
+    const edgePad = W * 0.02; // no tail may poke past this
+    const midGap = W * 0.08; // guaranteed daylight between the two
+    const homeSpan = W * (0.76 - 0.24);
+    let s = 1;
+    s = Math.min(s, (homeSpan - midGap) / (ha + hb));
+    s = Math.min(s, (W * 0.24 - edgePad) / ha);
+    s = Math.min(s, (W * 0.24 - edgePad) / hb);
+    return clamp01(s);
   }
 
   private runStep(step: Step): void {
@@ -875,7 +926,7 @@ export class DuelStage {
    */
   private fighterText(f: FighterVis, txt: string, hue: number, big: boolean, subline = false): void {
     const p = this.fighterPx(f);
-    const fh = this.H * 0.26 * (DUEL_SCALE[f.species] ?? 0.9);
+    const fh = this.fighterH(f.species);
     // Clamp into this fighter's half so texts never collide mid-arena,
     // then pull in far enough that the rendered word can't clip the edge.
     const left = f.homeX < 0.5;
@@ -1171,7 +1222,7 @@ export class DuelStage {
   private drawFighter(f: FighterVis): void {
     const ctx = this.ctx;
     const { x, y } = this.fighterPx(f);
-    const targetH = this.H * 0.26 * (DUEL_SCALE[f.species] ?? 0.9);
+    const targetH = this.fighterH(f.species);
     const frames = this.pickFrames(f);
     if (!frames) return;
 

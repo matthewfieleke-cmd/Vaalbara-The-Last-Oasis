@@ -1,6 +1,6 @@
 /* Vaalbara service worker — offline-first cache for GitHub Pages hosting. */
-const CACHE = 'vaalbara-v2';
-const CORE = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-maskable.svg'];
+const CACHE = 'vaalbara-v3';
+const CORE = ['./', './index.html', './manifest.webmanifest', './favicon.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -195,7 +195,18 @@ export function DuelGuide({
             </button>
           ) : (
             <>
-              <h4>Champions in depth</h4>
+              <div className="guide-depth-head">
+                <h4>Champions in depth</h4>
+                <button
+                  className="guide-back"
+                  onClick={() => {
+                    setDepth(false);
+                    playUi('tap');
+                  }}
+                >
+                  ◂ Back to basics
+                </button>
+              </div>
               <div className="duel-faction-toggle">
                 {(['magma', 'oasis'] as const).map((fid) => (
                   <button
@@ -237,6 +248,16 @@ export function DuelGuide({
               })}
             </>
           )}
+
+          <button
+            className="btn btn-ghost guide-close-bottom"
+            onClick={() => {
+              playUi('tap');
+              onClose();
+            }}
+          >
+            ✕ Close guide
+          </button>
         </div>
       </div>
     </div>
