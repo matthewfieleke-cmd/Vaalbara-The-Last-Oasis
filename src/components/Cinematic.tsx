@@ -227,20 +227,27 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.fillStyle = glow;
         ctx.fillRect(0, cy - H * 0.1, W, H * 0.3);
         if (anim) {
-          // Deliberate stride: ~1.3 cycles/s with crossfade between frames.
+          // Deliberate stride: ~1.15 cycles/s with a crossfade between frames.
           const frames = anim.run;
-          const phase = beatT * 5.2;
+          const flying = active.hero.species === 'eagle' || active.hero.species === 'bees';
+          const phase = beatT * (flying ? 5.6 : 4.6);
           const i0 = Math.floor(phase) % frames.length;
           const frac = phase - Math.floor(phase);
           const mix = frac * frac * (3 - 2 * frac);
           const targetH = H * 0.3 * (HERO_SCALE[active.hero.species] ?? 1);
           ctx.shadowColor = `hsl(${active.hero.hue} 90% 55%)`;
           ctx.shadowBlur = 34;
-          const bob = Math.abs(Math.sin(phase * Math.PI * 0.5)) * -5;
+          // Smooth, continuous bob: gentle hover for flyers, a soft rolling
+          // stride-sway for walkers — no snapping between frames.
+          const bob = flying
+            ? Math.sin(beatT * 2.4) * H * 0.006
+            : Math.sin(phase * Math.PI) * -H * 0.0035;
+          // ONE scale for the whole cycle. Per-frame width clamps made the
+          // hero visibly bump each time the crop width changed; instead
+          // clamp against the widest frame of the set so scale never moves.
+          const maxW = Math.max(...frames.map((f) => f.w));
+          const scale = Math.min(targetH / frames[0].h, (W * 0.78) / maxW);
           const drawHero = (f: typeof frames[number], alpha: number) => {
-            // Height-fit, but never wider than ~78% of the screen — long
-            // poses (wolf mid-stride) must not swallow the frame.
-            const scale = Math.min(targetH / f.h, (W * 0.78) / f.w);
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
@@ -250,7 +257,9 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
               f.canvas.height * scale,
             );
           };
-          drawHero(frames[i0], 1 - mix);
+          // Duels-style non-dipping crossfade: base frame fully opaque, next
+          // frame fading in OVER it — coverage never drops, so no flicker.
+          drawHero(frames[i0], 1);
           if (mix > 0.02) drawHero(frames[(i0 + 1) % frames.length], mix);
         } else {
           ctx.translate(cx, cy);

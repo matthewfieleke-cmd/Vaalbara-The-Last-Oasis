@@ -319,6 +319,94 @@ const SPECIES_SFX: Record<SpeciesId, { spawn: SfxFn; attack: SfxFn }> = {
 };
 
 /* ------------------------------------------------------------------------ */
+/* War-camp instruments — horns and gongs for the big martial moments        */
+/* ------------------------------------------------------------------------ */
+
+/** A massive bronze war horn: detuned saw stack swelling through an opening
+ *  lowpass, with a slight upward "lip" bend into the note and a sub octave
+ *  under it. Reads as a call across a battlefield, not a synth. */
+function warHorn(freq: number, dur = 1.4, gain = 0.3, when = 0): void {
+  const ctx = core.ensure();
+  if (!ctx || !core.sfxBus) return;
+  const t0 = (when || ctx.currentTime);
+  const out = ctx.createGain();
+  out.gain.setValueAtTime(0.0001, t0);
+  out.gain.exponentialRampToValueAtTime(gain, t0 + dur * 0.22);
+  out.gain.setValueAtTime(gain, t0 + dur * 0.6);
+  out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(freq * 2.4, t0);
+  lp.frequency.exponentialRampToValueAtTime(freq * 7, t0 + dur * 0.35);
+  lp.frequency.exponentialRampToValueAtTime(freq * 3, t0 + dur);
+  lp.Q.value = 0.9;
+  lp.connect(out);
+  out.connect(core.sfxBus);
+  for (const cents of [-8, 0, 7]) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    const f = freq * Math.pow(2, cents / 1200);
+    // The "lip" bend: horns scoop up into the note.
+    osc.frequency.setValueAtTime(f * 0.94, t0);
+    osc.frequency.exponentialRampToValueAtTime(f, t0 + 0.09);
+    osc.connect(lp);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.1);
+  }
+  const sub = ctx.createOscillator();
+  sub.type = 'triangle';
+  sub.frequency.value = freq / 2;
+  const subG = ctx.createGain();
+  subG.gain.setValueAtTime(0.0001, t0);
+  subG.gain.exponentialRampToValueAtTime(gain * 0.5, t0 + dur * 0.3);
+  subG.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  sub.connect(subG);
+  subG.connect(core.sfxBus);
+  sub.start(t0);
+  sub.stop(t0 + dur + 0.1);
+  // Breath at the mouthpiece.
+  noise({ dur: Math.min(0.5, dur * 0.4), gain: gain * 0.18, filterFreq: freq * 6, filterType: 'bandpass', when: t0 });
+}
+
+/** A temple gong: inharmonic metal partials with a shimmering noise wash,
+ *  a hard mallet strike and a long slow bloom-and-decay tail. */
+function gong(base = 98, dur = 3.2, gain = 0.4, when = 0): void {
+  const ctx = core.ensure();
+  if (!ctx || !core.sfxBus) return;
+  const t0 = (when || ctx.currentTime);
+  const out = ctx.createGain();
+  // Gongs bloom: the strike, then the wash swells before the long decay.
+  out.gain.setValueAtTime(0.0001, t0);
+  out.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
+  out.gain.exponentialRampToValueAtTime(gain * 0.6, t0 + 0.25);
+  out.gain.exponentialRampToValueAtTime(gain * 0.75, t0 + 0.7);
+  out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  out.connect(core.sfxBus);
+  // Inharmonic partial ratios of a tam-tam.
+  const partials: Array<[number, number]> = [
+    [1, 0.5], [1.483, 0.28], [1.932, 0.34], [2.546, 0.2],
+    [2.63, 0.16], [3.358, 0.12], [4.11, 0.08], [5.43, 0.05],
+  ];
+  for (const [ratio, amp] of partials) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    const f = base * ratio;
+    osc.frequency.setValueAtTime(f * 1.01, t0);
+    osc.frequency.exponentialRampToValueAtTime(f, t0 + 0.6); // strike detune settles
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(amp, t0);
+    g.gain.exponentialRampToValueAtTime(amp * 0.001, t0 + dur * (0.55 + ratio * 0.08));
+    osc.connect(g);
+    g.connect(out);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.2);
+  }
+  // Mallet impact + the metallic shimmer wash.
+  noise({ dur: 0.08, gain: gain * 0.5, filterFreq: 1400, filterEnd: 300, when: t0 });
+  noise({ dur: dur * 0.7, gain: gain * 0.16, filterFreq: 3400, filterType: 'bandpass', filterEnd: 900, when: t0 + 0.02 });
+}
+
+/* ------------------------------------------------------------------------ */
 /* Global / spell SFX                                                         */
 /* ------------------------------------------------------------------------ */
 
@@ -371,11 +459,10 @@ const GLOBAL_SFX = {
     });
   },
   pondClaimed: () => {
+    // The water changes hands: a single war-horn call answered by a gong.
     const t = core.ctx?.currentTime ?? 0;
-    [392, 494, 587, 784].forEach((f, i) => {
-      voice({ type: 'sine', freq: f, dur: 0.9, gain: 0.14, when: t + i * 0.1 });
-    });
-    noise({ dur: 1.2, gain: 0.12, filterFreq: 3600, filterType: 'highpass' });
+    warHorn(146.8, 1.1, 0.24, t);           // D3 call
+    gong(110, 2.6, 0.3, t + 0.35);
   },
   blessing: () => {
     const t = core.ctx?.currentTime ?? 0;
@@ -393,16 +480,22 @@ const GLOBAL_SFX = {
     voice({ type: 'square', freq: 180, freqEnd: 120, dur: 0.15, gain: 0.1 });
   },
   victory: () => {
+    // Triumph on the battlefield: massed war horns sounding a rising call
+    // (D3 -> A3 -> D4), crowned by a great gong strike.
     const t = core.ctx?.currentTime ?? 0;
-    [392, 523, 659, 784, 1047].forEach((f, i) => {
-      voice({ type: 'triangle', freq: f, dur: 0.8, gain: 0.14, when: t + i * 0.16 });
-    });
+    warHorn(146.8, 1.0, 0.26, t);            // D3
+    warHorn(220, 1.1, 0.26, t + 0.42);       // A3
+    warHorn(293.66, 1.9, 0.3, t + 0.86);     // D4 — held
+    gong(98, 3.6, 0.42, t + 0.9);
+    gong(196, 2.2, 0.14, t + 1.25);          // answering high gong
   },
   defeat: () => {
+    // The horns fall: a low descending call and a dark, dying gong.
     const t = core.ctx?.currentTime ?? 0;
-    [440, 415, 392, 349].forEach((f, i) => {
-      voice({ type: 'triangle', freq: f, dur: 0.7, gain: 0.13, when: t + i * 0.3 });
-    });
+    warHorn(174.6, 1.0, 0.2, t);             // F3
+    warHorn(146.8, 1.4, 0.2, t + 0.5);       // D3
+    warHorn(110, 2.0, 0.22, t + 1.05);       // A2 — the fall
+    gong(65, 4.0, 0.34, t + 1.15);
   },
 };
 

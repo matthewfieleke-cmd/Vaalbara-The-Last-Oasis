@@ -279,7 +279,46 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
   for (let i = 0; i < w * h; i++) {
     if (reach[i] === 1) px[i * 4 + 3] = 0;
   }
-  // Feather the content rim.
+
+  // HALO EROSION — kill the white ghost around legs and bellies.
+  // The bounded dilation above only eats pixels the fill FLAGGED as bg-like;
+  // anti-aliased paper blends (e.g. 220-grey between white paper and a dark
+  // leg) fall just under that gate and survive as a 1-3 px pale fringe that
+  // reads as a white outline on every dark arena. Erode, from the
+  // transparent side inward, any remaining boundary pixel that is still
+  // clearly paper-tinted (bright, low chroma). Body edges are blends of the
+  // CHARACTER's paint and fail the brightness/chroma test, so genuine white
+  // fur eroded here is at most the same 1-3 px the halo occupied.
+  const paperTinted = (i4: number): boolean => {
+    const r = px[i4];
+    const g = px[i4 + 1];
+    const b = px[i4 + 2];
+    const mx = Math.max(r, g, b);
+    const mn = Math.min(r, g, b);
+    return mx > 178 && mx - mn < 40;
+  };
+  for (let pass = 0; pass < 3; pass++) {
+    let ate = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (px[i * 4 + 3] === 0) continue;
+        const holeAdj =
+          x === 0 || x === w - 1 || y === 0 || y === h - 1 ||
+          px[(i - 1) * 4 + 3] === 0 || px[(i + 1) * 4 + 3] === 0 ||
+          px[(i - w) * 4 + 3] === 0 || px[(i + w) * 4 + 3] === 0;
+        if (holeAdj && paperTinted(i * 4)) {
+          px[i * 4 + 3] = 254; // mark: erased after the sweep (not mid-scan)
+          ate = true;
+        }
+      }
+    }
+    if (!ate) break;
+    for (let i = 0; i < w * h; i++) if (px[i * 4 + 3] === 254) px[i * 4 + 3] = 0;
+  }
+
+  // Feather the content rim. Any surviving BRIGHT rim pixel still carries a
+  // trace of paper, so it feathers harder than painted-colour edges do.
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const i = y * w + x;
@@ -289,7 +328,11 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
       if (px[(i + 1) * 4 + 3] === 0) holes++;
       if (px[(i - w) * 4 + 3] === 0) holes++;
       if (px[(i + w) * 4 + 3] === 0) holes++;
-      if (holes > 0) px[i * 4 + 3] = Math.min(px[i * 4 + 3], 255 - holes * 48);
+      if (holes > 0) {
+        const mx = Math.max(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
+        const bright = mx > 165 ? 74 : 48;
+        px[i * 4 + 3] = Math.min(px[i * 4 + 3], 255 - holes * bright);
+      }
     }
   }
   cx.putImageData(data, 0, 0);
