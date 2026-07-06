@@ -12,6 +12,7 @@ import {
 import type { DuelIntent, DuelMatch, DuelSide, Duelist } from '../duel';
 import { DuelStage } from '../duel-stage';
 import type { DuelWorld } from '../duel-stage';
+import { FACTIONS } from '../data';
 import { music, playKo, playResult, playSpeciesAttack, playSpeciesSpawn, playUi } from '../audio';
 import { DuelStatCard } from './DuelCards';
 
@@ -148,6 +149,22 @@ export function DuelScreen({
     const b = activeDuelist(m, 1);
     stage.setFighter(0, a.species, a.hue, true, a.name);
     stage.setFighter(1, b.species, b.hue, true, b.name);
+    // Test hook: ?dpair=trex,bear forces a specific visual pairing.
+    const pair = new URLSearchParams(window.location.search).get('dpair');
+    if (pair) {
+      const findCard = (sp: string) => {
+        for (const f of Object.values(FACTIONS)) {
+          const c = f.cards.find((c) => c.species === sp);
+          if (c) return c;
+        }
+        return null;
+      };
+      const [s0, s1] = pair.split(',');
+      const c0 = findCard(s0);
+      const c1 = findCard(s1);
+      if (c0?.species) stage.setFighter(0, c0.species, c0.hue, true, c0.name);
+      if (c1?.species) stage.setFighter(1, c1.species, c1.hue, true, c1.name);
+    }
     playSpeciesSpawn(a.species);
     syncHud();
     setRound(1);

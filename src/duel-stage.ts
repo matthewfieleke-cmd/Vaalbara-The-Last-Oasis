@@ -248,9 +248,9 @@ export class DuelStage {
       trail: [],
     };
     // Fresh pairing at match start (both still walking in): snap the fit
-    // so the champions never visibly pop between sizes.
+    // so the champions never visibly pop between sizes or positions.
     const other = this.fighters[(1 - side) as DuelSide];
-    if (entrance && other && Math.abs(other.x) > 2) this.fitScale = this.fitTarget();
+    if (entrance && other && Math.abs(other.x) > 2) this.applyFit(1);
   }
 
   /** True while a script is still playing out. */
@@ -289,7 +289,7 @@ export class DuelStage {
     this.zoom += (this.zoomTarget - this.zoom) * Math.min(1, dt * 4.5);
     if (this.queue.length === 0) this.zoomTarget = 1;
     // Pairing auto-fit eases so mid-match champion swaps resize smoothly.
-    this.fitScale += (this.fitTarget() - this.fitScale) * Math.min(1, dt * 3);
+    this.applyFit(Math.min(1, dt * 3));
 
     for (const f of this.fighters) {
       if (!f) continue;
@@ -593,12 +593,13 @@ export class DuelStage {
     return this.H * 0.26 * (DUEL_SCALE[species] ?? 0.9) * this.fitScale;
   }
 
-  /** Widest half-width this species can render at fit 1, across its run and
-   *  attack frames (anchors sit at the sprite's horizontal center). */
+  /** Idle-stance half-width for a species at fit 1, from its run frames
+   *  (anchors sit at the sprite's horizontal center). Attack lunges are
+   *  transient contact moments and deliberately don't count. */
   private baseHalfW(species: SpeciesId): number {
     const baseH = this.H * 0.26 * (DUEL_SCALE[species] ?? 0.9);
     const anim = getAnim(species);
-    const frames = anim && anim.run.length ? [...anim.run, ...anim.attack] : [];
+    const frames = anim && anim.run.length ? anim.run : [];
     if (frames.length === 0) {
       const p = getSprite(species);
       if (!p) return baseH * 0.55;
@@ -609,23 +610,48 @@ export class DuelStage {
     return half;
   }
 
-  /** How much both champions must shrink so each fits fully on screen with
-   *  clear air between them — 1 when the pairing already fits. */
-  private fitTarget(): number {
+  /** Lays out the pairing: shrinks both champions just enough — and slides
+   *  their home anchors outward — so each is entirely on screen with clear
+   *  air between them. Wide pairs use the whole arena; slim pairs keep the
+   *  classic 0.24 / 0.76 staging at full size. */
+  private fitTarget(): { s: number; homeL: number; homeR: number } {
     const a = this.fighters[0];
     const b = this.fighters[1];
-    if (!a || !b || a.mode === 'gone' || b.mode === 'gone') return this.fitScale;
-    const ha = this.baseHalfW(a.species);
-    const hb = this.baseHalfW(b.species);
+    const cur = {
+      s: this.fitScale,
+      homeL: this.fighters[0]?.homeX ?? 0.24,
+      homeR: this.fighters[1]?.homeX ?? 0.76,
+    };
+    if (!a || !b || a.mode === 'gone' || b.mode === 'gone') return cur;
     const W = this.W;
-    const edgePad = W * 0.02; // no tail may poke past this
-    const midGap = W * 0.08; // guaranteed daylight between the two
-    const homeSpan = W * (0.76 - 0.24);
-    let s = 1;
-    s = Math.min(s, (homeSpan - midGap) / (ha + hb));
-    s = Math.min(s, (W * 0.24 - edgePad) / ha);
-    s = Math.min(s, (W * 0.24 - edgePad) / hb);
-    return clamp01(s);
+    const ha = this.baseHalfW(a.species) / W; // fractions of stage width
+    const hb = this.baseHalfW(b.species) / W;
+    const edgePad = 0.015; // each tail keeps this much from the edge
+    const midGap = 0.07; // guaranteed daylight between the two
+    // Full visibility + gap across the whole arena width bounds the scale.
+    const s = clamp01((1 - 2 * edgePad - midGap) / (2 * (ha + hb)));
+    // Prefer the classic staging, pulled in only for edge visibility…
+    let homeL = Math.max(0.24, edgePad + s * ha);
+    let homeR = Math.min(0.76, 1 - edgePad - s * hb);
+    // …then push the pair apart if that pinched the middle gap (the scale
+    // bound guarantees room exists between the edge pads).
+    const need = s * (ha + hb) + midGap - (homeR - homeL);
+    if (need > 0) {
+      const slackL = homeL - (edgePad + s * ha);
+      const slackR = 1 - edgePad - s * hb - homeR;
+      homeL -= Math.min(slackL, need / 2 + Math.max(0, need / 2 - slackR));
+      homeR += Math.min(slackR, need / 2 + Math.max(0, need / 2 - slackL));
+    }
+    return { s, homeL, homeR };
+  }
+
+  private applyFit(k: number): void {
+    const t = this.fitTarget();
+    this.fitScale += (t.s - this.fitScale) * k;
+    const L = this.fighters[0];
+    const R = this.fighters[1];
+    if (L) L.homeX += (t.homeL - L.homeX) * k;
+    if (R) R.homeX += (t.homeR - R.homeX) * k;
   }
 
   private runStep(step: Step): void {
@@ -636,7 +662,9 @@ export class DuelStage {
       step.t = step.dur;
       return;
     }
-    const gap = this.W * (0.74 - 0.26);
+    // Live distance between the two champions' home anchors (the auto-fit
+    // slides homes apart for wide pairings).
+    const gap = this.W * Math.abs(D.homeX - A.homeX);
     const t = step.t;
 
     switch (ev.kind) {
