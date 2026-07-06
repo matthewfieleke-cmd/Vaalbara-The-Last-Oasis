@@ -70,12 +70,14 @@ const PORTRAIT_META: Record<SpeciesId, PortraitMeta> = {
 const ANIM_FILES: Record<SpeciesId, {
   run: string; attack: string; swat?: string; attackFacing?: 1 | -1;
   up: string; down: string;
+  /** Play the run cycle in reverse — fixes gaits painted moonwalking. */
+  runReverse?: boolean;
 }> = {
   trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1, up: 'trex-up', down: 'trex-down' },
   lion: { run: 'lion-run', attack: 'lion-attack', up: 'lion-up', down: 'lion-down' },
   eagle: { run: 'eagle-run', attack: 'eagle-attack', up: 'eagle-up', down: 'eagle-down' },
   honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack', up: 'honeybadger-up', down: 'honeybadger-down' },
-  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', up: 'scorpion-up', down: 'scorpion-down' },
+  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', runReverse: true, up: 'scorpion-up', down: 'scorpion-down' },
   fireants: { run: 'fireants-run', attack: 'fireants-attack', up: 'fireants-up', down: 'fireants-down' },
   bear: { run: 'bear-run', attack: 'bear-attack', swat: 'bear-swat', up: 'bear-up', down: 'bear-down' },
   bighorn: { run: 'bighorn-run', attack: 'bighorn-attack', up: 'bighorn-up', down: 'bighorn-down' },
@@ -547,6 +549,7 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           // sets are area-matched against it so the animal never changes
           // size when it switches animation.
           const runFrames = splitStrip(runImg, 4);
+          if (files.runReverse) runFrames.reverse();
           const runH = Math.max(...runFrames.map((f) => f.height));
           const runArea = meanContentArea(runFrames);
           const crossH = (frames: HTMLCanvasElement[]): number =>

@@ -904,9 +904,18 @@ export class DuelStage {
           this.onImpact?.(F.species, false, true);
           this.onEventApplied?.(ev);
         });
+        // The defeated champion SLUMPS: knees buckle and the body sinks
+        // straight down into itself with a slight head bow — no stiff
+        // tip-over. A dust puff answers the moment the body settles.
         const k = ph(t, 0.1, 0.85);
-        F.rot = F.face * easeOut(k) * 1.35;
-        F.y = easeIn(k) * this.H * 0.02;
+        F.rot = F.face * easeOut(k) * 0.22;
+        F.squash = easeOut(k) * 0.52;
+        F.y = easeIn(k) * this.H * 0.012;
+        this.fire(step, 'settle', 0.8, () => {
+          const p = this.fighterPx(F);
+          this.dustBurst(p.x, this.groundY(), 10);
+          this.shake = Math.max(this.shake, 4);
+        });
         F.alpha = 1 - ph(t, 1.2, step.dur) * 0.99;
         if (t >= step.dur - 0.02) F.mode = 'gone';
         break;
