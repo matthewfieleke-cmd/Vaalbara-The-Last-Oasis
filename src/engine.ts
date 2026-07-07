@@ -15,9 +15,10 @@
 
 import {
   ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
-  CAPTURE_RATE, DEPLOY_DEPTH, HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
-  OBELISK_RADIUS, PHASE1_TICKS, PHASE2_TICKS,
-  TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, inDeployBand, inWorld,
+  CAPTURE_RATE, DEPLOY_DEPTH, FORT_LANE_X, FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
+  HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
+  PHASE1_TICKS, PHASE2_TICKS,
+  TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
 } from './types';
 import type {
   CardId, FactionId, GameEvent, GameState, ObeliskState, PhaseConfig, PlayerId,
@@ -66,13 +67,21 @@ function basaltProps(): PropState[] {
   ];
 }
 
-/** The Phase-1 towers: one Ancient Obelisk per seat, set INSIDE the deploy
- *  band (CR-style) so the tower + its HP bar never clip the board edge. */
+/** The Phase-1 objectives: each seat's fortress fields TWO gatehouse wings,
+ *  one per lane. A wing crumbles at zero; the Basalt Fields end only when a
+ *  fortress has lost both. */
 function makeObelisks(): ObeliskState[] {
-  return [
-    { owner: 0, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: WORLD_H - 2.35, r: OBELISK_RADIUS },
-    { owner: 1, hp: OBELISK_HP, maxHp: OBELISK_HP, x: WORLD_W / 2, y: 2.35, r: OBELISK_RADIUS },
-  ];
+  const wings: ObeliskState[] = [];
+  for (const owner of [0, 1] as const) {
+    FORT_LANE_X.forEach((x, wing) => {
+      wings.push({
+        owner, wing: wing as 0 | 1,
+        hp: OBELISK_HP, maxHp: OBELISK_HP,
+        x, y: FORT_WING_Y[owner], r: FORT_WING_R,
+      });
+    });
+  }
+  return wings;
 }
 
 function oasisProps(): PropState[] {
@@ -317,45 +326,60 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
   }
 
   if (a.type === 'deploy' && def.kind === 'unit' && def.species) {
-    // Vector spawning: touch must land in the deploy band; the drag vector
-    // becomes an entry trajectory the unit sprints down before free AI.
-    if (!inWorld(a.x, a.y) || !inDeployBand(input.player, a.y)) return;
+    if (!inWorld(a.x, a.y)) return;
     if (armySize(st, input.player) >= MAX_ARMY) return;
     const stats = def.stats!;
 
-    // Nudge the spawn point onto open ground if the touch grazed lava.
     let sx = a.x;
     let sy = a.y;
-    if (!stats.flying && !groundOpen(st, sx, sy)) {
-      let fixed = false;
-      for (let r = 0.25; r <= 1.5 && !fixed; r += 0.25) {
-        for (const [dx, dy] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, r], [r, -r], [-r, -r]] as const) {
-          if (inWorld(sx + dx, sy + dy) && inDeployBand(input.player, sy + dy) && groundOpen(st, sx + dx, sy + dy)) {
-            sx += dx;
-            sy += dy;
-            fixed = true;
-            break;
+    let wp: Vec2;
+
+    if (st.phase === 'basalt') {
+      // Fortress siege: units enter the field THROUGH one of your two
+      // gates. The touch snaps to the nearest gate pad (inside the arch),
+      // and the entry waypoint marches the unit out of the arch and over
+      // that lane's bridge before free AI takes over.
+      const pads = fortPads(input.player);
+      const pad = pads.reduce((best, cur) =>
+        Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
+      sx = pad.x;
+      sy = pad.y;
+      wp = { x: pad.x, y: input.player === 0 ? 9.0 : 6.0 };
+    } else {
+      // Oasis: free vector spawning along your own baseline; the drag
+      // vector becomes an entry trajectory the unit sprints down.
+      if (!inDeployBand(input.player, a.y)) return;
+      // Nudge the spawn point onto open ground if the touch grazed water.
+      if (!stats.flying && !groundOpen(st, sx, sy)) {
+        let fixed = false;
+        for (let r = 0.25; r <= 1.5 && !fixed; r += 0.25) {
+          for (const [dx, dy] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, r], [r, -r], [-r, -r]] as const) {
+            if (inWorld(sx + dx, sy + dy) && inDeployBand(input.player, sy + dy) && groundOpen(st, sx + dx, sy + dy)) {
+              sx += dx;
+              sy += dy;
+              fixed = true;
+              break;
+            }
           }
         }
+        if (!fixed) return;
       }
-      if (!fixed) return;
+      const len = Math.hypot(a.dirX, a.dirY) || 1;
+      const nx = a.dirX / len;
+      const ny = a.dirY / len;
+      wp = {
+        x: Math.max(0.4, Math.min(WORLD_W - 0.4, sx + nx * 3.5)),
+        y: Math.max(0.4, Math.min(WORLD_H - 0.4, sy + ny * 3.5)),
+      };
+      // Pull the waypoint back along the fling until it lands on open ground.
+      if (!stats.flying) {
+        for (let k = 0; k < 6 && !groundOpen(st, wp.x, wp.y); k++) {
+          wp = { x: wp.x - nx * 0.5, y: wp.y - ny * 0.5 };
+        }
+      }
     }
     p.aqua -= def.cost;
     cycleCard(p, handIdx);
-
-    const len = Math.hypot(a.dirX, a.dirY) || 1;
-    const nx = a.dirX / len;
-    const ny = a.dirY / len;
-    let wp: Vec2 = {
-      x: Math.max(0.4, Math.min(WORLD_W - 0.4, sx + nx * 3.5)),
-      y: Math.max(0.4, Math.min(WORLD_H - 0.4, sy + ny * 3.5)),
-    };
-    // Pull the waypoint back along the fling until it lands on open ground.
-    if (!stats.flying) {
-      for (let k = 0; k < 6 && !groundOpen(st, wp.x, wp.y); k++) {
-        wp = { x: wp.x - nx * 0.5, y: wp.y - ny * 0.5 };
-      }
-    }
 
     const spawned: UnitState[] = [];
     if (stats.formation === 'line' && stats.count > 1) {
@@ -436,11 +460,26 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
   return best;
 }
 
-/** The enemy obelisk this unit should be pressuring (phase 1 only). */
+/** The enemy gatehouse wing this unit should be pressuring (phase 1 only).
+ *  Units batter the wing of the lane they marched down — the wall around
+ *  their own arch — and only swing to the far gatehouse once their lane's
+ *  wing has already crumbled. */
 function enemyObelisk(st: GameState, u: UnitState): ObeliskState | null {
   if (st.phase !== 'basalt') return null;
-  const ob = st.obelisks.find((o) => o.owner !== u.owner);
-  return ob && ob.hp > 0 ? ob : null;
+  const wings = st.obelisks.filter((o) => o.owner !== u.owner);
+  if (wings.length === 0) return null;
+  const laneWing = wings.reduce((best, cur) =>
+    Math.abs(cur.x - u.x) < Math.abs(best.x - u.x) ? cur : best);
+  if (laneWing.hp > 0) return laneWing;
+  const other = wings.find((o) => o !== laneWing && o.hp > 0);
+  return other ?? null;
+}
+
+/** Where a ground unit stands to besiege a wing: on the field, just off the
+ *  fortress wall — the wing body itself is inside blocked wall cells. */
+function siegeGoal(ob: ObeliskState): Vec2 {
+  const front = FORT_WALL_FRONT[ob.owner];
+  return { x: ob.x, y: ob.owner === 1 ? front + 0.45 : front - 0.45 };
 }
 
 function attackReach(u: RuntimeUnit): number {
@@ -916,8 +955,8 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
     goal = st.phase === 'oasis'
       ? { x: WORLD_W / 2, y: WORLD_H / 2 }
       : ob
-        ? { x: ob.x, y: ob.y }
-        : { x: u.x, y: u.owner === 0 ? 1.2 : WORLD_H - 1.2 };
+        ? siegeGoal(ob)
+        : { x: u.x, y: u.owner === 0 ? FORT_WALL_FRONT[1] + 0.6 : FORT_WALL_FRONT[0] - 0.6 };
   }
 
   const before = { x: u.x, y: u.y };
@@ -979,16 +1018,18 @@ function scoreTerritory(st: GameState): void {
  *  scoreboard). Destroying one is a hard 1.0/0.0; ties fall back to combat
  *  damage share. */
 function computeDominance(st: GameState): number {
-  const ob0 = st.obelisks.find((o) => o.owner === 0);
-  const ob1 = st.obelisks.find((o) => o.owner === 1);
-  if (ob0 && ob1) {
-    const down0 = ob0.hp <= 0;
-    const down1 = ob1.hp <= 0;
-    if (down1 && !down0) return 1;
-    if (down0 && !down1) return 0;
-    const dealtByP0 = ob1.maxHp - ob1.hp;
-    const dealtByP1 = ob0.maxHp - ob0.hp;
-    if (dealtByP0 + dealtByP1 > 0 && !down0 && !down1) {
+  const wings0 = st.obelisks.filter((o) => o.owner === 0);
+  const wings1 = st.obelisks.filter((o) => o.owner === 1);
+  if (wings0.length > 0 && wings1.length > 0) {
+    const razed0 = wings0.every((o) => o.hp <= 0);
+    const razed1 = wings1.every((o) => o.hp <= 0);
+    if (razed1 && !razed0) return 1;
+    if (razed0 && !razed1) return 0;
+    // No fortress fully razed (timer safety valve): score by siege damage,
+    // weighting each crumbled gatehouse as its full HP.
+    const dealtByP0 = wings1.reduce((s, o) => s + (o.maxHp - Math.max(0, o.hp)), 0);
+    const dealtByP1 = wings0.reduce((s, o) => s + (o.maxHp - Math.max(0, o.hp)), 0);
+    if (dealtByP0 + dealtByP1 > 0 && !(razed0 && razed1)) {
       return dealtByP0 / (dealtByP0 + dealtByP1);
     }
   }
@@ -1008,11 +1049,13 @@ function beginTransition(st: GameState, ev: GameEvent[]): void {
     st.players[blessedPlayer].blessed = true;
     ev.push({ type: 'blessing', player: blessedPlayer });
   }
-  // Survivors form marching columns toward their own edge — the renderer
-  // plays the exodus cutscene over these ticks.
+  // Survivors form marching columns home THROUGH their own gates — the
+  // renderer plays the exodus cutscene over these ticks.
   for (const u of st.units) {
     if (u.hp <= 0) continue;
-    u.waypoint = { x: u.x, y: u.owner === 0 ? WORLD_H - 1 : 1 };
+    const lane = Math.abs(u.x - FORT_LANE_X[0]) < Math.abs(u.x - FORT_LANE_X[1])
+      ? FORT_LANE_X[0] : FORT_LANE_X[1];
+    u.waypoint = { x: lane, y: u.owner === 0 ? WORLD_H - 1.4 : 1.4 };
     u.stall = 0;
     u.stallRef = Infinity;
     u.targetId = null;
@@ -1143,9 +1186,10 @@ export function advanceTick(st: GameState, inputs: PlayerInput[]): TickResult {
   if (st.phase === 'basalt') scoreTerritory(st);
   if (st.phase === 'oasis') tickCapture(st, ev);
 
-  // Breaking an obelisk ends the Basalt Fields on the spot — a decisive
-  // phase-1 victory that carries the Blessing into the Oasis.
-  if (st.phase === 'basalt' && st.obelisks.some((o) => o.hp <= 0)) {
+  // The Basalt Fields end only when a fortress has lost BOTH gatehouses —
+  // a decisive phase-1 victory that carries the Blessing into the Oasis.
+  if (st.phase === 'basalt' && ([0, 1] as const).some((seat) =>
+    st.obelisks.filter((o) => o.owner === seat).every((o) => o.hp <= 0))) {
     beginTransition(st, ev);
   }
 
@@ -1309,13 +1353,25 @@ export class BotBrain {
       return { type: 'spell', card: pick, x: e.x, y: e.y };
     }
 
-    const x = st.phase === 'oasis'
-      ? Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5))
-      : 0.8 + this.rng() * (WORLD_W - 1.6);
+    const dirY = this.seat === 0 ? -1 : 1;
+    if (st.phase === 'basalt') {
+      // Siege play: pick a gate. Prefer the lane whose enemy gatehouse is
+      // weaker (press the crack), with some noise so lanes stay contested.
+      const pads = fortPads(this.seat);
+      const wings = st.obelisks.filter((o) => o.owner !== this.seat && o.hp > 0);
+      let lane = this.rng() < 0.5 ? 0 : 1;
+      if (wings.length > 0 && this.rng() < 0.65) {
+        const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
+        lane = FORT_LANE_X.indexOf(weakest.x as (typeof FORT_LANE_X)[number]) as 0 | 1;
+        if (lane < 0) lane = 0;
+      }
+      const pad = pads[lane];
+      return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };
+    }
+    const x = Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5));
     const y = this.seat === 0
       ? WORLD_H - DEPLOY_DEPTH + 0.4 + this.rng() * (DEPLOY_DEPTH - 0.9)
       : 0.5 + this.rng() * (DEPLOY_DEPTH - 0.9);
-    const dirY = this.seat === 0 ? -1 : 1;
     return { type: 'deploy', card: pick, x, y, dirX: (this.rng() - 0.5) * 0.8, dirY };
   }
 }

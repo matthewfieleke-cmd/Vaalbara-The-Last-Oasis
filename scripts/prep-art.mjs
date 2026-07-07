@@ -26,6 +26,14 @@ const arenas = [
   ['art-src/arena2.png', 'public/art/arena2.webp', 820],
 ];
 
+// Fortress facades: white background keyed to alpha, trimmed to content.
+const fortresses = [
+  ['art-src/fort-red.png', 'public/art/fort-red.webp', 1400],
+  ['art-src/fort-blue.png', 'public/art/fort-blue.webp', 1400],
+  ['art-src/fort-red-ruin.png', 'public/art/fort-red-ruin.webp', 1400],
+  ['art-src/fort-blue-ruin.png', 'public/art/fort-blue-ruin.webp', 1400],
+];
+
 // Animation sheets: kept at full width so each frame stays ~300px.
 const animSheets = fs.readdirSync('art-src/anim').filter((f) => f.endsWith('.png'));
 
@@ -265,8 +273,64 @@ async function convertGridSheet(src, out, maxW) {
   fs.unlinkSync(tmp);
 }
 
+/* Fortress facades ship as transparent sprites: the paper-white studio
+ * backdrop is keyed via a border flood fill (so the pitch-black arch
+ * interiors and any pale stone highlights survive), then the canvas is
+ * trimmed to the content box so the wall base sits exactly on the sprite's
+ * bottom edge — the renderer plants that edge on the wall line. */
+async function convertFortress(src, out, maxW) {
+  const { data, info } = await sharp(src).ensureAlpha().raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width: w, height: h } = info;
+  const paper = (i) => {
+    const mn = Math.min(data[i], data[i + 1], data[i + 2]);
+    const mx = Math.max(data[i], data[i + 1], data[i + 2]);
+    return mn > 205 && mx - mn < 22;
+  };
+  const reach = new Uint8Array(w * h);
+  const work = [];
+  const seed = (x, y) => {
+    const p = y * w + x;
+    if (!reach[p] && paper(p * 4)) { reach[p] = 1; work.push(p); }
+  };
+  for (let x = 0; x < w; x++) { seed(x, 0); seed(x, h - 1); }
+  for (let y = 0; y < h; y++) { seed(0, y); seed(w - 1, y); }
+  while (work.length) {
+    const cur = work.pop();
+    const cy = (cur / w) | 0;
+    const cx = cur % w;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+      const ni = ny * w + nx;
+      if (reach[ni] || !paper(ni * 4)) continue;
+      reach[ni] = 1;
+      work.push(ni);
+    }
+  }
+  let top = h, bot = 0, left = w, right = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      if (reach[p]) { data[p * 4 + 3] = 0; continue; }
+      if (y < top) top = y;
+      if (y > bot) bot = y;
+      if (x < left) left = x;
+      if (x > right) right = x;
+    }
+  }
+  const cut = sharp(data, { raw: { width: w, height: h, channels: 4 } })
+    .extract({ left, top, width: right - left + 1, height: bot - top + 1 });
+  const cw = right - left + 1;
+  await (cw > maxW ? cut.resize({ width: maxW }) : cut).webp({ quality: 86 }).toFile(out);
+  const kb = Math.round(fs.statSync(out).size / 1024);
+  total += kb;
+  console.log(`${out}  keyed  ${kb} KB`);
+}
+
 for (const [src, out, w] of portraits) await convert(src, out, w);
 for (const [src, out, w] of arenas) await convert(src, out, w);
+for (const [src, out, w] of fortresses) await convertFortress(src, out, w);
 for (const f of animSheets) {
   const out = `public/art/anim/${f.replace('.png', '.webp')}`;
   if (f.includes('-intro')) await convertGridSheet(`art-src/anim/${f}`, out, 2400);
