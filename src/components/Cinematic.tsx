@@ -227,32 +227,39 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.fillStyle = glow;
         ctx.fillRect(0, cy - H * 0.1, W, H * 0.3);
         if (anim) {
-          // Deliberate stride: ~1.15 cycles/s with a crossfade between frames.
-          const frames = anim.run;
+          // Prefer the dedicated 8-frame parade cycle (twice the poses of
+          // the battle sheets) — each crossfade then covers a much smaller
+          // motion step, which is what reads as film-smooth.
+          const frames = anim.intro && anim.intro.length >= 6 ? anim.intro : anim.run;
+          const n = frames.length;
           const flying = active.hero.species === 'eagle' || active.hero.species === 'bees';
-          const phase = beatT * (flying ? 5.6 : 4.6);
-          const i0 = Math.floor(phase) % frames.length;
+          const cps = flying ? 0.8 : 0.62; // full gait cycles per second
+          const phase = beatT * cps * n;
+          const i0 = Math.floor(phase) % n;
           const frac = phase - Math.floor(phase);
           const mix = frac * frac * (3 - 2 * frac);
           const targetH = H * 0.3 * (HERO_SCALE[active.hero.species] ?? 1);
           ctx.shadowColor = `hsl(${active.hero.hue} 90% 55%)`;
           ctx.shadowBlur = 34;
           // Smooth, continuous bob: gentle hover for flyers, a soft rolling
-          // stride-sway for walkers — no snapping between frames.
+          // stride-sway for walkers (two beats per stride cycle).
           const bob = flying
             ? Math.sin(beatT * 2.4) * H * 0.006
-            : Math.sin(phase * Math.PI) * -H * 0.0035;
+            : Math.sin(beatT * cps * Math.PI * 4) * -H * 0.003;
           // ONE scale for the whole cycle. Per-frame width clamps made the
           // hero visibly bump each time the crop width changed; instead
           // clamp against the widest frame of the set so scale never moves.
           const maxW = Math.max(...frames.map((f) => f.w));
           const scale = Math.min(targetH / frames[0].h, (W * 0.78) / maxW);
+          // Walkers anchor at their feet on the ground line; flyers anchor
+          // at their stabilised point (head/centre) hovering above it.
+          const anchorLineY = flying && frames === anim.intro ? cy - H * 0.03 : cy + H * 0.07;
           const drawHero = (f: typeof frames[number], alpha: number) => {
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
               cx - f.anchorX * scale,
-              cy + H * 0.07 - f.anchorY * scale + bob,
+              anchorLineY - f.anchorY * scale + bob,
               f.canvas.width * scale,
               f.canvas.height * scale,
             );
@@ -260,7 +267,7 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           // Duels-style non-dipping crossfade: base frame fully opaque, next
           // frame fading in OVER it — coverage never drops, so no flicker.
           drawHero(frames[i0], 1);
-          if (mix > 0.02) drawHero(frames[(i0 + 1) % frames.length], mix);
+          if (mix > 0.02) drawHero(frames[(i0 + 1) % n], mix);
         } else {
           ctx.translate(cx, cy);
           drawSpecies(ctx, active.hero.species, W * 0.16, t);
