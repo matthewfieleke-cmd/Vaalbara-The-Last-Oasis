@@ -415,12 +415,13 @@ export const AQUA_MAX = 10;
 export const AQUA_PER_TICK_P1 = 0.08;
 export const AQUA_PER_TICK_P2 = 0.16; // doubles in the Oasis
 export const HAND_SIZE = 4;
-/** Hard cap on living units per player — the field stays readable. */
-export const MAX_ARMY = 4;
+/** Hard cap on living units per player — the field stays readable. Six
+ *  gives three fighters per siege lane without turning the field to soup. */
+export const MAX_ARMY = 6;
 export const CAPTURE_RATE = 1;
 /** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
  *  with its own HP. The Basalt Fields end only when a fortress loses both. */
-export const OBELISK_HP = 4600;
+export const OBELISK_HP = 4000;
 export const OBELISK_RADIUS = 0.55;
 /** Units only auto-acquire enemies inside this radius; otherwise they push
  *  the lane toward the enemy obelisk (Clash-Royale-style tower pressure). */

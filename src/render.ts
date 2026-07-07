@@ -391,8 +391,11 @@ export class Renderer {
         this.burst(p.x, p.y - this.unit * 0.3, 3, 'ash', 20, 1.1);
         const wing = Math.abs(e.x - FORT_LANE_X[0]) < Math.abs(e.x - FORT_LANE_X[1]) ? 0 : 1;
         this.obeliskFlash.set(e.owner * 2 + wing, 0.24);
+        const mid = this.ox + (WORLD_W / 2) * this.unit;
         this.floats.push({
-          x: p.x, y: p.y - this.unit * 1.4,
+          // Spawn beside the arch (toward mid-field), low on the wall face,
+          // so the rising number never drifts across the gatehouse HP bar.
+          x: p.x + this.unit * (p.x < mid ? 1.15 : -1.15), y: p.y - this.unit * 0.4,
           text: `-${e.amount}`, life: 0, maxLife: 0.9,
           color: mine ? '#ff8f6d' : '#ffe08a',
           size: clamp(11 + e.amount * 0.1, 11, 19),
@@ -511,6 +514,7 @@ export class Renderer {
       this.drawUnits(ctx, st, dt, now);
       this.drawProjectiles(ctx, st, now);
       this.drawZones(ctx, st, 'over');
+      if (st.obelisks.length > 0) this.drawFortressBars(ctx, st);
       this.drawAtmosphere(ctx, W, H);
       if (st.phase === 'transition') this.drawTransition(ctx, st, W, H);
       this.drawDragOverlay(ctx);
@@ -816,7 +820,6 @@ export class Renderer {
    *  painting swaps to its collapsed-ruin half in a wall of dust. */
   private drawFortresses(ctx: CanvasRenderingContext2D, st: GameState): void {
     const u = this.unit;
-    const t = this.time;
     const a = this.worldToScreen(0, WORLD_H / 2);
     const b = this.worldToScreen(WORLD_W, WORLD_H / 2);
     const left = Math.min(a.x, b.x);
@@ -898,15 +901,14 @@ export class Renderer {
         }
       }
 
-      // Per-wing HP bars + hit flash, floating over each gatehouse tower.
+      // The battered gatehouse blooms hot for a beat (environmental light,
+      // drawn under the units like the facade itself).
       for (const [idx, wing] of [wl, wr].entries()) {
         const wp = this.worldToScreen(wing.x, wing.y);
         const worldWing = Math.abs(wing.x - FORT_LANE_X[0]) < Math.abs(wing.x - FORT_LANE_X[1]) ? 0 : 1;
         const flash = this.obeliskFlash.get(owner * 2 + worldWing) ?? 0;
         const down = idx === 0 ? downL : downR;
-
         if (flash > 0 && !down) {
-          // The battered gatehouse blooms hot for a beat.
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
           const fg = ctx.createRadialGradient(wp.x, baseY - h * 0.4, u * 0.1, wp.x, baseY - h * 0.4, u * 1.7);
@@ -916,7 +918,41 @@ export class Renderer {
           ctx.fillRect(wp.x - u * 1.7, baseY - h, u * 3.4, h);
           ctx.restore();
         }
+      }
+    }
 
+    // Gate pads: your two drop spots, glowing inside your own arches.
+    if (st.phase === 'basalt') this.drawGatePads(ctx, st);
+  }
+
+  /** Per-wing HP bars + RAZED plates. Drawn in a LATE pass, above the units
+   *  and combat effects — a T-Rex battering a gate must never hide the very
+   *  bar it is draining. */
+  private drawFortressBars(ctx: CanvasRenderingContext2D, st: GameState): void {
+    const u = this.unit;
+    const t = this.time;
+    const a = this.worldToScreen(0, WORLD_H / 2);
+    const b = this.worldToScreen(WORLD_W, WORLD_H / 2);
+    const width = Math.abs(b.x - a.x);
+
+    for (const owner of [0, 1] as const) {
+      const wings = st.obelisks.filter((o) => o.owner === owner);
+      if (wings.length !== 2) continue;
+      const mine = owner === this.localSeat;
+      const intact = getFortArt(mine ? 'blue' : 'red');
+      if (!intact) continue;
+      // Same facade layout the fortress pass uses (intact aspect keeps the
+      // bars pinned when a wing swaps to its ruin painting).
+      const h = width * (intact.height / intact.width);
+      const baseY = mine
+        ? this.worldToScreen(WORLD_W / 2, this.localSeat === 0 ? 15.45 : -0.45).y
+        : this.worldToScreen(WORLD_W / 2, FORT_WALL_FRONT[owner]).y;
+      const topY = baseY - h;
+
+      for (const wing of wings) {
+        const wp = this.worldToScreen(wing.x, wing.y);
+        const worldWing = Math.abs(wing.x - FORT_LANE_X[0]) < Math.abs(wing.x - FORT_LANE_X[1]) ? 0 : 1;
+        const flash = this.obeliskFlash.get(owner * 2 + worldWing) ?? 0;
         const frac = clamp(wing.hp / wing.maxHp, 0, 1);
         // Your bars ride the gatehouse towers; the enemy's towers run up
         // under the HUD, so clamp their bars onto the visible wall face.
@@ -926,7 +962,7 @@ export class Renderer {
         const bw = u * 2.15;
         const bh = Math.max(4, u * 0.13);
         ctx.save();
-        if (down) {
+        if (wing.hp <= 0) {
           // A fallen wing keeps a small "RAZED" plate instead of a bar.
           ctx.font = `700 ${Math.max(9, u * 0.19)}px 'Cinzel', serif`;
           ctx.textAlign = 'center';
@@ -961,9 +997,6 @@ export class Renderer {
         ctx.restore();
       }
     }
-
-    // Gate pads: your two drop spots, glowing inside your own arches.
-    if (st.phase === 'basalt') this.drawGatePads(ctx, st);
   }
 
   /** The two tap-to-deploy pads at the local player's gates. Always faintly
