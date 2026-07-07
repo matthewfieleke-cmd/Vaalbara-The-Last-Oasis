@@ -286,14 +286,18 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
   // ENCLOSED PAPER POCKETS — legs crossing under a belly can seal a pocket
   // of raw paper off from the border (the wolf intro's belly gap), and the
   // border fill can never reach it, so it survives as a solid white blob.
-  // Any unreached DEEP region of meaningful size passes the same strict
-  // paper gate the fill propagates through — genuine pale fur is shaded and
-  // fails it — so it is paper: clear it. Tiny glints stay.
+  // But bright BODY paint (the bighorn's white wool) can pass the same
+  // paper gate, so size alone is not proof. The tell is the pocket's RIM:
+  // a genuine background gap is walled in by the character's dark outline
+  // and limbs, while a pale patch inside a white body is bounded by more
+  // pale paint. Clear a pocket only when its boundary is mostly dark ink.
   const minPocket = Math.max(120, Math.round(w * h * 0.002));
   for (let s = 0; s < w * h; s++) {
     if (!deep[s] || reach[s]) continue;
     const comp: number[] = [s];
     reach[s] = 3;
+    let rimDark = 0;
+    let rimTotal = 0;
     for (let k = 0; k < comp.length; k++) {
       const cur = comp[k];
       const cy = (cur / w) | 0;
@@ -303,12 +307,29 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
         const ny = cy + dy;
         if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
         const ni = ny * w + nx;
-        if (reach[ni] || !deep[ni]) continue;
-        reach[ni] = 3;
-        comp.push(ni);
+        if (reach[ni]) continue;
+        if (deep[ni]) {
+          reach[ni] = 3;
+          comp.push(ni);
+        } else {
+          // Rim of the pocket. Probe outward past the anti-aliased blend
+          // band to the first CONTENT pixel and ask if it's outline-dark.
+          for (let step = 0; step < 6; step++) {
+            const sx = nx + dx * step;
+            const sy = ny + dy * step;
+            if (sx < 0 || sx >= w || sy < 0 || sy >= h) break;
+            const si = sy * w + sx;
+            if (bg[si]) continue;
+            const i4 = si * 4;
+            const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
+            rimTotal++;
+            if (mx < 150) rimDark++;
+            break;
+          }
+        }
       }
     }
-    if (comp.length >= minPocket) {
+    if (comp.length >= minPocket && rimTotal > 0 && rimDark / rimTotal > 0.55) {
       for (const i of comp) px[i * 4 + 3] = 0;
     }
   }

@@ -846,187 +846,181 @@ export class Renderer {
       return;
     }
 
-    const H = u * 1.52;
+    const H = u * 1.4;
     const glow = 0.55 + Math.sin(t * 2.2 + (mine ? 0 : 2)) * 0.2;
-    const baseY = -u * 0.18;
-    const apexY = baseY - H;
+    const baseY = -u * 0.16;
 
-    // ---- The crag: rugged stacked basalt. Each of the N strata is its own
-    // slab with a stepped, ledged silhouette (per-slab lateral drift plus
-    // midpoint jags), so the tower reads as ancient piled rock, not a cone.
-    const N = 5;
-    const L: Array<[number, number]> = [];
-    const R: Array<[number, number]> = [];
-    const C: Array<[number, number]> = [];
-    for (let i = 0; i <= N; i++) {
-      const f = i / N;
-      const y = baseY - H * f - (rand() - 0.5) * u * 0.05;
-      // Loose taper with per-level swell: some beds jut wider than the one
-      // below (overhangs), which is what kills the neat cone read.
-      const hw = u * (0.4 - 0.25 * f) * (0.82 + rand() * 0.36);
-      const drift = (rand() - 0.5) * u * 0.12;                // whole-level shift
-      L.push([drift - hw - (rand() - 0.5) * u * 0.1, y]);
-      R.push([drift + hw + (rand() - 0.5) * u * 0.1, y]);
-      C.push([drift + u * 0.05 + (rand() - 0.5) * u * 0.09, y]);
-    }
-    // Broken twin-peak crown: blunt snapped-off spike, lower shoulder right.
-    const peakA: [number, number] = [(L[N][0] + C[N][0]) / 2, apexY - u * (0.13 + rand() * 0.07)];
-    const peakB: [number, number] = [(C[N][0] + R[N][0]) / 2, apexY - u * (0.04 + rand() * 0.07)];
-
-    // Midpoint jags along each slab's outer edges — chips and ledges.
-    const midL: Array<[number, number]> = [];
-    const midR: Array<[number, number]> = [];
-    for (let i = 0; i < N; i++) {
-      midL.push([
-        (L[i][0] + L[i + 1][0]) / 2 - rand() * u * 0.08,
-        (L[i][1] + L[i + 1][1]) / 2 + (rand() - 0.5) * u * 0.04,
-      ]);
-      midR.push([
-        (R[i][0] + R[i + 1][0]) / 2 + rand() * u * 0.08,
-        (R[i][1] + R[i + 1][1]) / 2 + (rand() - 0.5) * u * 0.04,
-      ]);
-    }
-
+    // ---- A true 3D monolith. Four-sided tapered obelisk seen from the
+    // battle camera: a lit front face turned toward lower-left, a shadowed
+    // right face behind the near vertical arris, a bright pyramidion, and a
+    // stepped plinth whose TOP faces are visible from above — the strongest
+    // "solid volume" cue this camera can give. One glossy edge highlight
+    // runs up the near arris, like light catching a polished corner.
     const tracePath = (pts: Array<[number, number]>) => {
       ctx.beginPath();
       ctx.moveTo(pts[0][0], pts[0][1]);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
       ctx.closePath();
     };
-    const silhouette: Array<[number, number]> = [];
-    for (let i = 0; i < N; i++) silhouette.push(L[i], midL[i]);
-    silhouette.push(L[N], peakA, C[N], peakB, R[N]);
-    for (let i = N - 1; i >= 0; i--) silhouette.push(midR[i], R[i]);
 
-    // Rough plinth mound the crag erupts from.
-    ctx.fillStyle = 'hsl(255 12% 12%)';
-    ctx.beginPath();
-    ctx.ellipse(0, baseY + u * 0.16, u * 0.66, u * 0.2, 0, 0, Math.PI * 2);
+    // Stepped plinth: two stone boxes, each with front / right / top faces.
+    const bdx = u * 0.17, bdy = -u * 0.075; // top-face recede vector
+    const box = (xl: number, xr: number, yt: number, yb: number, tone: number) => {
+      const g = ctx.createLinearGradient(xl * u, 0, xr * u, 0);
+      g.addColorStop(0, `hsl(250 11% ${tone}%)`);
+      g.addColorStop(1, `hsl(252 12% ${tone * 0.6}%)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(xl * u, yt * u, (xr - xl) * u, (yb - yt) * u);
+      ctx.fillStyle = `hsl(256 15% ${tone * 0.36}%)`;
+      tracePath([[xr * u, yt * u], [xr * u + bdx, yt * u + bdy], [xr * u + bdx, yb * u + bdy], [xr * u, yb * u]]);
+      ctx.fill();
+      const tg = ctx.createLinearGradient(0, yt * u + bdy, 0, yt * u);
+      tg.addColorStop(0, `hsl(248 10% ${Math.min(60, tone * 1.75)}%)`);
+      tg.addColorStop(1, `hsl(249 10% ${Math.min(52, tone * 1.35)}%)`);
+      ctx.fillStyle = tg;
+      tracePath([[xl * u, yt * u], [xr * u, yt * u], [xr * u + bdx, yt * u + bdy], [xl * u + bdx, yt * u + bdy]]);
+      ctx.fill();
+    };
+    box(-0.56, 0.40, -0.05, 0.13, 22);
+    box(-0.42, 0.28, -0.19, -0.05, 26);
+
+    // Shaft corners: FL = lit front-left edge, C = near arris, R = far
+    // right edge. The bottom/top edges slant because the camera is above.
+    const FLb: [number, number] = [-u * 0.29, -u * 0.16];
+    const Cb: [number, number] = [u * 0.12, -u * 0.11];
+    const Rb: [number, number] = [u * 0.31, -u * 0.22];
+    const FLt: [number, number] = [-u * 0.175, -u * 1.22];
+    const Ct: [number, number] = [u * 0.075, -u * 1.19];
+    const Rt: [number, number] = [u * 0.195, -u * 1.25];
+    const apex: [number, number] = [u * 0.03, -u * 1.57];
+    const silhouette: Array<[number, number]> = [FLb, FLt, apex, Rt, Rb, Cb];
+
+    // Front face — lit, key light from the upper-left.
+    const fg = ctx.createLinearGradient(FLb[0], 0, Cb[0], 0);
+    fg.addColorStop(0, 'hsl(249 11% 45%)');
+    fg.addColorStop(0.55, 'hsl(250 11% 33%)');
+    fg.addColorStop(1, 'hsl(252 12% 25%)');
+    ctx.fillStyle = fg;
+    tracePath([FLb, Cb, Ct, FLt]);
     ctx.fill();
-    ctx.fillStyle = 'hsla(250 16% 34% / 0.5)';
-    ctx.beginPath();
-    ctx.ellipse(-u * 0.06, baseY + u * 0.1, u * 0.52, u * 0.1, -0.06, 0, Math.PI * 2);
+    // Right face — deep shadow, faint sky bounce at the top.
+    const sg = ctx.createLinearGradient(0, Rt[1], 0, Rb[1]);
+    sg.addColorStop(0, 'hsl(256 15% 15%)');
+    sg.addColorStop(1, 'hsl(258 16% 8%)');
+    ctx.fillStyle = sg;
+    tracePath([Cb, Rb, Rt, Ct]);
+    ctx.fill();
+    // Pyramidion: the brightest planes on the monument — they face the sky.
+    const pg = ctx.createLinearGradient(FLt[0], 0, Ct[0], 0);
+    pg.addColorStop(0, 'hsl(248 12% 58%)');
+    pg.addColorStop(1, 'hsl(250 12% 40%)');
+    ctx.fillStyle = pg;
+    tracePath([FLt, Ct, apex]);
+    ctx.fill();
+    ctx.fillStyle = 'hsl(256 15% 19%)';
+    tracePath([Ct, Rt, apex]);
     ctx.fill();
 
-    // Slab-by-slab fill: every stratum gets its own light so the beds read
-    // as separate stones. Lit front-left face, shadowed right face.
-    for (let i = 0; i < N; i++) {
-      const litL = 20 + rand() * 12;                          // per-slab tone
-      ctx.fillStyle = `hsl(${249 + rand() * 6} ${11 + rand() * 5}% ${litL}%)`;
-      tracePath([L[i], midL[i], L[i + 1], C[i + 1], C[i]]);
-      ctx.fill();
-      ctx.fillStyle = `hsl(${256 + rand() * 6} ${13 + rand() * 6}% ${6 + rand() * 6}%)`;
-      tracePath([C[i], C[i + 1], R[i + 1], midR[i], R[i]]);
-      ctx.fill();
-      // Weathered top ledge of the slab below peeking out.
-      ctx.strokeStyle = `hsla(246 20% ${38 + rand() * 14}% / 0.55)`;
-      ctx.lineWidth = Math.max(1.2, u * 0.018);
+    // Masonry joints — subtle, following each face's perspective so the
+    // planes stay flat and readable.
+    ctx.lineWidth = Math.max(1, u * 0.014);
+    for (let i = 1; i <= 5; i++) {
+      const f = i / 6 + (rand() - 0.5) * 0.03;
+      const lx = FLb[0] + (FLt[0] - FLb[0]) * f, ly = FLb[1] + (FLt[1] - FLb[1]) * f;
+      const cx2 = Cb[0] + (Ct[0] - Cb[0]) * f, cy2 = Cb[1] + (Ct[1] - Cb[1]) * f;
+      const rx2 = Rb[0] + (Rt[0] - Rb[0]) * f, ry2 = Rb[1] + (Rt[1] - Rb[1]) * f;
+      ctx.strokeStyle = `rgba(8,6,14,${0.25 + rand() * 0.15})`;
       ctx.beginPath();
-      ctx.moveTo(L[i][0] + u * 0.02, L[i][1]);
-      ctx.lineTo(C[i][0], C[i][1]);
+      ctx.moveTo(lx + u * 0.012, ly);
+      ctx.lineTo(cx2, cy2);
       ctx.stroke();
-    }
-    // Crown block.
-    ctx.fillStyle = 'hsl(250 12% 26%)';
-    tracePath([L[N], peakA, C[N]]);
-    ctx.fill();
-    ctx.fillStyle = 'hsl(258 15% 9%)';
-    tracePath([C[N], peakB, R[N]]);
-    ctx.fill();
-
-    // Strata fractures: jagged seams between slabs, with the owner's fire
-    // smouldering deep inside every seam.
-    for (let i = 1; i < N; i++) {
-      const sag = (rand() - 0.5) * u * 0.06;
-      const seam = (off: number, style: string, lw: number) => {
-        ctx.strokeStyle = style;
-        ctx.lineWidth = lw;
-        ctx.beginPath();
-        ctx.moveTo(L[i][0] + u * 0.02, L[i][1] + off);
-        ctx.lineTo(C[i][0] - u * 0.05, C[i][1] + sag + off);
-        ctx.lineTo(C[i][0] + u * 0.03, C[i][1] + sag - u * 0.025 + off);
-        ctx.lineTo(R[i][0] - u * 0.02, R[i][1] + off);
-        ctx.stroke();
-      };
-      seam(0, 'rgba(4,2,8,0.75)', Math.max(1.5, u * 0.026));
-      // Ember light deep inside the seam: a short smoulder around the crack's
-      // heart, not a stripe across the stone. Pulses slowly, independently.
-      const emberA = (0.28 + Math.max(0, Math.sin(t * 1.4 + i * 1.7)) * 0.38) * (0.35 + frac * 0.65);
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = `hsla(${hue} 95% 58% / ${emberA})`;
-      ctx.lineWidth = Math.max(1.2, u * 0.018);
-      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.beginPath();
-      ctx.moveTo((L[i][0] + C[i][0]) * 0.55, (L[i][1] + C[i][1]) / 2 + sag * 0.5 + u * 0.012);
-      ctx.lineTo(C[i][0] - u * 0.05, C[i][1] + sag + u * 0.012);
-      ctx.lineTo(C[i][0] + u * 0.03, C[i][1] + sag - u * 0.013);
+      ctx.moveTo(cx2, cy2);
+      ctx.lineTo(rx2 - u * 0.012, ry2);
       ctx.stroke();
-      ctx.restore();
+      // A weathered chip biting into a random joint.
+      if (rand() < 0.5) {
+        const chx = lx + (cx2 - lx) * (0.2 + rand() * 0.6);
+        const chs = u * (0.02 + rand() * 0.03);
+        ctx.fillStyle = 'rgba(8,6,14,0.4)';
+        tracePath([[chx, ly - chs], [chx + chs * 1.4, ly + chs * 0.4], [chx - chs, ly + chs * 0.5]]);
+        ctx.fill();
+      }
     }
-    // Vertical fracture down the shadow face + chipped facets for depth.
-    ctx.strokeStyle = 'rgba(3,2,7,0.55)';
-    ctx.lineWidth = 1.3;
+
+    // Ambient occlusion where the shaft meets the plinth.
+    const ao = ctx.createLinearGradient(0, -u * 0.38, 0, -u * 0.1);
+    ao.addColorStop(0, 'rgba(0,0,0,0)');
+    ao.addColorStop(1, 'rgba(0,0,0,0.42)');
+    ctx.fillStyle = ao;
+    tracePath([FLb, Cb, [Cb[0] + u * 0.02, Cb[1] - u * 0.3], [FLb[0] - u * 0.015, FLb[1] - u * 0.3]]);
+    ctx.fill();
+
+    // The glossy near arris — one bright edge running base to apex, the
+    // same trick that makes the reference arrow read instantly as 3D.
+    ctx.strokeStyle = 'rgba(215,220,250,0.4)';
+    ctx.lineWidth = Math.max(1.2, u * 0.018);
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(C[N - 1][0] + u * 0.09, C[N - 1][1]);
-    ctx.lineTo(R[3][0] - u * 0.08, R[3][1] + u * 0.05);
-    ctx.lineTo(R[1][0] - u * 0.05, R[1][1]);
+    ctx.moveTo(Cb[0], Cb[1]);
+    ctx.lineTo(Ct[0], Ct[1]);
+    ctx.lineTo(apex[0], apex[1]);
     ctx.stroke();
-    for (let k = 0; k < 5; k++) {
-      const i = 1 + Math.floor(rand() * (N - 1));
-      const onLit = rand() < 0.5;
-      const bx = onLit ? (L[i][0] + C[i][0]) / 2 : (C[i][0] + R[i][0]) / 2;
-      const by = L[i][1] - u * (0.05 + rand() * 0.12);
-      const s = u * (0.05 + rand() * 0.07);
-      ctx.fillStyle = onLit ? 'hsla(248 14% 44% / 0.5)' : 'hsla(260 18% 4% / 0.6)';
-      ctx.beginPath();
-      ctx.moveTo(bx, by - s);
-      ctx.lineTo(bx + s * (0.6 + rand() * 0.6), by + s * 0.4);
-      ctx.lineTo(bx - s * (0.5 + rand() * 0.6), by + s * (0.3 + rand() * 0.4));
-      ctx.closePath();
-      ctx.fill();
-    }
-    // Dark outline around the whole crag so it separates from the field.
-    ctx.strokeStyle = 'rgba(2,1,5,0.6)';
-    ctx.lineWidth = 1.6;
-    tracePath(silhouette);
+    // Hot glint where the pyramidion edge catches the sky.
+    ctx.strokeStyle = 'rgba(240,244,255,0.75)';
+    ctx.beginPath();
+    ctx.moveTo(Ct[0] + (apex[0] - Ct[0]) * 0.45, Ct[1] + (apex[1] - Ct[1]) * 0.45);
+    ctx.lineTo(apex[0], apex[1]);
+    ctx.stroke();
+    // Dark rim down the lit-side silhouette so the monument separates.
+    ctx.strokeStyle = 'rgba(2,1,5,0.5)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(FLb[0], FLb[1]);
+    ctx.lineTo(FLt[0], FLt[1]);
+    ctx.lineTo(apex[0], apex[1]);
     ctx.stroke();
 
-    // The heart ember: one deep gash mid-height where the mountain's fire
-    // burns brightest — the only "magic" left is geology.
-    const hy2 = baseY - H * 0.5;
+    // The owner's fire smoulders in two cracks near the base — geology,
+    // not sorcery.
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    const heart = ctx.createRadialGradient(u * 0.01, hy2, 1, u * 0.01, hy2, u * 0.3);
-    heart.addColorStop(0, `hsla(${hue} 95% 60% / ${glow * 0.24 * (0.3 + frac * 0.7)})`);
+    ctx.lineCap = 'round';
+    for (let c = 0; c < 2; c++) {
+      const emberA = (0.3 + Math.max(0, Math.sin(t * 1.5 + c * 2.4)) * 0.4) * (0.35 + frac * 0.65);
+      ctx.strokeStyle = `hsla(${hue} 95% 58% / ${emberA})`;
+      ctx.lineWidth = Math.max(1.1, u * 0.015);
+      const x0 = FLb[0] + (Cb[0] - FLb[0]) * (0.25 + c * 0.42);
+      const y0 = FLb[1] + (Cb[1] - FLb[1]) * (0.25 + c * 0.42) - u * 0.02;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x0 + u * (0.03 - c * 0.05), y0 - u * (0.1 + c * 0.05));
+      ctx.lineTo(x0 + u * (0.01 + c * 0.03), y0 - u * (0.2 + c * 0.1));
+      ctx.stroke();
+    }
+    // Warm heart glow low on the shaft.
+    const heart = ctx.createRadialGradient(-u * 0.05, -u * 0.4, 1, -u * 0.05, -u * 0.4, u * 0.3);
+    heart.addColorStop(0, `hsla(${hue} 95% 60% / ${glow * 0.16 * (0.3 + frac * 0.7)})`);
     heart.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
     ctx.fillStyle = heart;
-    ctx.fillRect(-u * 0.35, hy2 - u * 0.32, u * 0.72, u * 0.64);
+    ctx.fillRect(-u * 0.38, -u * 0.72, u * 0.72, u * 0.62);
     ctx.restore();
 
-    // Fallen boulders scattered around the base.
-    for (let k = 0; k < 5; k++) {
-      const bx = (rand() - 0.5) * u * 1.5;
-      const by = u * 0.02 + rand() * u * 0.16;
-      const br = u * (0.07 + rand() * 0.09);
+    // A few fallen stones at the base keep it grounded in the battlefield.
+    for (let k = 0; k < 3; k++) {
+      const bx = (rand() - 0.5) * u * 1.4;
+      const by = u * 0.04 + rand() * u * 0.14;
+      const br = u * (0.06 + rand() * 0.07);
       ctx.fillStyle = `hsl(${252 + rand() * 8} ${11 + rand() * 5}% ${10 + rand() * 8}%)`;
-      ctx.beginPath();
-      ctx.moveTo(bx - br, by);
-      ctx.lineTo(bx - br * 0.4, by - br * (0.5 + rand() * 0.4));
-      ctx.lineTo(bx + br * 0.5, by - br * (0.4 + rand() * 0.4));
-      ctx.lineTo(bx + br, by + br * 0.15);
-      ctx.closePath();
+      tracePath([[bx - br, by], [bx - br * 0.4, by - br * (0.5 + rand() * 0.4)], [bx + br * 0.5, by - br * (0.4 + rand() * 0.4)], [bx + br, by + br * 0.15]]);
       ctx.fill();
       ctx.fillStyle = 'hsla(248 16% 40% / 0.4)';
-      ctx.beginPath();
-      ctx.moveTo(bx - br * 0.4, by - br * 0.75);
-      ctx.lineTo(bx + br * 0.45, by - br * 0.6);
-      ctx.lineTo(bx + br * 0.1, by - br * 0.35);
-      ctx.closePath();
+      tracePath([[bx - br * 0.4, by - br * 0.75], [bx + br * 0.45, by - br * 0.6], [bx + br * 0.1, by - br * 0.35]]);
       ctx.fill();
     }
 
-    // The rare ember drifting off the seams.
+    // The rare ember drifting off the cracks.
     if (Math.random() < 0.06) {
       this.burst(p.x + (Math.random() - 0.5) * u * 0.4 * dsc, p.y - Math.random() * H * 0.8 * dsc, 1, 'mote', hue, 0.6);
     }
@@ -1069,7 +1063,7 @@ export class Renderer {
     // Sits just above the broken crown.
     const hpw = u * 1.9;
     const hph = 7;
-    const hy = peakA[1] - u * 0.22;
+    const hy = apex[1] - u * 0.24;
     ctx.fillStyle = 'rgba(4,3,8,0.82)';
     ctx.beginPath();
     ctx.roundRect(-hpw / 2 - 1.5, hy - 1.5, hpw + 3, hph + 3, 4.5);
@@ -1344,12 +1338,18 @@ export class Renderer {
             : 0.5
       );
 
+      // Bombardier beetles fire from the abdomen: while in an attack stance
+      // the sprite turns its BACK to the opponent and sprays over its rear,
+      // so every aim vector below is reversed for them.
+      const rearGunner = u.species === 'beetles' && (d.atk !== undefined || u.action === 'attack');
+      const simFace: 1 | -1 = rearGunner ? (u.facing === 1 ? -1 : 1) : u.facing;
+
       // Facing hysteresis: only flip after the sim holds a direction ~0.22 s,
       // so wall-slide wobble can't mirror-strobe the sprite.
-      if (u.facing !== d.face) {
+      if (simFace !== d.face) {
         d.faceHold += dt;
         if (d.faceHold > 0.22 || d.atk) {
-          d.face = u.facing;
+          d.face = simFace;
           d.faceHold = 0;
         }
       } else {
@@ -1366,8 +1366,8 @@ export class Renderer {
         let vx = 0;
         let vy = 0;
         if (d.atk) {
-          vx = d.atk.dirX;
-          vy = d.atk.dirY;
+          vx = rearGunner ? -d.atk.dirX : d.atk.dirX;
+          vy = rearGunner ? -d.atk.dirY : d.atk.dirY;
         } else if (moving) {
           vx = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
           vy = (this.localSeat === 1 ? -stepY : stepY) / stepLen;
@@ -1380,8 +1380,8 @@ export class Renderer {
             const ty = (this.localSeat === 1 ? -(tgt.y - d.dy) : tgt.y - d.dy);
             const tl = Math.hypot(tx, ty);
             if (tl > 0.001) {
-              vx = tx / tl;
-              vy = ty / tl;
+              vx = rearGunner ? -tx / tl : tx / tl;
+              vy = rearGunner ? -ty / tl : ty / tl;
             }
           }
         }
@@ -1591,12 +1591,15 @@ export class Renderer {
             lunge = -0.13 + 0.38 * (1 - (1 - kk) * (1 - kk));
           } else lunge = 0.25 * (1 - (at - 0.6) / 0.4);
           const amp = (d.atk.crit ? 1.35 : 1) * s;
-          ctx.translate(d.atk.dirX * lunge * amp, d.atk.dirY * lunge * amp);
+          // Rear-gunners (bombardier beetle) kick back with the shot —
+          // artillery recoil away from the target instead of a lunge into it.
+          const rg = u.species === 'beetles' ? -0.55 : 1;
+          ctx.translate(d.atk.dirX * lunge * amp * rg, d.atk.dirY * lunge * amp * rg);
           strikeStretch = at >= 0.35 && at < 0.6 ? 0.06 : at < 0.35 ? -0.04 : 0;
           aimEnv = at < 0.2 ? at / 0.2 : at < 0.75 ? 1 : (1 - at) / 0.25;
-          aimRot = view === 'side'
+          aimRot = (view === 'side'
             ? clamp(d.atk.dirY, -0.95, 0.95) * 0.7
-            : clamp(d.atk.dirX, -1, 1) * 0.18;
+            : clamp(d.atk.dirX, -1, 1) * 0.18) * (rg < 0 ? -1 : 1);
         }
       }
       if (d.jig) {

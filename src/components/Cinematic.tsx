@@ -239,8 +239,10 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           const frac = phase - Math.floor(phase);
           const mix = frac * frac * (3 - 2 * frac);
           const targetH = H * 0.3 * (HERO_SCALE[active.hero.species] ?? 1);
-          ctx.shadowColor = `hsl(${active.hero.hue} 90% 55%)`;
-          ctx.shadowBlur = 34;
+          // No glow on the hero: a canvas shadow re-renders for BOTH
+          // crossfade layers, so its intensity pumps with the blend and
+          // reads as flicker around the silhouette.
+          ctx.shadowBlur = 0;
           // Smooth, continuous bob: gentle hover for flyers, a soft rolling
           // stride-sway for walkers (two beats per stride cycle).
           const bob = flying

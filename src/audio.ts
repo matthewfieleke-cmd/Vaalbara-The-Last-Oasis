@@ -53,62 +53,9 @@ class AudioCore {
 
 const core = new AudioCore();
 
-/* ------------------------------------------------------------------------ */
-/* Recorded stingers — real orchestral hits cut from the score (Audio.mp4)   */
-/* ------------------------------------------------------------------------ */
-
-const SAMPLE_FILES = {
-  victory: './sfx/victory.m4a',
-  defeat: './sfx/defeat.m4a',
-  pond: './sfx/pond.m4a',
-} as const;
-
-type SampleName = keyof typeof SAMPLE_FILES;
-
-const samples = new Map<SampleName, AudioBuffer>();
-let samplesRequested = false;
-
-function preloadSamples(): void {
-  const ctx = core.ctx;
-  if (!ctx || samplesRequested) return;
-  samplesRequested = true;
-  for (const [name, url] of Object.entries(SAMPLE_FILES) as Array<[SampleName, string]>) {
-    void fetch(url)
-      .then((r) => r.arrayBuffer())
-      .then((ab) => ctx.decodeAudioData(ab))
-      .then((buf) => samples.set(name, buf))
-      .catch((err) => console.warn(`[audio] stinger ${name} failed to load`, err));
-  }
-}
-
-/** Play a recorded stinger, ducking the generative score underneath it so
- *  the orchestra lands clean. Returns false if the sample isn't ready
- *  (caller falls back to the synth version). */
-function playSample(name: SampleName, gain = 1): boolean {
-  const ctx = core.ensure();
-  const buf = samples.get(name);
-  if (!ctx || !core.sfxBus || !buf) return false;
-  const src = ctx.createBufferSource();
-  src.buffer = buf;
-  const g = ctx.createGain();
-  g.gain.value = gain;
-  src.connect(g);
-  g.connect(core.sfxBus);
-  src.start();
-  // Duck the score while the stinger speaks, then ease it back in.
-  if (core.musicBus) {
-    const t0 = ctx.currentTime;
-    core.musicBus.gain.cancelScheduledValues(t0);
-    core.musicBus.gain.setTargetAtTime(0.16, t0, 0.06);
-    core.musicBus.gain.setTargetAtTime(0.55, t0 + Math.max(0.4, buf.duration - 1.2), 0.6);
-  }
-  return true;
-}
-
 /** Must be called from a user gesture (tap) to unlock audio on mobile. */
 export function unlockAudio(): void {
   core.ensure();
-  preloadSamples();
 }
 
 export function setMuted(muted: boolean): void {
@@ -372,91 +319,27 @@ const SPECIES_SFX: Record<SpeciesId, { spawn: SfxFn; attack: SfxFn }> = {
 };
 
 /* ------------------------------------------------------------------------ */
-/* War-camp instruments — horns and gongs for the big martial moments        */
+/* Ceremonial tones — the game's "result" language. Austere and low:         */
+/* great drums and dark string drones, never bright arpeggiated chimes.      */
 /* ------------------------------------------------------------------------ */
 
-/** A massive bronze war horn: detuned saw stack swelling through an opening
- *  lowpass, with a slight upward "lip" bend into the note and a sub octave
- *  under it. Reads as a call across a battlefield, not a synth. */
-function warHorn(freq: number, dur = 1.4, gain = 0.3, when = 0): void {
-  const ctx = core.ensure();
-  if (!ctx || !core.sfxBus) return;
-  const t0 = (when || ctx.currentTime);
-  const out = ctx.createGain();
-  out.gain.setValueAtTime(0.0001, t0);
-  out.gain.exponentialRampToValueAtTime(gain, t0 + dur * 0.22);
-  out.gain.setValueAtTime(gain, t0 + dur * 0.6);
-  out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.setValueAtTime(freq * 2.4, t0);
-  lp.frequency.exponentialRampToValueAtTime(freq * 7, t0 + dur * 0.35);
-  lp.frequency.exponentialRampToValueAtTime(freq * 3, t0 + dur);
-  lp.Q.value = 0.9;
-  lp.connect(out);
-  out.connect(core.sfxBus);
-  for (const cents of [-8, 0, 7]) {
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    const f = freq * Math.pow(2, cents / 1200);
-    // The "lip" bend: horns scoop up into the note.
-    osc.frequency.setValueAtTime(f * 0.94, t0);
-    osc.frequency.exponentialRampToValueAtTime(f, t0 + 0.09);
-    osc.connect(lp);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.1);
-  }
-  const sub = ctx.createOscillator();
-  sub.type = 'triangle';
-  sub.frequency.value = freq / 2;
-  const subG = ctx.createGain();
-  subG.gain.setValueAtTime(0.0001, t0);
-  subG.gain.exponentialRampToValueAtTime(gain * 0.5, t0 + dur * 0.3);
-  subG.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  sub.connect(subG);
-  subG.connect(core.sfxBus);
-  sub.start(t0);
-  sub.stop(t0 + dur + 0.1);
-  // Breath at the mouthpiece.
-  noise({ dur: Math.min(0.5, dur * 0.4), gain: gain * 0.18, filterFreq: freq * 6, filterType: 'bandpass', when: t0 });
+/** One strike of a great ceremonial drum: deep skin hit, sub-octave weight
+ *  and a short room bloom. The backbone of every verdict sound. */
+function greatDrum(dur = 1.0, gain = 0.5, when = 0, pitch = 72): void {
+  const t = when || (core.ctx?.currentTime ?? 0);
+  voice({ type: 'sine', freq: pitch, freqEnd: pitch * 0.44, dur, gain, when: t });
+  voice({ type: 'triangle', freq: pitch * 0.5, freqEnd: pitch * 0.3, dur: dur * 1.25, gain: gain * 0.5, when: t });
+  noise({ dur: Math.min(0.3, dur * 0.35), gain: gain * 0.35, filterFreq: 700, filterEnd: 120, when: t });
 }
 
-/** A temple gong: inharmonic metal partials with a shimmering noise wash,
- *  a hard mallet strike and a long slow bloom-and-decay tail. */
-function gong(base = 98, dur = 3.2, gain = 0.4, when = 0): void {
-  const ctx = core.ensure();
-  if (!ctx || !core.sfxBus) return;
-  const t0 = (when || ctx.currentTime);
-  const out = ctx.createGain();
-  // Gongs bloom: the strike, then the wash swells before the long decay.
-  out.gain.setValueAtTime(0.0001, t0);
-  out.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
-  out.gain.exponentialRampToValueAtTime(gain * 0.6, t0 + 0.25);
-  out.gain.exponentialRampToValueAtTime(gain * 0.75, t0 + 0.7);
-  out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  out.connect(core.sfxBus);
-  // Inharmonic partial ratios of a tam-tam.
-  const partials: Array<[number, number]> = [
-    [1, 0.5], [1.483, 0.28], [1.932, 0.34], [2.546, 0.2],
-    [2.63, 0.16], [3.358, 0.12], [4.11, 0.08], [5.43, 0.05],
-  ];
-  for (const [ratio, amp] of partials) {
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    const f = base * ratio;
-    osc.frequency.setValueAtTime(f * 1.01, t0);
-    osc.frequency.exponentialRampToValueAtTime(f, t0 + 0.6); // strike detune settles
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(amp, t0);
-    g.gain.exponentialRampToValueAtTime(amp * 0.001, t0 + dur * (0.55 + ratio * 0.08));
-    osc.connect(g);
-    g.connect(out);
-    osc.start(t0);
-    osc.stop(t0 + dur + 0.2);
+/** A dark low drone — bowed cellos in a stone hall. Slow swell, heavy
+ *  lowpass, gentle detune; no shimmer, no sparkle. */
+function drone(freqs: number[], dur: number, gain: number, when = 0): void {
+  const t = when || (core.ctx?.currentTime ?? 0);
+  for (const f of freqs) {
+    voice({ type: 'sawtooth', freq: f, dur, gain, filterFreq: Math.max(220, f * 2.4), attack: dur * 0.28, when: t, pan: -0.16 });
+    voice({ type: 'sawtooth', freq: f * 1.005, dur, gain: gain * 0.7, filterFreq: Math.max(180, f * 2), attack: dur * 0.34, when: t, pan: 0.16 });
   }
-  // Mallet impact + the metallic shimmer wash.
-  noise({ dur: 0.08, gain: gain * 0.5, filterFreq: 1400, filterEnd: 300, when: t0 });
-  noise({ dur: dur * 0.7, gain: gain * 0.16, filterFreq: 3400, filterType: 'bandpass', filterEnd: 900, when: t0 + 0.02 });
 }
 
 /* ------------------------------------------------------------------------ */
@@ -484,12 +367,14 @@ const GLOBAL_SFX = {
     voice({ type: 'triangle', freq: 300, freqEnd: 60, dur: 0.4, gain: 0.16 });
   },
   heal: () => {
-    voice({ type: 'sine', freq: 520, freqEnd: 1040, dur: 0.4, gain: 0.12 });
-    voice({ type: 'sine', freq: 780, freqEnd: 1560, dur: 0.4, gain: 0.08, when: (core.ctx?.currentTime ?? 0) + 0.1 });
+    // A low, breath-like restorative swell — no rising chime.
+    voice({ type: 'sine', freq: 220, freqEnd: 262, dur: 0.5, gain: 0.09, attack: 0.16 });
+    voice({ type: 'sine', freq: 330, dur: 0.5, gain: 0.05, attack: 0.2 });
   },
   lotusBurst: () => {
-    voice({ type: 'sine', freq: 660, freqEnd: 1320, dur: 0.5, gain: 0.14 });
-    noise({ dur: 0.4, gain: 0.1, filterFreq: 4000, filterType: 'highpass' });
+    // Watery bloom: soft mid-register bubble and spray, kept dark.
+    voice({ type: 'sine', freq: 330, freqEnd: 494, dur: 0.35, gain: 0.09, attack: 0.05 });
+    noise({ dur: 0.4, gain: 0.1, filterFreq: 2400, filterType: 'bandpass' });
   },
   splash: () => {
     // Acid burst: sizzling impact.
@@ -497,10 +382,9 @@ const GLOBAL_SFX = {
     voice({ type: 'sine', freq: 300, freqEnd: 90, dur: 0.3, gain: 0.18 });
   },
   obeliskHit: () => {
-    // Stone thud with a crystalline ring off the rune band.
+    // Pure stone thud — dull rock knock, no ring.
     voice({ type: 'sine', freq: 140, freqEnd: 55, dur: 0.28, gain: 0.24 });
-    voice({ type: 'triangle', freq: 1180, freqEnd: 990, dur: 0.35, gain: 0.05 });
-    noise({ dur: 0.2, gain: 0.12, filterFreq: 900, filterEnd: 300 });
+    noise({ dur: 0.2, gain: 0.14, filterFreq: 900, filterEnd: 300 });
   },
   obeliskDown: () => {
     // Tower collapse: deep rumble + cascading rubble.
@@ -512,18 +396,18 @@ const GLOBAL_SFX = {
     });
   },
   pondClaimed: () => {
-    // The water changes hands: a real orchestral drum-and-gong hit cut from
-    // the score. Synth horn+gong only if the recording hasn't landed yet.
-    if (playSample('pond', 0.9)) return;
+    // The water changes hands: one deep drum and a low open fifth held
+    // underneath — a solemn territorial declaration, no sparkle.
     const t = core.ctx?.currentTime ?? 0;
-    warHorn(146.8, 1.1, 0.24, t);           // D3 call
-    gong(110, 2.6, 0.3, t + 0.35);
+    greatDrum(1.0, 0.5, t);
+    drone([73.4, 110], 2.2, 0.06, t + 0.05); // D2 + A2
   },
   blessing: () => {
+    // A blessing in this world has weight: a soft low swell with one
+    // restrained overtone rising out of it — not a tinkling arpeggio.
     const t = core.ctx?.currentTime ?? 0;
-    [523, 659, 784, 1047].forEach((f, i) => {
-      voice({ type: 'sine', freq: f, dur: 0.6, gain: 0.12, when: t + i * 0.12 });
-    });
+    drone([110, 146.8, 220], 2.4, 0.045, t);
+    voice({ type: 'sine', freq: 440, dur: 1.4, gain: 0.045, attack: 0.5, when: t + 0.3 });
   },
   ui: () => {
     voice({ type: 'sine', freq: 700, freqEnd: 900, dur: 0.07, gain: 0.1 });
@@ -535,25 +419,24 @@ const GLOBAL_SFX = {
     voice({ type: 'square', freq: 180, freqEnd: 120, dur: 0.15, gain: 0.1 });
   },
   victory: () => {
-    // Triumph: the score's own great impact-and-swell (cut from Audio.mp4).
-    if (playSample('victory', 1)) return;
-    // Synth fallback: massed war horns rising D3 -> A3 -> D4, then a gong.
+    // Triumph, austere: three slow ceremonial drum strikes, the last and
+    // deepest landing as the dark drone finally opens into a major third —
+    // earned and grave, not sugary.
     const t = core.ctx?.currentTime ?? 0;
-    warHorn(146.8, 1.0, 0.26, t);
-    warHorn(220, 1.1, 0.26, t + 0.42);
-    warHorn(293.66, 1.9, 0.3, t + 0.86);
-    gong(98, 3.6, 0.42, t + 0.9);
-    gong(196, 2.2, 0.14, t + 1.25);
+    greatDrum(1.0, 0.48, t);
+    greatDrum(1.0, 0.54, t + 0.55);
+    greatDrum(1.7, 0.64, t + 1.1, 62);
+    drone([73.4, 110], 1.8, 0.055, t);                    // D2 + A2
+    drone([73.4, 110, 146.8, 185], 3.4, 0.06, t + 1.05);  // + D3 + F#3
   },
   defeat: () => {
-    // The fall: the score's dying outro, embers fading to silence.
-    if (playSample('defeat', 1)) return;
-    // Synth fallback: a low descending horn call and a dark gong.
+    // The fall: two muffled drum hits and a drone that sinks a half-step
+    // into the dark and never resolves.
     const t = core.ctx?.currentTime ?? 0;
-    warHorn(174.6, 1.0, 0.2, t);
-    warHorn(146.8, 1.4, 0.2, t + 0.5);
-    warHorn(110, 2.0, 0.22, t + 1.05);
-    gong(65, 4.0, 0.34, t + 1.15);
+    greatDrum(1.2, 0.42, t, 58);
+    greatDrum(2.2, 0.5, t + 0.75, 48);
+    drone([73.4, 87.3], 1.6, 0.055, t);         // D2 + F2 (minor)
+    drone([69.3, 82.4], 3.6, 0.05, t + 1.25);   // sinks to C#2 + E2
   },
 };
 
