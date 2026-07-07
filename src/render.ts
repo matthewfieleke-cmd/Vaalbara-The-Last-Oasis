@@ -188,6 +188,9 @@ export class Renderer {
   /** True while the player has a unit card armed in Phase 1 — the two gate
    *  pads pulse hard so "tap a gate" is unmissable. */
   padHint = false;
+  /** CSS px from the canvas top covered by the DOM HUD (set by the screen);
+   *  on-field UI like the enemy gatehouse bars must stay below this line. */
+  topSafe = 0;
 
   // Layout.
   private unit = 40; // px per world unit
@@ -955,10 +958,11 @@ export class Renderer {
         const flash = this.obeliskFlash.get(owner * 2 + worldWing) ?? 0;
         const frac = clamp(wing.hp / wing.maxHp, 0, 1);
         // Your bars ride the gatehouse towers; the enemy's towers run up
-        // under the HUD, so clamp their bars onto the visible wall face.
+        // under the DOM HUD, whose overhang differs per device — so clamp
+        // their bars below the measured HUD line (and above the wall base).
         const barY = mine
           ? topY + h * 0.16
-          : Math.max(topY + h * 0.14, this.oy + u * 0.9);
+          : clamp(topY + h * 0.14, this.topSafe + u * 0.3, baseY - u * 0.6);
         const bw = u * 2.15;
         const bh = Math.max(4, u * 0.13);
         ctx.save();
