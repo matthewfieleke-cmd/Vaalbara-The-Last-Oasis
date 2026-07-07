@@ -375,17 +375,8 @@ export function GameScreen({
 
   return (
     <div className="game-screen">
-      <div
-        className="game-canvas-wrap"
-        ref={wrapRef}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      >
-        <canvas ref={canvasRef} />
-      </div>
-
+      {/* The HUD lives IN FLOW above the canvas — it can never cover the
+          arena, so the enemy towers and gate openings always stay clear. */}
       <div className="hud-top">
         <div className="hud-row">
           <span className={`phase-pill ${phase === 'oasis' || phase === 'ended' ? 'oasis' : 'basalt'}`}>
@@ -442,6 +433,17 @@ export function GameScreen({
               : '❖ Hold the pond — 100% claims victory'}
         </div>
         {me?.blessed && <div className="blessing-tag">✦ Vaalbara Blessing ✦</div>}
+      </div>
+
+      <div
+        className="game-canvas-wrap"
+        ref={wrapRef}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <canvas ref={canvasRef} />
       </div>
 
       <button

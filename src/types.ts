@@ -394,26 +394,34 @@ export const inDeployBand = (player: PlayerId, y: number): boolean =>
   player === 0 ? y >= WORLD_H - DEPLOY_DEPTH : y < DEPLOY_DEPTH;
 
 /* Phase-1 fortresses ------------------------------------------------------ */
-/** Arch/lane x positions (world units) — must match the fortress paintings,
- *  whose gates sit at ~22.7% and ~78.2% of the wall's width. */
-export const FORT_LANE_X: readonly [number, number] = [2.04, 7.04];
+/** Gate/lane x positions per fortress owner, measured from the painted lava
+ *  bridges in the basalt arena: each fortress's arches sit EXACTLY on the
+ *  bridges over the river guarding it, so gate → bridge → field is one
+ *  straight believable march. (Bottom river bridges: 1.75 / 6.5; top river
+ *  bridges: 2.6 / 7.28.) */
+export const FORT_LANES: Record<PlayerId, readonly [number, number]> = {
+  0: [1.75, 6.5],
+  1: [2.6, 7.28],
+};
 /** Field-facing wall line of each fortress: seat 1 (top) wall front and
  *  seat 0 (bottom) wall front. Everything beyond is fortress interior. */
 export const FORT_WALL_FRONT: Record<PlayerId, number> = { 0: 11.65, 1: 3.35 };
 /** Half-width of the arch corridors carved through each wall — matches the
- *  painted openings, so units never walk through visible stone. */
+ *  painted openings AND the bridge width, so units never cross visible stone
+ *  or lava. */
 export const FORT_ARCH_HALF_W = 0.62;
 /** Wing bodies (the gatehouses units batter) sit just inside the wall. */
 export const FORT_WING_Y: Record<PlayerId, number> = { 0: 12.4, 1: 2.6 };
 export const FORT_WING_R = 0.85;
-/** Tap-to-deploy pads: the visible arch mouths of your own fortress. */
-export const FORT_PAD_Y: Record<PlayerId, number> = { 0: 13.3, 1: 1.7 };
-/** Where deployed units actually MATERIALISE: at the far (outside) end of
- *  the arch corridor, so every warrior marches the full tunnel and visibly
- *  emerges from the gateway onto the field. */
-export const FORT_SPAWN_Y: Record<PlayerId, number> = { 0: 14.45, 1: 0.55 };
+/** Tap-to-deploy pads: on the apron just outside your rear tunnel mouths —
+ *  the pulsing rings must never sit inside the openings themselves. */
+export const FORT_PAD_Y: Record<PlayerId, number> = { 0: 14.55, 1: 0.45 };
+/** Where deployed units actually MATERIALISE: on the apron just OUTSIDE the
+ *  fortress, so every warrior walks in through the rear tunnel mouth, under
+ *  the building, and emerges from the gateway onto the field. */
+export const FORT_SPAWN_Y: Record<PlayerId, number> = { 0: 14.7, 1: 0.55 };
 export const fortPads = (seat: PlayerId): Array<{ x: number; y: number }> =>
-  FORT_LANE_X.map((x) => ({ x, y: FORT_PAD_Y[seat] }));
+  FORT_LANES[seat].map((x) => ({ x, y: FORT_PAD_Y[seat] }));
 
 export const AQUA_MAX = 10;
 /** Slow drip (1 aqua / ~3.75 s) keeps armies small: distinct duels, not mobs. */

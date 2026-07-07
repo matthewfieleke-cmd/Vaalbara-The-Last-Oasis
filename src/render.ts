@@ -16,7 +16,7 @@
  *    tick, with visual catch-up interpolation for network corrections.
  * ========================================================================== */
 
-import { FORT_ARCH_HALF_W, FORT_LANE_X, FORT_SPAWN_Y, FORT_WALL_FRONT, TICK_MS, WORLD_H, WORLD_W, fortPads } from './types';
+import { FORT_ARCH_HALF_W, FORT_LANES, FORT_SPAWN_Y, FORT_WALL_FRONT, TICK_MS, WORLD_H, WORLD_W, fortPads } from './types';
 import type { GameEvent, GameState, PlayerId, SpeciesId } from './types';
 import { speciesDef } from './data';
 import { getAnim, getFortArt, getPhaseArt, getSprite } from './sprites';
@@ -27,6 +27,32 @@ import { drawSpecies } from './vector-art';
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** Painted gate geometry, measured from the processed fortress art: gate
+ *  centres as fractions of image width, opening half-width (fraction of
+ *  width), and the opening's apex/base as fractions of image height from the
+ *  top. 'front' is the enemy stronghold facade; 'rear' is your stronghold
+ *  seen from behind/above. */
+interface FortGateArt {
+  arch: readonly [number, number];
+  halfW: number;
+  apexFrac: number;
+  baseFrac: number;
+}
+const FORT_ART: Record<'front' | 'rear', FortGateArt> = {
+  front: { arch: [0.229, 0.780], halfW: 0.058, apexFrac: 0.20, baseFrac: 0.995 },
+  rear: { arch: [0.242, 0.762], halfW: 0.049, apexFrac: 0.31, baseFrac: 0.985 },
+};
+
+interface FortLayout {
+  mine: boolean;
+  art: FortGateArt;
+  left: number;
+  width: number;
+  baseY: number;
+  topY: number;
+  h: number;
+}
 
 /** Per-species sprite size trims. Swarm critters read at critter scale. */
 const SIZE_TWEAK: Partial<Record<SpeciesId, number>> = {
@@ -168,6 +194,8 @@ export class Renderer {
   private particles: Particle[] = [];
   private floats: FloatText[] = [];
   private display = new Map<number, DisplayUnit>();
+  /** Units seen across BOTH unit passes this frame (display-map GC). */
+  private aliveIds = new Set<number>();
   private flashes = new Map<number, number>();
   /** Gatehouse hit flash, keyed owner * 2 + wing. */
   private obeliskFlash = new Map<number, number>();
@@ -389,7 +417,8 @@ export class Renderer {
         const mine = e.owner === this.localSeat;
         this.burst(p.x, p.y - this.unit * 0.7, 8, 'spark', mine ? 190 : 30, 1.4);
         this.burst(p.x, p.y - this.unit * 0.3, 3, 'ash', 20, 1.1);
-        const wing = Math.abs(e.x - FORT_LANE_X[0]) < Math.abs(e.x - FORT_LANE_X[1]) ? 0 : 1;
+        const lanes = FORT_LANES[e.owner];
+        const wing = Math.abs(e.x - lanes[0]) < Math.abs(e.x - lanes[1]) ? 0 : 1;
         this.obeliskFlash.set(e.owner * 2 + wing, 0.24);
         const mid = this.ox + (WORLD_W / 2) * this.unit;
         this.floats.push({
@@ -511,7 +540,12 @@ export class Renderer {
       this.drawZones(ctx, st, 'under');
       this.drawObjectives(ctx, st, dt);
       this.drawTelegraphs(ctx, st, now);
-      this.drawUnits(ctx, st, dt, now);
+      this.drawUnits(ctx, st, dt, now, 'field');
+      // YOUR fortress is painted OVER the field units (it is the nearest
+      // thing to the camera); units inside it draw after it, clipped to its
+      // rear tunnel mouths / the ground beyond its front crest.
+      if (st.obelisks.length > 0) this.drawFortress(ctx, st, this.localSeat);
+      this.drawUnits(ctx, st, dt, now, 'over');
       this.drawProjectiles(ctx, st, now);
       this.drawZones(ctx, st, 'over');
       if (st.obelisks.length > 0) this.drawFortressBars(ctx, st);
@@ -770,7 +804,9 @@ export class Renderer {
       if (n <= 0) this.obeliskFlash.delete(k);
       else this.obeliskFlash.set(k, n);
     }
-    if (st.obelisks.length > 0) this.drawFortresses(ctx, st);
+    // Only the ENEMY stronghold draws under the units; yours (nearest the
+    // camera) is painted over them later in the frame.
+    if (st.obelisks.length > 0) this.drawFortress(ctx, st, this.localSeat === 0 ? 1 : 0);
 
     // Pond control ring: glows in the leading side's colour, harder as the
     // claim approaches 100%.
@@ -812,36 +848,39 @@ export class Renderer {
 
   /* ---------------------------- fortresses ------------------------------- */
 
-  /** Screen-space layout of one fortress facade — shared by the facade pass,
-   *  the HP-bar pass and the arch-tunnel clipping so they can never drift. */
-  private fortLayout(owner: PlayerId): { left: number; width: number; baseY: number; topY: number; h: number } | null {
+  /** Screen-space layout of one fortress painting — shared by the facade
+   *  passes, the HP-bar pass and the tunnel clipping so they never drift.
+   *  The painting is fitted HORIZONTALLY so its two painted gates land
+   *  exactly on that fortress's lava-bridge lanes. */
+  private fortLayout(owner: PlayerId): FortLayout | null {
     const mine = owner === this.localSeat;
-    const img = getFortArt(mine ? 'blue' : 'red');
+    const img = getFortArt(mine ? 'rear' : 'front');
     if (!img) return null;
-    const a = this.worldToScreen(0, WORLD_H / 2);
-    const b = this.worldToScreen(WORLD_W, WORLD_H / 2);
-    const left = Math.min(a.x, b.x);
-    const width = Math.abs(b.x - a.x);
+    const art = FORT_ART[mine ? 'rear' : 'front'];
+    const lanes = FORT_LANES[owner];
+    const sA = this.worldToScreen(lanes[0], 0).x;
+    const sB = this.worldToScreen(lanes[1], 0).x;
+    const sLeft = Math.min(sA, sB);
+    const width = (Math.max(sA, sB) - sLeft) / (art.arch[1] - art.arch[0]);
+    const left = sLeft - art.arch[0] * width;
     const h = width * (img.height / img.width);
-    const baseY = mine
-      ? this.worldToScreen(WORLD_W / 2, this.localSeat === 0 ? 15.45 : -0.45).y
-      : this.worldToScreen(WORLD_W / 2, FORT_WALL_FRONT[owner]).y;
-    return { left, width, baseY, topY: baseY - h, h };
+    const wallY = this.worldToScreen(WORLD_W / 2, FORT_WALL_FRONT[owner]).y;
+    // The enemy stronghold faces the camera: its wall base sits ON its wall
+    // line. YOUR stronghold is seen from behind/above: the painting's top
+    // edge is the front battlement crest, overhanging the wall line a touch,
+    // and its bottom edge is the rear wall your warriors walk in through.
+    const baseY = mine ? wallY - this.unit * 0.55 + h : wallY;
+    return { mine, art, left, width, baseY, topY: baseY - h, h };
   }
 
-  /** Trace one painted arch opening (a pointed gothic doorway) in screen
-   *  space — used to clip units marching through the far fortress's tunnel
-   *  so they visibly emerge from behind the stone. */
-  private archPath(
-    ctx: CanvasRenderingContext2D,
-    lay: { width: number; baseY: number; topY: number; h: number },
-    laneX: number,
-  ): void {
-    const cx = this.worldToScreen(laneX, WORLD_H / 2).x;
-    const half = lay.width * 0.069;
-    const base = lay.baseY + this.unit * 0.2;
-    const apex = lay.topY + lay.h * 0.3;
-    const spring = apex + (base - apex) * 0.22;
+  /** Trace one painted gate opening (a pointed gothic doorway) in screen
+   *  space — the visibility window for units inside that tunnel. */
+  private archPath(ctx: CanvasRenderingContext2D, lay: FortLayout, laneX: number): void {
+    const cx = this.worldToScreen(laneX, 0).x;
+    const half = lay.width * lay.art.halfW * 1.12;
+    const base = lay.topY + lay.h * lay.art.baseFrac + this.unit * 0.2;
+    const apex = lay.topY + lay.h * lay.art.apexFrac;
+    const spring = apex + (base - apex) * 0.24;
     ctx.moveTo(cx - half, base);
     ctx.lineTo(cx - half, spring);
     ctx.quadraticCurveTo(cx - half, apex, cx, apex);
@@ -850,143 +889,124 @@ export class Renderer {
     ctx.closePath();
   }
 
-  /** If (x, y) lies inside a fortress arch corridor whose gatehouse still
-   *  stands, return which fortress and how deep into the tunnel (0 at the
-   *  field-side mouth, 1 at the outside end). Razed lanes return null — the
-   *  arch is gone and units clamber over the open rubble instead. */
-  private tunnelOf(st: GameState, x: number, y: number): { owner: PlayerId; laneX: number; depth: number } | null {
+  /** If (x, y) lies inside a fortress interior on one of its gate lanes,
+   *  return which fortress, the lane, tunnel depth (0 at the field-side wall
+   *  line, 1 at the outside end) and whether that lane's gatehouse still
+   *  stands. Off-lane positions (a flyer crossing the battlements) return
+   *  null and draw normally. */
+  private tunnelOf(st: GameState, x: number, y: number): { owner: PlayerId; laneX: number; depth: number; gateUp: boolean } | null {
     if (st.obelisks.length === 0) return null;
     const owner: PlayerId | null =
       y > FORT_WALL_FRONT[0] ? 0 : y < FORT_WALL_FRONT[1] ? 1 : null;
     if (owner === null) return null;
-    const wing = Math.abs(x - FORT_LANE_X[0]) < Math.abs(x - FORT_LANE_X[1]) ? 0 : 1;
-    const laneX = FORT_LANE_X[wing];
-    // Well off the corridor (a flyer crossing the battlements) draws normally.
+    const lanes = FORT_LANES[owner];
+    const wing = Math.abs(x - lanes[0]) < Math.abs(x - lanes[1]) ? 0 : 1;
+    const laneX = lanes[wing];
     if (Math.abs(x - laneX) > FORT_ARCH_HALF_W + 0.55) return null;
     const gate = st.obelisks.find((o) => o.owner === owner && o.wing === wing);
-    if (!gate || gate.hp <= 0) return null;
     const depth = owner === 0
       ? (y - FORT_WALL_FRONT[0]) / (FORT_SPAWN_Y[0] - FORT_WALL_FRONT[0])
       : (FORT_WALL_FRONT[1] - y) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
-    return { owner, laneX, depth: clamp(depth, 0, 1) };
+    return { owner, laneX, depth: clamp(depth, 0, 1), gateUp: !!gate && gate.hp > 0 };
   }
 
-  /** The Phase-1 stone fortresses. Each seat's stronghold spans the full
-   *  field width at its own end: a painted basalt wall with two arched
-   *  gateways (the lanes). The facade is drawn UNDER the units, so a unit
-   *  standing in a gate reads as stepping out of the dark passage. Each
-   *  gatehouse wing carries its own HP bar; when a wing's bar empties the
-   *  painting swaps to its collapsed-ruin half in a wall of dust. */
-  private drawFortresses(ctx: CanvasRenderingContext2D, st: GameState): void {
+  /** One Phase-1 stronghold. The ENEMY fortress (front painting) is drawn
+   *  UNDER the units, so attackers stand against its wall and its tunnellers
+   *  are clipped to the painted openings. YOUR fortress (rear painting, seen
+   *  from behind/above like a CR king tower) is drawn OVER the units — your
+   *  warriors walk in through the rear tunnel mouths, vanish beneath the
+   *  building and re-emerge past the front battlement crest. When a wing's
+   *  bar empties the painting swaps to its collapsed-ruin half. */
+  private drawFortress(ctx: CanvasRenderingContext2D, st: GameState, owner: PlayerId): void {
     const u = this.unit;
-    const a = this.worldToScreen(0, WORLD_H / 2);
-    const b = this.worldToScreen(WORLD_W, WORLD_H / 2);
-    const left = Math.min(a.x, b.x);
-    const width = Math.abs(b.x - a.x);
+    const wings = st.obelisks
+      .filter((o) => o.owner === owner)
+      .sort((p1, p2) => this.worldToScreen(p1.x, p1.y).x - this.worldToScreen(p2.x, p2.y).x);
+    if (wings.length !== 2) return;
+    const mine = owner === this.localSeat;
+    const [wl, wr] = wings; // screen-left and screen-right gatehouses
+    const downL = wl.hp <= 0;
+    const downR = wr.hp <= 0;
 
-    for (const owner of [0, 1] as const) {
-      const wings = st.obelisks
-        .filter((o) => o.owner === owner)
-        .sort((p1, p2) => this.worldToScreen(p1.x, p1.y).x - this.worldToScreen(p2.x, p2.y).x);
-      if (wings.length !== 2) continue;
-      const mine = owner === this.localSeat;
-      const [wl, wr] = wings; // screen-left and screen-right gatehouses
-      const downL = wl.hp <= 0;
-      const downR = wr.hp <= 0;
+    const intact = getFortArt(mine ? 'rear' : 'front');
+    const ruin = getFortArt(mine ? 'rear-ruin' : 'front-ruin');
+    const lay = this.fortLayout(owner);
+    if (!intact || !ruin || !lay) return;
+    const { left, width, baseY, topY, h } = lay;
 
-      const intact = getFortArt(mine ? 'blue' : 'red');
-      const ruin = getFortArt(mine ? 'blue-ruin' : 'red-ruin');
-      if (!intact || !ruin) continue;
-
-      // Facade rect. The enemy fortress plants its wall base on its wall
-      // line and rises toward the top of the screen; your own fortress uses
-      // the phone-game convention (CR king towers): the facade still faces
-      // the field, anchored so its arches sit on your gate pads and its
-      // foundations run out under the HUD.
-      const img = downL && downR ? ruin : (downL || downR) ? ruin : intact;
-      const aspect = img.height / img.width;
-      const h = width * aspect;
-      const baseY = mine
-        ? this.worldToScreen(WORLD_W / 2, this.localSeat === 0 ? 15.45 : -0.45).y
-        : this.worldToScreen(WORLD_W / 2, FORT_WALL_FRONT[owner]).y;
-      const topY = baseY - h;
-
-      const drawFacade = (image: HTMLImageElement, mirrored: boolean, clipHalf: 'left' | 'right' | null) => {
-        ctx.save();
-        if (clipHalf) {
-          ctx.beginPath();
-          ctx.rect(clipHalf === 'left' ? left : left + width / 2, topY - u, width / 2, h + u * 2);
-          ctx.clip();
-        }
-        if (mirrored) {
-          ctx.translate(left + width / 2, 0);
-          ctx.scale(-1, 1);
-          ctx.translate(-(left + width / 2), 0);
-        }
-        ctx.drawImage(image, left, topY, width, h);
-        ctx.restore();
-      };
-
-      // Soft contact shadow so the wall sits INTO the ground.
+    const drawFacade = (image: HTMLImageElement, mirrored: boolean, clipHalf: 'left' | 'right' | null) => {
       ctx.save();
-      const sh = ctx.createLinearGradient(0, baseY - u * 0.5, 0, baseY + u * 0.25);
-      sh.addColorStop(0, 'rgba(0,0,0,0)');
-      sh.addColorStop(1, 'rgba(0,0,0,0.34)');
-      ctx.fillStyle = sh;
-      ctx.fillRect(left, baseY - u * 0.5, width, u * 0.75);
+      if (clipHalf) {
+        ctx.beginPath();
+        ctx.rect(clipHalf === 'left' ? left - u * 2 : left + width / 2, topY - u, width / 2 + u * 2, h + u * 2);
+        ctx.clip();
+      }
+      if (mirrored) {
+        ctx.translate(left + width / 2, 0);
+        ctx.scale(-1, 1);
+        ctx.translate(-(left + width / 2), 0);
+      }
+      ctx.drawImage(image, left, topY, width, h);
       ctx.restore();
+    };
 
-      if (!downL && !downR) {
-        drawFacade(intact, false, null);
-      } else if (downL && !downR) {
-        drawFacade(ruin, false, null);
-      } else if (downR && !downL) {
-        drawFacade(ruin, true, null);
-      } else {
-        // Both gatehouses razed: compose the ruin's rubble half on each side.
-        drawFacade(ruin, false, 'left');
-        drawFacade(ruin, true, 'right');
+    // Soft contact shadow so the wall sits INTO the ground.
+    ctx.save();
+    const sh = ctx.createLinearGradient(0, baseY - u * 0.5, 0, baseY + u * 0.25);
+    sh.addColorStop(0, 'rgba(0,0,0,0)');
+    sh.addColorStop(1, 'rgba(0,0,0,0.34)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(left, baseY - u * 0.5, width, u * 0.75);
+    ctx.restore();
+
+    if (!downL && !downR) {
+      drawFacade(intact, false, null);
+    } else if (downL && !downR) {
+      drawFacade(ruin, false, null);
+    } else if (downR && !downL) {
+      drawFacade(ruin, true, null);
+    } else {
+      // Both gatehouses razed: compose the ruin's rubble half on each side.
+      drawFacade(ruin, false, 'left');
+      drawFacade(ruin, true, 'right');
+    }
+
+    // Smoulder on fallen wings: dust motes and embers drifting off rubble.
+    for (const [wing, down] of [[wl, downL], [wr, downR]] as const) {
+      if (!down) continue;
+      const wp = this.worldToScreen(wing.x, wing.y);
+      if (Math.random() < 0.2) {
+        this.burst(wp.x + (Math.random() - 0.5) * u * 2.4, baseY - h * (0.1 + Math.random() * 0.2), 1, 'ash', 25, 1.2);
       }
-
-      // Smoulder on fallen wings: dust motes and embers drifting off rubble.
-      for (const [wing, down] of [[wl, downL], [wr, downR]] as const) {
-        if (!down) continue;
-        const wp = this.worldToScreen(wing.x, wing.y);
-        if (Math.random() < 0.2) {
-          this.burst(wp.x + (Math.random() - 0.5) * u * 2.4, baseY - h * (0.1 + Math.random() * 0.2), 1, 'ash', 25, 1.2);
-        }
-        if (Math.random() < 0.08) {
-          this.burst(wp.x + (Math.random() - 0.5) * u * 2, baseY - h * 0.15, 1, 'mote', 25, 0.8);
-        }
-      }
-
-      // The battered gatehouse blooms hot for a beat (environmental light,
-      // drawn under the units like the facade itself).
-      for (const [idx, wing] of [wl, wr].entries()) {
-        const wp = this.worldToScreen(wing.x, wing.y);
-        const worldWing = Math.abs(wing.x - FORT_LANE_X[0]) < Math.abs(wing.x - FORT_LANE_X[1]) ? 0 : 1;
-        const flash = this.obeliskFlash.get(owner * 2 + worldWing) ?? 0;
-        const down = idx === 0 ? downL : downR;
-        if (flash > 0 && !down) {
-          ctx.save();
-          ctx.globalCompositeOperation = 'lighter';
-          const fg = ctx.createRadialGradient(wp.x, baseY - h * 0.4, u * 0.1, wp.x, baseY - h * 0.4, u * 1.7);
-          fg.addColorStop(0, `rgba(255,190,120,${flash * 1.6})`);
-          fg.addColorStop(1, 'rgba(255,150,80,0)');
-          ctx.fillStyle = fg;
-          ctx.fillRect(wp.x - u * 1.7, baseY - h, u * 3.4, h);
-          ctx.restore();
-        }
+      if (Math.random() < 0.08) {
+        this.burst(wp.x + (Math.random() - 0.5) * u * 2, baseY - h * 0.15, 1, 'mote', 25, 0.8);
       }
     }
 
-    // Gate pads: your two drop spots, glowing inside your own arches.
-    if (st.phase === 'basalt') this.drawGatePads(ctx, st);
+    // The battered gatehouse blooms hot for a beat (environmental light).
+    for (const [idx, wing] of [wl, wr].entries()) {
+      const wp = this.worldToScreen(wing.x, wing.y);
+      const flash = this.obeliskFlash.get(owner * 2 + wing.wing) ?? 0;
+      const down = idx === 0 ? downL : downR;
+      if (flash > 0 && !down) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const fg = ctx.createRadialGradient(wp.x, baseY - h * 0.4, u * 0.1, wp.x, baseY - h * 0.4, u * 1.7);
+        fg.addColorStop(0, `rgba(255,190,120,${flash * 1.6})`);
+        fg.addColorStop(1, 'rgba(255,150,80,0)');
+        ctx.fillStyle = fg;
+        ctx.fillRect(wp.x - u * 1.7, baseY - h, u * 3.4, h);
+        ctx.restore();
+      }
+    }
+
+    // Gate pads: your two drop spots, on the apron outside your rear mouths.
+    if (mine && st.phase === 'basalt') this.drawGatePads(ctx, st);
   }
 
   /** Per-wing HP bars + RAZED plates. Drawn in a LATE pass, above the units
    *  and combat effects — a T-Rex battering a gate must never hide the very
-   *  bar it is draining. */
+   *  bar it is draining. Neither bar position may cover a gate opening. */
   private drawFortressBars(ctx: CanvasRenderingContext2D, st: GameState): void {
     const u = this.unit;
     const t = this.time;
@@ -1000,15 +1020,14 @@ export class Renderer {
 
       for (const wing of wings) {
         const wp = this.worldToScreen(wing.x, wing.y);
-        const worldWing = Math.abs(wing.x - FORT_LANE_X[0]) < Math.abs(wing.x - FORT_LANE_X[1]) ? 0 : 1;
-        const flash = this.obeliskFlash.get(owner * 2 + worldWing) ?? 0;
+        const flash = this.obeliskFlash.get(owner * 2 + wing.wing) ?? 0;
         const frac = clamp(wing.hp / wing.maxHp, 0, 1);
         // Enemy bars sit at the FOOT of each gate — a compact plate on the
         // ledge just in front of the wall, clear of the archways and of the
-        // DOM HUD on every device shape. Your own bars ride your battlement
-        // crowns, above your arch apexes, so your gateways stay clear too.
+        // DOM HUD on every device shape. Your own bars ride your gatehouse
+        // tower ROOFS (seen from behind), clear of the rear tunnel mouths.
         const barY = mine
-          ? lay.topY + lay.h * 0.05
+          ? lay.topY + lay.h * 0.12
           : lay.baseY + u * 0.26;
         const bw = u * 2.15;
         const bh = Math.max(4, u * 0.13);
@@ -1280,19 +1299,31 @@ export class Renderer {
     return { a: cycle[0], b: null, mix: 0, view };
   }
 
-  private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number): void {
-    const alive = new Set<number>();
+  /** Units draw in two passes. 'field': everything on the open battlefield
+   *  and inside the ENEMY fortress (which is painted under them). 'over':
+   *  units inside YOUR OWN fortress footprint — your rear-view facade has
+   *  just been painted over the field, and these units sit between that
+   *  building and the camera (on the apron) or show through its openings. */
+  private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number, pass: 'field' | 'over'): void {
+    const inOwnFort = (y: number): boolean =>
+      this.localSeat === 0 ? y > FORT_WALL_FRONT[0] : y < FORT_WALL_FRONT[1];
+    if (pass === 'field') this.aliveIds.clear();
+    const alive = this.aliveIds;
     const unitById = new Map(st.units.map((u) => [u.id, u]));
-    const order = [...st.units].sort((a, b) => {
-      const da = this.display.get(a.id)?.dy ?? a.y;
-      const db = this.display.get(b.id)?.dy ?? b.y;
-      return this.localSeat === 1 ? db - da : da - db;
-    });
+    const order = [...st.units]
+      .filter((u) => inOwnFort(this.display.get(u.id)?.dy ?? u.y) === (pass === 'over'))
+      .sort((a, b) => {
+        const da = this.display.get(a.id)?.dy ?? a.y;
+        const db = this.display.get(b.id)?.dy ?? b.y;
+        return this.localSeat === 1 ? db - da : da - db;
+      });
 
-    for (const [id, tLeft] of [...this.flashes]) {
-      const nt = tLeft - dt;
-      if (nt <= 0) this.flashes.delete(id);
-      else this.flashes.set(id, nt);
+    if (pass === 'field') {
+      for (const [id, tLeft] of [...this.flashes]) {
+        const nt = tLeft - dt;
+        if (nt <= 0) this.flashes.delete(id);
+        else this.flashes.set(id, nt);
+      }
     }
 
     for (const u of order) {
@@ -1428,23 +1459,43 @@ export class Renderer {
       const p = this.worldToScreen(d.dx, d.dy);
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
 
-      // Fortress arch tunnels. A unit whose lane gatehouse still stands is
-      // marching THROUGH the wall: deep in the corridor it reads small and
-      // shadowed (tunnel perspective), swelling and brightening as it nears
-      // the mouth so it visibly strides out of the dark gateway. The far
-      // fortress's doorway faces the camera, so its tunnellers are also
-      // hard-clipped to the painted opening and emerge from behind stone.
+      // Fortress gate tunnels. ENEMY fortress: its doorway faces the camera,
+      // so a unit in its corridor is hard-clipped to the painted opening —
+      // deep inside it reads small and shadowed, swelling and brightening as
+      // it strides out of the dark gateway. YOUR OWN fortress: the rear-view
+      // painting was just drawn over the field, and a unit under it is only
+      // visible through the rear tunnel mouth it walked into, or where its
+      // body already reaches PAST the front battlement crest — so warriors
+      // genuinely disappear beneath the building and re-emerge on the field.
       const tunnel = this.tunnelOf(st, d.dx, d.dy);
-      const tunnelK = tunnel ? 1 - tunnel.depth * 0.34 : 1;
-      const tunnelFade = tunnel ? 1 - tunnel.depth * 0.58 : 1;
-      const archLay = tunnel && tunnel.owner !== this.localSeat
-        ? this.fortLayout(tunnel.owner)
-        : null;
-      if (archLay) {
-        ctx.save();
-        ctx.beginPath();
-        this.archPath(ctx, archLay, tunnel!.laneX);
-        ctx.clip();
+      let tunnelK = 1;
+      let tunnelFade = 1;
+      let clipped = false;
+      if (tunnel && tunnel.gateUp) {
+        const lay = this.fortLayout(tunnel.owner);
+        if (lay && !lay.mine) {
+          tunnelK = 1 - tunnel.depth * 0.34;
+          tunnelFade = 1 - tunnel.depth * 0.58;
+          ctx.save();
+          ctx.beginPath();
+          this.archPath(ctx, lay, tunnel.laneX);
+          ctx.clip();
+          clipped = true;
+        } else if (lay && lay.mine) {
+          const mouthBase = lay.topY + lay.h * lay.art.baseFrac;
+          if (p.y <= mouthBase + this.unit * 0.05) {
+            ctx.save();
+            ctx.beginPath();
+            this.archPath(ctx, lay, tunnel.laneX);
+            ctx.rect(lay.left - 2000, lay.topY - 4000, lay.width + 4000, 4000);
+            ctx.clip();
+            clipped = true;
+            const wallY = this.worldToScreen(WORLD_W / 2, FORT_WALL_FRONT[tunnel.owner]).y;
+            tunnelFade = 1 - 0.5 * clamp(
+              Math.min(p.y - wallY, mouthBase - p.y) / (this.unit * 0.9), 0, 1,
+            );
+          }
+        }
       }
 
       // Pond immersion. Walking animals wading into the oasis pond sink:
@@ -1737,9 +1788,11 @@ export class Renderer {
         this.burst(p.x, p.y + hover - s * 0.5, 1, 'mote', 48, 0.6);
       }
 
-      // HP bar (only once damaged).
+      // HP bar (only once damaged). Suppressed while the unit is inside a
+      // gate tunnel — nothing may cover the arch openings but the warrior
+      // itself glimpsed in the dark.
       const frac = clamp(u.hp / u.maxHp, 0, 1);
-      if (frac < 0.999) {
+      if (frac < 0.999 && !clipped) {
         const hpw = s * 1.35;
         const hph = 5;
         const hy = p.y + hover - s * 1.5;
@@ -1765,11 +1818,16 @@ export class Renderer {
         ctx.globalAlpha = 1;
       }
 
-      if (archLay) ctx.restore();
+      if (clipped) ctx.restore();
     }
 
-    for (const id of [...this.display.keys()]) {
-      if (!alive.has(id)) this.display.delete(id);
+    // Housekeeping runs once per frame, after the second (over) pass has
+    // registered its survivors too.
+    if (pass === 'over') {
+      for (const id of [...this.display.keys()]) {
+        if (!alive.has(id)) this.display.delete(id);
+      }
+      return;
     }
 
     // Fallen pieces: tip over, sink and dissolve.
