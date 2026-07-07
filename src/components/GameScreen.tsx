@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W, inDeployBand,
+  MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W,
+  fortPads, inDeployBand,
 } from '../types';
 import type { CardId, GameEvent, GameState, PlayerId } from '../types';
 import { cardDef } from '../data';
@@ -123,12 +124,17 @@ export function GameScreen({
             color: '#4fd8ff',
           });
         } else if (e.type === 'obeliskDown') {
+          const razed = state.obelisks
+            .filter((o) => o.owner === e.owner)
+            .every((o) => o.hp <= 0);
           setBanner({
             id: Date.now(),
-            title: e.owner === seat ? 'Your Obelisk Falls!' : 'Enemy Obelisk Destroyed!',
+            title: e.owner === seat
+              ? (razed ? 'Your Fortress Falls!' : 'Your Gatehouse Crumbles!')
+              : (razed ? 'Enemy Fortress Razed!' : 'Enemy Gatehouse Crumbles!'),
             body: e.owner === seat
-              ? 'The enemy takes the Basalt Fields…'
-              : 'The Basalt Fields are yours — march on the Oasis!',
+              ? (razed ? 'The enemy takes the Basalt Fields…' : 'Hold the last gatehouse at all costs!')
+              : (razed ? 'The Basalt Fields are yours — march on the Oasis!' : 'One gatehouse down — bring down the other!'),
             color: e.owner === seat ? '#ff7d6d' : '#ffc94d',
           });
         } else if (e.type === 'pondClaimed') {
@@ -157,8 +163,8 @@ export function GameScreen({
     driver.start();
     setBanner({
       id: Date.now(),
-      title: 'Phase I — Break Their Obelisk',
-      body: 'Defend yours. Its health is the score.',
+      title: 'Phase I — Raze Their Fortress',
+      body: 'Tap a gate to deploy. Bring down both enemy gatehouses.',
       color: '#ffab7a',
     });
 
@@ -213,14 +219,32 @@ export function GameScreen({
       return;
     }
 
-    // Unit deploy: touch must begin inside the local deploy band.
-    if (!inDeployBand(seat, gy)) {
-      showToast('Deploy from your baseline — drag to aim the charge');
+    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= MAX_ARMY) {
+      showToast('Army at full strength — lose a fighter first');
       playUi('error');
       return;
     }
-    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= MAX_ARMY) {
-      showToast('Army at full strength — lose a fighter first');
+
+    // Phase 1: tap one of your two GATES — the warrior spawns in the arch
+    // and marches out through it, over that lane's bridge.
+    if (st.phase === 'basalt') {
+      const pads = fortPads(seat);
+      const pad = pads.reduce((best, cur) =>
+        Math.hypot(cur.x - gx, cur.y - gy) < Math.hypot(best.x - gx, best.y - gy) ? cur : best);
+      if (Math.hypot(pad.x - gx, pad.y - gy) > 2.6) {
+        showToast('Tap one of your gates to deploy');
+        playUi('error');
+        return;
+      }
+      driver.submit(seat, { type: 'deploy', card, x: pad.x, y: pad.y, dirX: 0, dirY: seat === 0 ? -1 : 1 });
+      setSelectedCard(null);
+      playUi('tap');
+      return;
+    }
+
+    // Oasis: free vector deploy — touch must begin inside the local band.
+    if (!inDeployBand(seat, gy)) {
+      showToast('Deploy from your baseline — drag to aim the charge');
       playUi('error');
       return;
     }
@@ -269,18 +293,31 @@ export function GameScreen({
   const me = ui?.players[seat];
   const phase = ui?.phase ?? 'basalt';
   const secondsLeft = Math.max(0, Math.round((ui?.phaseTicksLeft ?? 0) * (TICK_MS / 1000)));
-  const mm = Math.floor(secondsLeft / 60);
-  const ss = String(secondsLeft % 60).padStart(2, '0');
+  // The siege has no fixed end (it runs until a fortress falls), so Phase 1
+  // shows battle time ELAPSED; the Oasis keeps its hard countdown.
+  const basaltElapsed = ui?.phase === 'basalt'
+    ? Math.max(0, Math.round(((ui.cfg?.phase1Ticks ?? PHASE1_TICKS) - ui.phaseTicksLeft) * (TICK_MS / 1000)))
+    : 0;
+  const clockSecs = ui?.phase === 'basalt' ? basaltElapsed : secondsLeft;
+  const mm = Math.floor(clockSecs / 60);
+  const ss = String(clockSecs % 60).padStart(2, '0');
 
-  // Phase 1 objective: the two obelisks' health, from the local seat's view.
+  // Phase 1 objective: each fortress's combined gatehouse health (both
+  // wings), from the local seat's view. The per-wing bars live on the field.
   const obelisks = useMemo(() => {
     if (!ui || ui.obelisks.length === 0) return null;
-    const mine = ui.obelisks.find((o) => o.owner === seat);
-    const theirs = ui.obelisks.find((o) => o.owner !== seat);
-    if (!mine || !theirs) return null;
+    const sum = (owner: PlayerId) => {
+      const wings = ui.obelisks.filter((o) => o.owner === owner);
+      const hp = wings.reduce((s, o) => s + Math.max(0, o.hp), 0);
+      const max = wings.reduce((s, o) => s + o.maxHp, 0);
+      return { hp, max };
+    };
+    const mine = sum(seat);
+    const theirs = sum(seat === 0 ? 1 : 0);
+    if (mine.max === 0 || theirs.max === 0) return null;
     return {
-      mine: Math.max(0, mine.hp / mine.maxHp),
-      theirs: Math.max(0, theirs.hp / theirs.maxHp),
+      mine: Math.max(0, mine.hp / mine.max),
+      theirs: Math.max(0, theirs.hp / theirs.max),
       mineHp: Math.max(0, Math.round(mine.hp)),
       theirsHp: Math.max(0, Math.round(theirs.hp)),
     };
@@ -301,6 +338,14 @@ export function GameScreen({
       fill: 50 + m / 2,
     };
   }, [ui, seat]);
+
+  // Pulse the gate pads while a unit card is armed in Phase 1.
+  useEffect(() => {
+    const r = rendererRef.current;
+    if (!r) return;
+    const def = selectedCard && ui ? cardDef(selectedCard, ui.phase) : null;
+    r.padHint = ui?.phase === 'basalt' && def?.kind === 'unit';
+  }, [selectedCard, ui]);
 
   const selectCard = (card: CardId) => {
     if (!me || !ui) return;
@@ -346,7 +391,7 @@ export function GameScreen({
           <span className={`phase-pill ${phase === 'oasis' || phase === 'ended' ? 'oasis' : 'basalt'}`}>
             {phase === 'basalt' ? 'I · Basalt Fields' : phase === 'transition' ? '⇧ The March' : 'II · The Oasis'}
           </span>
-          <span className={`timer ${secondsLeft <= 30 && (phase === 'basalt' || phase === 'oasis') ? 'urgent' : ''}`}>
+          <span className={`timer ${secondsLeft <= 30 && phase === 'oasis' ? 'urgent' : ''}`}>
             {mm}:{ss}
           </span>
         </div>
@@ -391,7 +436,7 @@ export function GameScreen({
         )}
         <div className="objective-pill">
           {phase === 'basalt'
-            ? '⛨ Break the enemy Obelisk — defend your own'
+            ? '⛨ Raze both enemy gatehouses — defend your fortress'
             : phase === 'transition'
               ? 'The armies march to the last water…'
               : '❖ Hold the pond — 100% claims victory'}

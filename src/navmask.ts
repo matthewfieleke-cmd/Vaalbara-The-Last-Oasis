@@ -9,7 +9,7 @@
  * characters run the dark basalt paths and never cross the painted lava.
  * ========================================================================== */
 
-import { WORLD_H, WORLD_W } from './types';
+import { FORT_ARCH_HALF_W, FORT_LANE_X, FORT_WALL_FRONT, WORLD_H, WORLD_W } from './types';
 import { BASALT_MASK_B64, NAV_GH, NAV_GW, OASIS_MASK_B64 } from './navmask-data';
 
 export type WorldId = 'basalt' | 'oasis';
@@ -31,8 +31,36 @@ function decode(b64: string): Uint8Array {
   return out;
 }
 
+/** Carve the Phase-1 fortresses into the baked basalt mask: each end of the
+ *  field becomes solid wall except for the two arch corridors, so ground
+ *  units can only enter and leave the field through the gates. The corridors
+ *  are forced WALKABLE end to end (overriding any painted clutter) so a unit
+ *  dropped at a gate pad always has a clean march through its arch. */
+function applyFortresses(mask: Uint8Array): Uint8Array {
+  const cx = NAV_GW / WORLD_W;
+  const cy = NAV_GH / WORLD_H;
+  const bands: Array<[number, number]> = [
+    [0, FORT_WALL_FRONT[1]],          // top fortress body (seat 1)
+    [FORT_WALL_FRONT[0], WORLD_H],    // bottom fortress body (seat 0)
+  ];
+  for (const [y0, y1] of bands) {
+    const gy0 = Math.max(0, Math.floor(y0 * cy));
+    const gy1 = Math.min(NAV_GH, Math.ceil(y1 * cy));
+    for (let gy = gy0; gy < gy1; gy++) {
+      for (let gx = 0; gx < NAV_GW; gx++) {
+        const wx = (gx + 0.5) / cx;
+        const inArch = FORT_LANE_X.some((lx) => Math.abs(wx - lx) <= FORT_ARCH_HALF_W);
+        // Keep the outermost row sealed so gates never leak off-world.
+        const edge = gy < 1 || gy > NAV_GH - 2;
+        mask[gy * NAV_GW + gx] = inArch && !edge ? CELL.WALK : CELL.BLOCKED;
+      }
+    }
+  }
+  return mask;
+}
+
 const MASKS: Record<WorldId, Uint8Array> = {
-  basalt: decode(BASALT_MASK_B64),
+  basalt: applyFortresses(decode(BASALT_MASK_B64)),
   oasis: decode(OASIS_MASK_B64),
 };
 

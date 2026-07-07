@@ -100,6 +100,10 @@ let duelArt: { basalt: HTMLImageElement | null; oasis: HTMLImageElement | null }
   basalt: null,
   oasis: null,
 };
+/** Phase-1 fortress facades: blue = the local player's, red = the enemy's;
+ *  each also has a "ruin" variant with the LEFT gatehouse collapsed. */
+export type FortArtKey = 'red' | 'blue' | 'red-ruin' | 'blue-ruin';
+const fortArt = new Map<FortArtKey, HTMLImageElement>();
 let loaded = false;
 
 export function spritesReady(): boolean {
@@ -118,6 +122,10 @@ export function getAnim(species: SpeciesId): AnimSet | null {
 
 export function getPhaseArt(world: 'basalt' | 'oasis'): HTMLImageElement | null {
   return arenaArt[world];
+}
+
+export function getFortArt(key: FortArtKey): HTMLImageElement | null {
+  return fortArt.get(key) ?? null;
 }
 
 /** Side-view painted battlefield for the Duels mode. */
@@ -770,6 +778,13 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           duelArt[w] = await loadImage(`${baseUrl}duel-${w}.webp`);
         } catch {
           duelArt[w] = null;
+        }
+      }),
+      ...(['red', 'blue', 'red-ruin', 'blue-ruin'] as const).map(async (k) => {
+        try {
+          fortArt.set(k, await loadImage(`${baseUrl}fort-${k}.webp`));
+        } catch {
+          fortArt.delete(k);
         }
       }),
     ]);

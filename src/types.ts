@@ -25,8 +25,10 @@ export const TICK_MS = 300;
 export const WORLD_W = 9;
 export const WORLD_H = 15;
 
-/** Phase durations, in ticks. 2 min = 400, 2.5 min = 500 at 300 ms/tick. */
-export const PHASE1_TICKS = 400;
+/** Phase durations, in ticks (300 ms/tick). Phase 1 is a siege that ends
+ *  when a fortress loses BOTH gatehouses — designed to take ~4 minutes.
+ *  The tick budget is only a stalemate safety valve. */
+export const PHASE1_TICKS = 1200;
 export const TRANSITION_TICKS = 20; // 6 s marching cutscene
 export const PHASE2_TICKS = 500;
 
@@ -225,6 +227,9 @@ export interface PropState {
 
 export interface ObeliskState {
   readonly owner: PlayerId;
+  /** Which gatehouse wing of the owner's fortress: 0 = left lane, 1 = right
+   *  lane (in world coordinates, before any seat-view mirroring). */
+  readonly wing: 0 | 1;
   hp: number;
   readonly maxHp: number;
   readonly x: number;
@@ -388,6 +393,23 @@ export const DEPLOY_DEPTH = 3;
 export const inDeployBand = (player: PlayerId, y: number): boolean =>
   player === 0 ? y >= WORLD_H - DEPLOY_DEPTH : y < DEPLOY_DEPTH;
 
+/* Phase-1 fortresses ------------------------------------------------------ */
+/** Arch/lane x positions (world units) — must match the fortress paintings,
+ *  whose gates sit at ~24.5% and ~76% of the wall's width. */
+export const FORT_LANE_X: readonly [number, number] = [2.2, 6.85];
+/** Field-facing wall line of each fortress: seat 1 (top) wall front and
+ *  seat 0 (bottom) wall front. Everything beyond is fortress interior. */
+export const FORT_WALL_FRONT: Record<PlayerId, number> = { 0: 11.65, 1: 3.35 };
+/** Half-width of the arch corridors carved through each wall. */
+export const FORT_ARCH_HALF_W = 0.85;
+/** Wing bodies (the gatehouses units batter) sit just inside the wall. */
+export const FORT_WING_Y: Record<PlayerId, number> = { 0: 12.4, 1: 2.6 };
+export const FORT_WING_R = 0.85;
+/** Tap-to-deploy pads: inside your own arch corridors, behind the gate. */
+export const FORT_PAD_Y: Record<PlayerId, number> = { 0: 13.3, 1: 1.7 };
+export const fortPads = (seat: PlayerId): Array<{ x: number; y: number }> =>
+  FORT_LANE_X.map((x) => ({ x, y: FORT_PAD_Y[seat] }));
+
 export const AQUA_MAX = 10;
 /** Slow drip (1 aqua / ~3.75 s) keeps armies small: distinct duels, not mobs. */
 export const AQUA_PER_TICK_P1 = 0.08;
@@ -396,8 +418,9 @@ export const HAND_SIZE = 4;
 /** Hard cap on living units per player — the field stays readable. */
 export const MAX_ARMY = 4;
 export const CAPTURE_RATE = 1;
-/** Phase-1 objective: the Ancient Obelisk each seat must defend. */
-export const OBELISK_HP = 850;
+/** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
+ *  with its own HP. The Basalt Fields end only when a fortress loses both. */
+export const OBELISK_HP = 4600;
 export const OBELISK_RADIUS = 0.55;
 /** Units only auto-acquire enemies inside this radius; otherwise they push
  *  the lane toward the enemy obelisk (Clash-Royale-style tower pressure). */

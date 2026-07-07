@@ -16,10 +16,10 @@
  *    tick, with visual catch-up interpolation for network corrections.
  * ========================================================================== */
 
-import { TICK_MS, WORLD_H, WORLD_W } from './types';
-import type { GameEvent, GameState, ObeliskState, PlayerId, SpeciesId } from './types';
+import { FORT_LANE_X, FORT_WALL_FRONT, TICK_MS, WORLD_H, WORLD_W, fortPads } from './types';
+import type { GameEvent, GameState, PlayerId, SpeciesId } from './types';
 import { speciesDef } from './data';
-import { getAnim, getPhaseArt, getSprite } from './sprites';
+import { getAnim, getFortArt, getPhaseArt, getSprite } from './sprites';
 import type { Sprite } from './sprites';
 import { CELL, cellAt } from './navmask';
 import type { WorldId } from './navmask';
@@ -169,7 +169,8 @@ export class Renderer {
   private floats: FloatText[] = [];
   private display = new Map<number, DisplayUnit>();
   private flashes = new Map<number, number>();
-  private obeliskFlash = new Map<PlayerId, number>();
+  /** Gatehouse hit flash, keyed owner * 2 + wing. */
+  private obeliskFlash = new Map<number, number>();
   private ghosts: Ghost[] = [];
   private hitStop = 0;
   private lastHitDir = new Map<number, { x: number; y: number }>();
@@ -184,6 +185,9 @@ export class Renderer {
   localSeat: PlayerId = 0;
   drag: DragOverlay = { active: false, fromX: 0, fromY: 0, toX: 0, toY: 0, valid: false, hue: 0 };
   telegraph: TelegraphOverlay = { active: false, x: 0, y: 0, kind: 'spell' };
+  /** True while the player has a unit card armed in Phase 1 — the two gate
+   *  pads pulse hard so "tap a gate" is unmissable. */
+  padHint = false;
 
   // Layout.
   private unit = 40; // px per world unit
@@ -384,7 +388,9 @@ export class Renderer {
         const p = this.worldToScreen(e.x, e.y);
         const mine = e.owner === this.localSeat;
         this.burst(p.x, p.y - this.unit * 0.7, 8, 'spark', mine ? 190 : 30, 1.4);
-        this.obeliskFlash.set(e.owner, 0.24);
+        this.burst(p.x, p.y - this.unit * 0.3, 3, 'ash', 20, 1.1);
+        const wing = Math.abs(e.x - FORT_LANE_X[0]) < Math.abs(e.x - FORT_LANE_X[1]) ? 0 : 1;
+        this.obeliskFlash.set(e.owner * 2 + wing, 0.24);
         this.floats.push({
           x: p.x, y: p.y - this.unit * 1.4,
           text: `-${e.amount}`, life: 0, maxLife: 0.9,
@@ -395,12 +401,29 @@ export class Renderer {
         break;
       }
       case 'obeliskDown': {
+        // A gatehouse comes down: an avalanche of masonry, a rolling dust
+        // wall and a long rumble of screen shake.
         const p = this.worldToScreen(e.x, e.y);
-        this.burst(p.x, p.y - this.unit * 0.6, 40, 'spark', 40, 3);
-        this.burst(p.x, p.y, 5, 'shockwave', 40, 1.4);
-        this.burst(p.x, p.y, 20, 'ash', 30, 2.2);
-        this.shake = 16;
-        this.hitStop = Math.max(this.hitStop, 0.12);
+        const u = this.unit;
+        this.burst(p.x, p.y - u * 0.8, 46, 'spark', 30, 3.2);
+        this.burst(p.x, p.y - u * 0.4, 8, 'shockwave', 30, 1.8);
+        this.burst(p.x, p.y - u * 1.2, 50, 'ash', 25, 3.4);
+        this.burst(p.x, p.y, 34, 'mist', 25, 2.6);
+        // Tumbling rock chunks fan out along the wall line.
+        for (let i = 0; i < 26; i++) {
+          const spread = (Math.random() - 0.5) * u * 3.2;
+          this.particles.push({
+            x: p.x + spread, y: p.y - u * (0.4 + Math.random() * 1.4),
+            vx: spread * 0.9 + (Math.random() - 0.5) * 40,
+            vy: -30 - Math.random() * 110,
+            life: 0, maxLife: 1.1 + Math.random() * 0.8,
+            size: 2.5 + Math.random() * 4.5,
+            hue: 255, sat: 6, lit: 16 + Math.random() * 14,
+            kind: 'ash', alpha: 0.95, gravity: 340,
+          });
+        }
+        this.shake = 22;
+        this.hitStop = Math.max(this.hitStop, 0.14);
         break;
       }
       default:
@@ -716,8 +739,8 @@ export class Renderer {
       }
     }
 
-    // Deploy-band glow.
-    if (st.phase === 'basalt' || st.phase === 'oasis') {
+    // Deploy-band glow — Oasis only; Phase 1 deploys at the gate pads.
+    if (st.phase === 'oasis') {
       const bandTopWorld = this.localSeat === 0 ? WORLD_H - 3 : 0;
       const p0 = this.worldToScreen(0, this.localSeat === 0 ? bandTopWorld : 3);
       const p1 = this.worldToScreen(0, this.localSeat === 0 ? WORLD_H : 0);
@@ -743,7 +766,7 @@ export class Renderer {
       if (n <= 0) this.obeliskFlash.delete(k);
       else this.obeliskFlash.set(k, n);
     }
-    for (const ob of st.obelisks) this.drawObelisk(ctx, ob);
+    if (st.obelisks.length > 0) this.drawFortresses(ctx, st);
 
     // Pond control ring: glows in the leading side's colour, harder as the
     // claim approaches 100%.
@@ -783,307 +806,208 @@ export class Renderer {
     }
   }
 
-  private drawObelisk(ctx: CanvasRenderingContext2D, ob: ObeliskState): void {
-    const p = this.worldToScreen(ob.x, ob.y);
+  /* ---------------------------- fortresses ------------------------------- */
+
+  /** The Phase-1 stone fortresses. Each seat's stronghold spans the full
+   *  field width at its own end: a painted basalt wall with two arched
+   *  gateways (the lanes). The facade is drawn UNDER the units, so a unit
+   *  standing in a gate reads as stepping out of the dark passage. Each
+   *  gatehouse wing carries its own HP bar; when a wing's bar empties the
+   *  painting swaps to its collapsed-ruin half in a wall of dust. */
+  private drawFortresses(ctx: CanvasRenderingContext2D, st: GameState): void {
     const u = this.unit;
-    const mine = ob.owner === this.localSeat;
-    const hue = mine ? 187 : 8;
-    const frac = clamp(ob.hp / ob.maxHp, 0, 1);
-    const flash = this.obeliskFlash.get(ob.owner) ?? 0;
-    const jx = flash > 0 ? (Math.random() - 0.5) * flash * 26 : 0;
     const t = this.time;
+    const a = this.worldToScreen(0, WORLD_H / 2);
+    const b = this.worldToScreen(WORLD_W, WORLD_H / 2);
+    const left = Math.min(a.x, b.x);
+    const width = Math.abs(b.x - a.x);
 
-    // Same depth perspective the units obey: the far obelisk renders
-    // smaller and the near one larger — which also keeps the far tower's
-    // top clear of the HUD.
-    const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
-    const dsc = 0.88 + depthK * 0.24;
+    for (const owner of [0, 1] as const) {
+      const wings = st.obelisks
+        .filter((o) => o.owner === owner)
+        .sort((p1, p2) => this.worldToScreen(p1.x, p1.y).x - this.worldToScreen(p2.x, p2.y).x);
+      if (wings.length !== 2) continue;
+      const mine = owner === this.localSeat;
+      const [wl, wr] = wings; // screen-left and screen-right gatehouses
+      const downL = wl.hp <= 0;
+      const downR = wr.hp <= 0;
 
-    // Deterministic per-owner jitter — the crag is rugged but never crawls.
-    let rs = ob.owner === 0 ? 0x9e3779b9 : 0x1c8f4a2d;
-    const rand = (): number => {
-      rs ^= rs << 13; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0;
-      return (rs & 0xffff) / 0x10000;
-    };
+      const intact = getFortArt(mine ? 'blue' : 'red');
+      const ruin = getFortArt(mine ? 'blue-ruin' : 'red-ruin');
+      if (!intact || !ruin) continue;
 
-    ctx.save();
-    ctx.translate(p.x + jx, p.y);
-    ctx.scale(dsc, dsc);
+      // Facade rect. The enemy fortress plants its wall base on its wall
+      // line and rises toward the top of the screen; your own fortress uses
+      // the phone-game convention (CR king towers): the facade still faces
+      // the field, anchored so its arches sit on your gate pads and its
+      // foundations run out under the HUD.
+      const img = downL && downR ? ruin : (downL || downR) ? ruin : intact;
+      const aspect = img.height / img.width;
+      const h = width * aspect;
+      const baseY = mine
+        ? this.worldToScreen(WORLD_W / 2, this.localSeat === 0 ? 15.45 : -0.45).y
+        : this.worldToScreen(WORLD_W / 2, FORT_WALL_FRONT[owner]).y;
+      const topY = baseY - h;
 
-    // Ground shadow.
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 0.95, u * 0.35, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Claim ring: one slow ember-lit ring scribed into the rock floor.
-    ctx.save();
-    ctx.strokeStyle = `hsla(${hue} 80% 55% / ${0.3 + Math.sin(t * 1.8) * 0.1})`;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([u * 0.16, u * 0.11]);
-    ctx.lineDashOffset = t * u * 0.1;
-    ctx.beginPath();
-    ctx.ellipse(0, u * 0.1, u * 1.0, u * 0.38, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-
-    if (ob.hp <= 0) {
-      // Rubble: the broken tower, its power bleeding out as a dying glow.
-      ctx.fillStyle = 'hsl(255 10% 16%)';
-      for (const [rx, ry, rs] of [[-0.3, 0, 0.3], [0.25, 0.02, 0.26], [0, -0.14, 0.34], [-0.05, 0.08, 0.2]] as const) {
-        ctx.beginPath();
-        ctx.ellipse(rx * u, ry * u, rs * u, rs * u * 0.6, rx * 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      const dg = ctx.createRadialGradient(0, -u * 0.1, 2, 0, -u * 0.1, u * 0.7);
-      dg.addColorStop(0, `hsla(${hue} 80% 50% / ${0.12 + Math.sin(t * 1.2) * 0.05})`);
-      dg.addColorStop(1, `hsla(${hue} 80% 50% / 0)`);
-      ctx.fillStyle = dg;
-      ctx.fillRect(-u, -u, u * 2, u * 1.4);
-      if (Math.random() < 0.12) this.burst(p.x, p.y - u * 0.2, 1, 'ash', 30, 0.8);
-      ctx.restore();
-      return;
-    }
-
-    const H = u * 1.4;
-    const glow = 0.55 + Math.sin(t * 2.2 + (mine ? 0 : 2)) * 0.2;
-    const baseY = -u * 0.16;
-
-    // ---- A true 3D monolith. Four-sided tapered obelisk seen from the
-    // battle camera: a lit front face turned toward lower-left, a shadowed
-    // right face behind the near vertical arris, a bright pyramidion, and a
-    // stepped plinth whose TOP faces are visible from above — the strongest
-    // "solid volume" cue this camera can give. One glossy edge highlight
-    // runs up the near arris, like light catching a polished corner.
-    const tracePath = (pts: Array<[number, number]>) => {
-      ctx.beginPath();
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-      ctx.closePath();
-    };
-
-    // Stepped plinth: two stone boxes, each with front / right / top faces.
-    const bdx = u * 0.17, bdy = -u * 0.075; // top-face recede vector
-    const box = (xl: number, xr: number, yt: number, yb: number, tone: number) => {
-      const g = ctx.createLinearGradient(xl * u, 0, xr * u, 0);
-      g.addColorStop(0, `hsl(250 11% ${tone}%)`);
-      g.addColorStop(1, `hsl(252 12% ${tone * 0.6}%)`);
-      ctx.fillStyle = g;
-      ctx.fillRect(xl * u, yt * u, (xr - xl) * u, (yb - yt) * u);
-      ctx.fillStyle = `hsl(256 15% ${tone * 0.36}%)`;
-      tracePath([[xr * u, yt * u], [xr * u + bdx, yt * u + bdy], [xr * u + bdx, yb * u + bdy], [xr * u, yb * u]]);
-      ctx.fill();
-      const tg = ctx.createLinearGradient(0, yt * u + bdy, 0, yt * u);
-      tg.addColorStop(0, `hsl(248 10% ${Math.min(60, tone * 1.75)}%)`);
-      tg.addColorStop(1, `hsl(249 10% ${Math.min(52, tone * 1.35)}%)`);
-      ctx.fillStyle = tg;
-      tracePath([[xl * u, yt * u], [xr * u, yt * u], [xr * u + bdx, yt * u + bdy], [xl * u + bdx, yt * u + bdy]]);
-      ctx.fill();
-    };
-    box(-0.56, 0.40, -0.05, 0.13, 22);
-    box(-0.42, 0.28, -0.19, -0.05, 26);
-
-    // Shaft corners: FL = lit front-left edge, C = near arris, R = far
-    // right edge. The bottom/top edges slant because the camera is above.
-    const FLb: [number, number] = [-u * 0.29, -u * 0.16];
-    const Cb: [number, number] = [u * 0.12, -u * 0.11];
-    const Rb: [number, number] = [u * 0.31, -u * 0.22];
-    const FLt: [number, number] = [-u * 0.175, -u * 1.22];
-    const Ct: [number, number] = [u * 0.075, -u * 1.19];
-    const Rt: [number, number] = [u * 0.195, -u * 1.25];
-    const apex: [number, number] = [u * 0.03, -u * 1.57];
-    const silhouette: Array<[number, number]> = [FLb, FLt, apex, Rt, Rb, Cb];
-
-    // Front face — lit, key light from the upper-left.
-    const fg = ctx.createLinearGradient(FLb[0], 0, Cb[0], 0);
-    fg.addColorStop(0, 'hsl(249 11% 45%)');
-    fg.addColorStop(0.55, 'hsl(250 11% 33%)');
-    fg.addColorStop(1, 'hsl(252 12% 25%)');
-    ctx.fillStyle = fg;
-    tracePath([FLb, Cb, Ct, FLt]);
-    ctx.fill();
-    // Right face — deep shadow, faint sky bounce at the top.
-    const sg = ctx.createLinearGradient(0, Rt[1], 0, Rb[1]);
-    sg.addColorStop(0, 'hsl(256 15% 15%)');
-    sg.addColorStop(1, 'hsl(258 16% 8%)');
-    ctx.fillStyle = sg;
-    tracePath([Cb, Rb, Rt, Ct]);
-    ctx.fill();
-    // Pyramidion: the brightest planes on the monument — they face the sky.
-    const pg = ctx.createLinearGradient(FLt[0], 0, Ct[0], 0);
-    pg.addColorStop(0, 'hsl(248 12% 58%)');
-    pg.addColorStop(1, 'hsl(250 12% 40%)');
-    ctx.fillStyle = pg;
-    tracePath([FLt, Ct, apex]);
-    ctx.fill();
-    ctx.fillStyle = 'hsl(256 15% 19%)';
-    tracePath([Ct, Rt, apex]);
-    ctx.fill();
-
-    // Masonry joints — subtle, following each face's perspective so the
-    // planes stay flat and readable.
-    ctx.lineWidth = Math.max(1, u * 0.014);
-    for (let i = 1; i <= 5; i++) {
-      const f = i / 6 + (rand() - 0.5) * 0.03;
-      const lx = FLb[0] + (FLt[0] - FLb[0]) * f, ly = FLb[1] + (FLt[1] - FLb[1]) * f;
-      const cx2 = Cb[0] + (Ct[0] - Cb[0]) * f, cy2 = Cb[1] + (Ct[1] - Cb[1]) * f;
-      const rx2 = Rb[0] + (Rt[0] - Rb[0]) * f, ry2 = Rb[1] + (Rt[1] - Rb[1]) * f;
-      ctx.strokeStyle = `rgba(8,6,14,${0.25 + rand() * 0.15})`;
-      ctx.beginPath();
-      ctx.moveTo(lx + u * 0.012, ly);
-      ctx.lineTo(cx2, cy2);
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.beginPath();
-      ctx.moveTo(cx2, cy2);
-      ctx.lineTo(rx2 - u * 0.012, ry2);
-      ctx.stroke();
-      // A weathered chip biting into a random joint.
-      if (rand() < 0.5) {
-        const chx = lx + (cx2 - lx) * (0.2 + rand() * 0.6);
-        const chs = u * (0.02 + rand() * 0.03);
-        ctx.fillStyle = 'rgba(8,6,14,0.4)';
-        tracePath([[chx, ly - chs], [chx + chs * 1.4, ly + chs * 0.4], [chx - chs, ly + chs * 0.5]]);
-        ctx.fill();
-      }
-    }
-
-    // Ambient occlusion where the shaft meets the plinth.
-    const ao = ctx.createLinearGradient(0, -u * 0.38, 0, -u * 0.1);
-    ao.addColorStop(0, 'rgba(0,0,0,0)');
-    ao.addColorStop(1, 'rgba(0,0,0,0.42)');
-    ctx.fillStyle = ao;
-    tracePath([FLb, Cb, [Cb[0] + u * 0.02, Cb[1] - u * 0.3], [FLb[0] - u * 0.015, FLb[1] - u * 0.3]]);
-    ctx.fill();
-
-    // The glossy near arris — one bright edge running base to apex, the
-    // same trick that makes the reference arrow read instantly as 3D.
-    ctx.strokeStyle = 'rgba(215,220,250,0.4)';
-    ctx.lineWidth = Math.max(1.2, u * 0.018);
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(Cb[0], Cb[1]);
-    ctx.lineTo(Ct[0], Ct[1]);
-    ctx.lineTo(apex[0], apex[1]);
-    ctx.stroke();
-    // Hot glint where the pyramidion edge catches the sky.
-    ctx.strokeStyle = 'rgba(240,244,255,0.75)';
-    ctx.beginPath();
-    ctx.moveTo(Ct[0] + (apex[0] - Ct[0]) * 0.45, Ct[1] + (apex[1] - Ct[1]) * 0.45);
-    ctx.lineTo(apex[0], apex[1]);
-    ctx.stroke();
-    // Dark rim down the lit-side silhouette so the monument separates.
-    ctx.strokeStyle = 'rgba(2,1,5,0.5)';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(FLb[0], FLb[1]);
-    ctx.lineTo(FLt[0], FLt[1]);
-    ctx.lineTo(apex[0], apex[1]);
-    ctx.stroke();
-
-    // The owner's fire smoulders in two cracks near the base — geology,
-    // not sorcery.
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.lineCap = 'round';
-    for (let c = 0; c < 2; c++) {
-      const emberA = (0.3 + Math.max(0, Math.sin(t * 1.5 + c * 2.4)) * 0.4) * (0.35 + frac * 0.65);
-      ctx.strokeStyle = `hsla(${hue} 95% 58% / ${emberA})`;
-      ctx.lineWidth = Math.max(1.1, u * 0.015);
-      const x0 = FLb[0] + (Cb[0] - FLb[0]) * (0.25 + c * 0.42);
-      const y0 = FLb[1] + (Cb[1] - FLb[1]) * (0.25 + c * 0.42) - u * 0.02;
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x0 + u * (0.03 - c * 0.05), y0 - u * (0.1 + c * 0.05));
-      ctx.lineTo(x0 + u * (0.01 + c * 0.03), y0 - u * (0.2 + c * 0.1));
-      ctx.stroke();
-    }
-    // Warm heart glow low on the shaft.
-    const heart = ctx.createRadialGradient(-u * 0.05, -u * 0.4, 1, -u * 0.05, -u * 0.4, u * 0.3);
-    heart.addColorStop(0, `hsla(${hue} 95% 60% / ${glow * 0.16 * (0.3 + frac * 0.7)})`);
-    heart.addColorStop(1, `hsla(${hue} 95% 55% / 0)`);
-    ctx.fillStyle = heart;
-    ctx.fillRect(-u * 0.38, -u * 0.72, u * 0.72, u * 0.62);
-    ctx.restore();
-
-    // A few fallen stones at the base keep it grounded in the battlefield.
-    for (let k = 0; k < 3; k++) {
-      const bx = (rand() - 0.5) * u * 1.4;
-      const by = u * 0.04 + rand() * u * 0.14;
-      const br = u * (0.06 + rand() * 0.07);
-      ctx.fillStyle = `hsl(${252 + rand() * 8} ${11 + rand() * 5}% ${10 + rand() * 8}%)`;
-      tracePath([[bx - br, by], [bx - br * 0.4, by - br * (0.5 + rand() * 0.4)], [bx + br * 0.5, by - br * (0.4 + rand() * 0.4)], [bx + br, by + br * 0.15]]);
-      ctx.fill();
-      ctx.fillStyle = 'hsla(248 16% 40% / 0.4)';
-      tracePath([[bx - br * 0.4, by - br * 0.75], [bx + br * 0.45, by - br * 0.6], [bx + br * 0.1, by - br * 0.35]]);
-      ctx.fill();
-    }
-
-    // The rare ember drifting off the cracks.
-    if (Math.random() < 0.06) {
-      this.burst(p.x + (Math.random() - 0.5) * u * 0.4 * dsc, p.y - Math.random() * H * 0.8 * dsc, 1, 'mote', hue, 0.6);
-    }
-
-    // Battle damage: cracks spider out as HP falls, glowing at low health.
-    if (frac < 0.999) {
-      const dmg = 1 - frac;
-      ctx.strokeStyle = dmg > 0.6
-        ? `hsla(${hue} 90% 60% / ${0.3 + dmg * 0.4})`
-        : `rgba(5,3,10,${0.35 + dmg * 0.45})`;
-      ctx.lineWidth = 1.6;
-      const cracks = Math.ceil(dmg * 5);
-      for (let c = 0; c < cracks; c++) {
-        const seed = c * 137 + (ob.owner === 0 ? 7 : 31);
-        let cx = ((seed % 10) / 10 - 0.5) * u * 0.5;
-        let cy = baseY - ((seed % 7) / 7) * H * 0.8;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        for (let seg = 0; seg < 4; seg++) {
-          cx += (((seed * (seg + 3)) % 9) / 9 - 0.5) * u * 0.24;
-          cy += ((seed * (seg + 7)) % 5) / 5 * u * 0.22 + 2;
-          ctx.lineTo(cx, cy);
+      const drawFacade = (image: HTMLImageElement, mirrored: boolean, clipHalf: 'left' | 'right' | null) => {
+        ctx.save();
+        if (clipHalf) {
+          ctx.beginPath();
+          ctx.rect(clipHalf === 'left' ? left : left + width / 2, topY - u, width / 2, h + u * 2);
+          ctx.clip();
         }
+        if (mirrored) {
+          ctx.translate(left + width / 2, 0);
+          ctx.scale(-1, 1);
+          ctx.translate(-(left + width / 2), 0);
+        }
+        ctx.drawImage(image, left, topY, width, h);
+        ctx.restore();
+      };
+
+      // Soft contact shadow so the wall sits INTO the ground.
+      ctx.save();
+      const sh = ctx.createLinearGradient(0, baseY - u * 0.5, 0, baseY + u * 0.25);
+      sh.addColorStop(0, 'rgba(0,0,0,0)');
+      sh.addColorStop(1, 'rgba(0,0,0,0.34)');
+      ctx.fillStyle = sh;
+      ctx.fillRect(left, baseY - u * 0.5, width, u * 0.75);
+      ctx.restore();
+
+      if (!downL && !downR) {
+        drawFacade(intact, false, null);
+      } else if (downL && !downR) {
+        drawFacade(ruin, false, null);
+      } else if (downR && !downL) {
+        drawFacade(ruin, true, null);
+      } else {
+        // Both gatehouses razed: compose the ruin's rubble half on each side.
+        drawFacade(ruin, false, 'left');
+        drawFacade(ruin, true, 'right');
+      }
+
+      // Smoulder on fallen wings: dust motes and embers drifting off rubble.
+      for (const [wing, down] of [[wl, downL], [wr, downR]] as const) {
+        if (!down) continue;
+        const wp = this.worldToScreen(wing.x, wing.y);
+        if (Math.random() < 0.2) {
+          this.burst(wp.x + (Math.random() - 0.5) * u * 2.4, baseY - h * (0.1 + Math.random() * 0.2), 1, 'ash', 25, 1.2);
+        }
+        if (Math.random() < 0.08) {
+          this.burst(wp.x + (Math.random() - 0.5) * u * 2, baseY - h * 0.15, 1, 'mote', 25, 0.8);
+        }
+      }
+
+      // Per-wing HP bars + hit flash, floating over each gatehouse tower.
+      for (const [idx, wing] of [wl, wr].entries()) {
+        const wp = this.worldToScreen(wing.x, wing.y);
+        const worldWing = Math.abs(wing.x - FORT_LANE_X[0]) < Math.abs(wing.x - FORT_LANE_X[1]) ? 0 : 1;
+        const flash = this.obeliskFlash.get(owner * 2 + worldWing) ?? 0;
+        const down = idx === 0 ? downL : downR;
+
+        if (flash > 0 && !down) {
+          // The battered gatehouse blooms hot for a beat.
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          const fg = ctx.createRadialGradient(wp.x, baseY - h * 0.4, u * 0.1, wp.x, baseY - h * 0.4, u * 1.7);
+          fg.addColorStop(0, `rgba(255,190,120,${flash * 1.6})`);
+          fg.addColorStop(1, 'rgba(255,150,80,0)');
+          ctx.fillStyle = fg;
+          ctx.fillRect(wp.x - u * 1.7, baseY - h, u * 3.4, h);
+          ctx.restore();
+        }
+
+        const frac = clamp(wing.hp / wing.maxHp, 0, 1);
+        // Your bars ride the gatehouse towers; the enemy's towers run up
+        // under the HUD, so clamp their bars onto the visible wall face.
+        const barY = mine
+          ? topY + h * 0.16
+          : Math.max(topY + h * 0.14, this.oy + u * 0.9);
+        const bw = u * 2.15;
+        const bh = Math.max(4, u * 0.13);
+        ctx.save();
+        if (down) {
+          // A fallen wing keeps a small "RAZED" plate instead of a bar.
+          ctx.font = `700 ${Math.max(9, u * 0.19)}px 'Cinzel', serif`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'rgba(8,6,10,0.55)';
+          const tw = ctx.measureText('RAZED').width;
+          ctx.fillRect(wp.x - tw / 2 - 5, barY - u * 0.16, tw + 10, u * 0.32);
+          ctx.fillStyle = 'rgba(210,190,170,0.75)';
+          ctx.fillText('RAZED', wp.x, barY + u * 0.075);
+          ctx.restore();
+          continue;
+        }
+        const hue = mine ? 190 : 6;
+        ctx.fillStyle = 'rgba(6,4,10,0.72)';
+        ctx.beginPath();
+        ctx.roundRect(wp.x - bw / 2 - 1.5, barY - 1.5, bw + 3, bh + 3, 3);
+        ctx.fill();
+        ctx.fillStyle = `hsl(${hue} 25% 22%)`;
+        ctx.fillRect(wp.x - bw / 2, barY, bw, bh);
+        const fill = ctx.createLinearGradient(0, barY, 0, barY + bh);
+        fill.addColorStop(0, `hsl(${hue} 90% ${62 + flash * 25}%)`);
+        fill.addColorStop(1, `hsl(${hue} 85% ${44 + flash * 25}%)`);
+        ctx.fillStyle = fill;
+        ctx.fillRect(wp.x - bw / 2, barY, bw * frac, bh);
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillRect(wp.x - bw / 2 + 1, barY + 1, Math.max(1, bw * frac - 2), 1.4);
+        // Low-wall warning shimmer.
+        if (frac < 0.3) {
+          ctx.strokeStyle = `hsla(${hue} 95% 65% / ${0.35 + Math.sin(t * 6) * 0.25})`;
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(wp.x - bw / 2 - 2.5, barY - 2.5, bw + 5, bh + 5);
+        }
+        ctx.restore();
+      }
+    }
+
+    // Gate pads: your two drop spots, glowing inside your own arches.
+    if (st.phase === 'basalt') this.drawGatePads(ctx, st);
+  }
+
+  /** The two tap-to-deploy pads at the local player's gates. Always faintly
+   *  present; pulsing hard while a unit card is armed. */
+  private drawGatePads(ctx: CanvasRenderingContext2D, st: GameState): void {
+    const u = this.unit;
+    const t = this.time;
+    const hot = this.padHint;
+    for (const pad of fortPads(this.localSeat)) {
+      const p = this.worldToScreen(pad.x, pad.y);
+      const pulse = 0.5 + Math.sin(t * (hot ? 5 : 2.2)) * 0.5;
+      const alpha = hot ? 0.5 + pulse * 0.4 : 0.16 + pulse * 0.1;
+      const rx = u * (hot ? 0.72 : 0.6);
+      ctx.save();
+      ctx.strokeStyle = `hsla(190 95% 65% / ${alpha})`;
+      ctx.lineWidth = hot ? 2.6 : 1.6;
+      ctx.setLineDash([8, 7]);
+      ctx.lineDashOffset = -t * 22;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, rx, rx * 0.5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, rx);
+      g.addColorStop(0, `hsla(190 90% 60% / ${alpha * 0.5})`);
+      g.addColorStop(1, 'hsla(190 90% 60% / 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, rx, rx * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      if (hot) {
+        // A rising chevron: "your warrior enters HERE and marches out".
+        const dir = -1; // pads sit at the bottom of the screen for the local seat
+        ctx.strokeStyle = `hsla(190 95% 72% / ${0.35 + pulse * 0.3})`;
+        ctx.lineWidth = 2.2;
+        ctx.lineCap = 'round';
+        const ay = p.y - u * (0.55 + pulse * 0.12);
+        ctx.beginPath();
+        ctx.moveTo(p.x - u * 0.16, ay - dir * u * 0.12);
+        ctx.lineTo(p.x, ay + dir * u * 0.1);
+        ctx.lineTo(p.x + u * 0.16, ay - dir * u * 0.12);
         ctx.stroke();
       }
-    }
-
-    // Hit flash lights the whole crag.
-    if (flash > 0) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = Math.min(1, flash / 0.24) * 0.55;
-      ctx.fillStyle = '#fff';
-      tracePath(silhouette);
-      ctx.fill();
       ctx.restore();
     }
-
-    // Objective HP bar — bigger than unit bars; this IS the scoreboard.
-    // Sits just above the broken crown.
-    const hpw = u * 1.9;
-    const hph = 7;
-    const hy = apex[1] - u * 0.24;
-    ctx.fillStyle = 'rgba(4,3,8,0.82)';
-    ctx.beginPath();
-    ctx.roundRect(-hpw / 2 - 1.5, hy - 1.5, hpw + 3, hph + 3, 4.5);
-    ctx.fill();
-    const barG = ctx.createLinearGradient(0, hy, 0, hy + hph);
-    if (mine) {
-      barG.addColorStop(0, frac > 0.35 ? 'hsl(187 90% 62%)' : 'hsl(45 95% 66%)');
-      barG.addColorStop(1, frac > 0.35 ? 'hsl(195 85% 42%)' : 'hsl(40 95% 46%)');
-    } else {
-      barG.addColorStop(0, 'hsl(4 92% 64%)');
-      barG.addColorStop(1, 'hsl(2 85% 44%)');
-    }
-    ctx.fillStyle = barG;
-    ctx.beginPath();
-    ctx.roundRect(-hpw / 2, hy, Math.max(2, hpw * frac), hph, 3.5);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.fillRect(-hpw / 2 + 1, hy + 1, Math.max(1, hpw * frac - 2), 1.4);
-
-    ctx.restore();
   }
 
   /* ------------------------- transition cutscene ------------------------- */
