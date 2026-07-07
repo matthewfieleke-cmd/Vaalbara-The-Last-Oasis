@@ -838,10 +838,10 @@ export class Renderer {
     laneX: number,
   ): void {
     const cx = this.worldToScreen(laneX, WORLD_H / 2).x;
-    const half = lay.width * 0.068;
+    const half = lay.width * 0.069;
     const base = lay.baseY + this.unit * 0.2;
-    const apex = lay.topY + lay.h * 0.15;
-    const spring = apex + (base - apex) * 0.36;
+    const apex = lay.topY + lay.h * 0.3;
+    const spring = apex + (base - apex) * 0.22;
     ctx.moveTo(cx - half, base);
     ctx.lineTo(cx - half, spring);
     ctx.quadraticCurveTo(cx - half, apex, cx, apex);
