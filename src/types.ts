@@ -395,18 +395,23 @@ export const inDeployBand = (player: PlayerId, y: number): boolean =>
 
 /* Phase-1 fortresses ------------------------------------------------------ */
 /** Arch/lane x positions (world units) — must match the fortress paintings,
- *  whose gates sit at ~24.5% and ~76% of the wall's width. */
-export const FORT_LANE_X: readonly [number, number] = [2.2, 6.85];
+ *  whose gates sit at ~22.7% and ~78.2% of the wall's width. */
+export const FORT_LANE_X: readonly [number, number] = [2.04, 7.04];
 /** Field-facing wall line of each fortress: seat 1 (top) wall front and
  *  seat 0 (bottom) wall front. Everything beyond is fortress interior. */
 export const FORT_WALL_FRONT: Record<PlayerId, number> = { 0: 11.65, 1: 3.35 };
-/** Half-width of the arch corridors carved through each wall. */
-export const FORT_ARCH_HALF_W = 0.85;
+/** Half-width of the arch corridors carved through each wall — matches the
+ *  painted openings, so units never walk through visible stone. */
+export const FORT_ARCH_HALF_W = 0.62;
 /** Wing bodies (the gatehouses units batter) sit just inside the wall. */
 export const FORT_WING_Y: Record<PlayerId, number> = { 0: 12.4, 1: 2.6 };
 export const FORT_WING_R = 0.85;
-/** Tap-to-deploy pads: inside your own arch corridors, behind the gate. */
+/** Tap-to-deploy pads: the visible arch mouths of your own fortress. */
 export const FORT_PAD_Y: Record<PlayerId, number> = { 0: 13.3, 1: 1.7 };
+/** Where deployed units actually MATERIALISE: at the far (outside) end of
+ *  the arch corridor, so every warrior marches the full tunnel and visibly
+ *  emerges from the gateway onto the field. */
+export const FORT_SPAWN_Y: Record<PlayerId, number> = { 0: 14.45, 1: 0.55 };
 export const fortPads = (seat: PlayerId): Array<{ x: number; y: number }> =>
   FORT_LANE_X.map((x) => ({ x, y: FORT_PAD_Y[seat] }));
 

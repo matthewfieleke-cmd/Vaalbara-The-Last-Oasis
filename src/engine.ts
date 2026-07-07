@@ -15,7 +15,7 @@
 
 import {
   ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
-  CAPTURE_RATE, DEPLOY_DEPTH, FORT_LANE_X, FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
+  CAPTURE_RATE, DEPLOY_DEPTH, FORT_LANE_X, FORT_SPAWN_Y, FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
   HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
   PHASE1_TICKS, PHASE2_TICKS,
   TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
@@ -340,14 +340,15 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
 
     if (st.phase === 'basalt') {
       // Fortress siege: units enter the field THROUGH one of your two
-      // gates. The touch snaps to the nearest gate pad (inside the arch),
-      // and the entry waypoint marches the unit out of the arch and over
-      // that lane's bridge before free AI takes over.
+      // gates. The touch snaps to the nearest gate lane, but the warrior
+      // materialises at the FAR end of the arch corridor — outside the
+      // fortress — and marches the whole tunnel before emerging onto the
+      // field, so every deployment reads as a gate sortie.
       const pads = fortPads(input.player);
       const pad = pads.reduce((best, cur) =>
         Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
       sx = pad.x;
-      sy = pad.y;
+      sy = FORT_SPAWN_Y[input.player];
       wp = { x: pad.x, y: input.player === 0 ? 9.0 : 6.0 };
     } else {
       // Oasis: free vector spawning along your own baseline; the drag
@@ -385,16 +386,29 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
     p.aqua -= def.cost;
     cycleCard(p, handIdx);
 
+    // Inside the arch corridors multi-unit cards fall into COLUMN file — the
+    // tunnel is only as wide as the painted opening, so packs march through
+    // single file, each a step ahead of the next. On the open oasis baseline
+    // they fan out side by side as before.
+    const columnFile = st.phase === 'basalt';
+    // Column steps advance toward the field (deeper index = closer to exit).
+    const stepY = input.player === 0 ? -0.55 : 0.55;
+    const at = (i: number, n: number, spread: number): { x: number; y: number } =>
+      columnFile
+        ? { x: sx, y: sy + i * stepY }
+        : { x: sx + (i - (n - 1) / 2) * spread, y: sy };
     const spawned: UnitState[] = [];
     if (stats.formation === 'line' && stats.count > 1) {
       for (let i = 0; i < stats.count; i++) {
-        const off = (i - (stats.count - 1) / 2) * 0.7;
-        const u = spawnUnit(st, ev, input.player, def.species, sx + off, sy, wp);
+        const p2 = at(i, stats.count, 0.7);
+        const u = spawnUnit(st, ev, input.player, def.species, p2.x, p2.y, wp);
         if (u) spawned.push(u);
       }
     } else if (stats.formation === 'pair' && stats.count === 2) {
-      const u1 = spawnUnit(st, ev, input.player, def.species, sx - 0.4, sy, wp);
-      const u2 = spawnUnit(st, ev, input.player, def.species, sx + 0.4, sy, wp);
+      const a1 = at(0, 2, 0.8);
+      const a2 = at(1, 2, 0.8);
+      const u1 = spawnUnit(st, ev, input.player, def.species, a1.x, a1.y, wp);
+      const u2 = spawnUnit(st, ev, input.player, def.species, a2.x, a2.y, wp);
       if (u1) spawned.push(u1);
       if (u2) spawned.push(u2);
     } else {

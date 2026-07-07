@@ -26,7 +26,6 @@ export function GameScreen({
   onEnd: (winner: PlayerId | 'tie', finalState: GameState) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const hudRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const driverRef = useRef<TickDriver | null>(null);
@@ -62,16 +61,10 @@ export function GameScreen({
     const fit = () => {
       const r = wrap.getBoundingClientRect();
       renderer.resize(r.width, r.height);
-      // Tell the renderer how far the top HUD (phase pill + scoreboard +
-      // objective line) hangs over the canvas, so on-field UI like the
-      // enemy gatehouse HP bars can dodge it on every device shape.
-      const hud = hudRef.current;
-      renderer.topSafe = hud ? Math.max(0, hud.getBoundingClientRect().bottom - r.top) : 0;
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(wrap);
-    if (hudRef.current) ro.observe(hudRef.current);
     renderer.start();
 
     const bot = session.mode === 'local' ? new BotBrain(1, session.seed) : null;
@@ -393,7 +386,7 @@ export function GameScreen({
         <canvas ref={canvasRef} />
       </div>
 
-      <div className="hud-top" ref={hudRef}>
+      <div className="hud-top">
         <div className="hud-row">
           <span className={`phase-pill ${phase === 'oasis' || phase === 'ended' ? 'oasis' : 'basalt'}`}>
             {phase === 'basalt' ? 'I · Basalt Fields' : phase === 'transition' ? '⇧ The March' : 'II · The Oasis'}
