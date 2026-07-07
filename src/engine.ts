@@ -174,8 +174,12 @@ function groundOpen(st: GameState, x: number, y: number): boolean {
   return inWorld(x, y) && walkableAt(worldOf(st), x, y);
 }
 
+/** Global march pace. The plodding gait animation reads the ACTUAL speed,
+ *  so a small lift here quickens the stride without breaking foot contact. */
+const MARCH_PACE = 1.12;
+
 function effSpeed(st: GameState, u: RuntimeUnit): number {
-  let s = u.stats.speed;
+  let s = u.stats.speed * MARCH_PACE;
   if (u.buffs.blessed) s *= BLESSING_MULT;
   if (u.buffs.slowTicks > 0 && !u.buffs.berserk) s *= u.buffs.slowMult;
   if (!u.stats.flying && u.stats.heavy && isWater(worldOf(st), u.x, u.y)) s *= 0.6;
