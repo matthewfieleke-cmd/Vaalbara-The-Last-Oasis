@@ -26,12 +26,14 @@ const arenas = [
   ['art-src/arena2.png', 'public/art/arena2.webp', 820],
 ];
 
-// Fortress facades: white background keyed to alpha, trimmed to content.
+// Fortress paintings: white background keyed to alpha, trimmed to content.
+// front* is the enemy stronghold seen face-on across the field; rear* is
+// YOUR stronghold seen from behind/above (the camera side).
 const fortresses = [
-  ['art-src/fort-red.png', 'public/art/fort-red.webp', 1400],
-  ['art-src/fort-blue.png', 'public/art/fort-blue.webp', 1400],
-  ['art-src/fort-red-ruin.png', 'public/art/fort-red-ruin.webp', 1400],
-  ['art-src/fort-blue-ruin.png', 'public/art/fort-blue-ruin.webp', 1400],
+  ['art-src/fort-front.png', 'public/art/fort-front.webp', 1400],
+  ['art-src/fort-front-ruin.png', 'public/art/fort-front-ruin.webp', 1400],
+  ['art-src/fort-rear.png', 'public/art/fort-rear.webp', 1400],
+  ['art-src/fort-rear-ruin.png', 'public/art/fort-rear-ruin.webp', 1400],
 ];
 
 // Animation sheets: kept at full width so each frame stays ~300px.

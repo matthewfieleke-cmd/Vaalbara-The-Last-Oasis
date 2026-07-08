@@ -9,7 +9,7 @@
  * characters run the dark basalt paths and never cross the painted lava.
  * ========================================================================== */
 
-import { FORT_ARCH_HALF_W, FORT_LANE_X, FORT_WALL_FRONT, WORLD_H, WORLD_W } from './types';
+import { FORT_ARCH_HALF_W, FORT_LANES, FORT_WALL_FRONT, WORLD_H, WORLD_W } from './types';
 import { BASALT_MASK_B64, NAV_GH, NAV_GW, OASIS_MASK_B64 } from './navmask-data';
 
 export type WorldId = 'basalt' | 'oasis';
@@ -39,17 +39,17 @@ function decode(b64: string): Uint8Array {
 function applyFortresses(mask: Uint8Array): Uint8Array {
   const cx = NAV_GW / WORLD_W;
   const cy = NAV_GH / WORLD_H;
-  const bands: Array<[number, number]> = [
-    [0, FORT_WALL_FRONT[1]],          // top fortress body (seat 1)
-    [FORT_WALL_FRONT[0], WORLD_H],    // bottom fortress body (seat 0)
+  const bands: Array<[number, number, 0 | 1]> = [
+    [0, FORT_WALL_FRONT[1], 1],          // top fortress body (seat 1)
+    [FORT_WALL_FRONT[0], WORLD_H, 0],    // bottom fortress body (seat 0)
   ];
-  for (const [y0, y1] of bands) {
+  for (const [y0, y1, owner] of bands) {
     const gy0 = Math.max(0, Math.floor(y0 * cy));
     const gy1 = Math.min(NAV_GH, Math.ceil(y1 * cy));
     for (let gy = gy0; gy < gy1; gy++) {
       for (let gx = 0; gx < NAV_GW; gx++) {
         const wx = (gx + 0.5) / cx;
-        const inArch = FORT_LANE_X.some((lx) => Math.abs(wx - lx) <= FORT_ARCH_HALF_W);
+        const inArch = FORT_LANES[owner].some((lx) => Math.abs(wx - lx) <= FORT_ARCH_HALF_W);
         // Keep the outermost row sealed so gates never leak off-world.
         const edge = gy < 1 || gy > NAV_GH - 2;
         mask[gy * NAV_GW + gx] = inArch && !edge ? CELL.WALK : CELL.BLOCKED;

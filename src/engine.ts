@@ -15,7 +15,7 @@
 
 import {
   ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
-  CAPTURE_RATE, DEPLOY_DEPTH, FORT_LANE_X, FORT_SPAWN_Y, FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
+  CAPTURE_RATE, DEPLOY_DEPTH, FORT_LANES, FORT_SPAWN_Y, FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
   HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
   PHASE1_TICKS, PHASE2_TICKS,
   TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
@@ -73,7 +73,7 @@ function basaltProps(): PropState[] {
 function makeObelisks(): ObeliskState[] {
   const wings: ObeliskState[] = [];
   for (const owner of [0, 1] as const) {
-    FORT_LANE_X.forEach((x, wing) => {
+    FORT_LANES[owner].forEach((x, wing) => {
       wings.push({
         owner, wing: wing as 0 | 1,
         hp: OBELISK_HP, maxHp: OBELISK_HP,
@@ -1071,8 +1071,8 @@ function beginTransition(st: GameState, ev: GameEvent[]): void {
   // renderer plays the exodus cutscene over these ticks.
   for (const u of st.units) {
     if (u.hp <= 0) continue;
-    const lane = Math.abs(u.x - FORT_LANE_X[0]) < Math.abs(u.x - FORT_LANE_X[1])
-      ? FORT_LANE_X[0] : FORT_LANE_X[1];
+    const lanes = FORT_LANES[u.owner];
+    const lane = Math.abs(u.x - lanes[0]) < Math.abs(u.x - lanes[1]) ? lanes[0] : lanes[1];
     u.waypoint = { x: lane, y: u.owner === 0 ? WORLD_H - 1.4 : 1.4 };
     u.stall = 0;
     u.stallRef = Infinity;
@@ -1380,8 +1380,7 @@ export class BotBrain {
       let lane = this.rng() < 0.5 ? 0 : 1;
       if (wings.length > 0 && this.rng() < 0.65) {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
-        lane = FORT_LANE_X.indexOf(weakest.x as (typeof FORT_LANE_X)[number]) as 0 | 1;
-        if (lane < 0) lane = 0;
+        lane = weakest.wing;
       }
       const pad = pads[lane];
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };

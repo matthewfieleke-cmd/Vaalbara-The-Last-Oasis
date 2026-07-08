@@ -100,9 +100,11 @@ let duelArt: { basalt: HTMLImageElement | null; oasis: HTMLImageElement | null }
   basalt: null,
   oasis: null,
 };
-/** Phase-1 fortress facades: blue = the local player's, red = the enemy's;
- *  each also has a "ruin" variant with the LEFT gatehouse collapsed. */
-export type FortArtKey = 'red' | 'blue' | 'red-ruin' | 'blue-ruin';
+/** Phase-1 fortress paintings. 'front' is the enemy stronghold seen face-on
+ *  across the field (red banners); 'rear' is YOUR stronghold seen from
+ *  behind/above on the camera side (teal banners, tower roofs and the rear
+ *  tunnel mouths). Each has a "ruin" variant with the LEFT wing collapsed. */
+export type FortArtKey = 'front' | 'rear' | 'front-ruin' | 'rear-ruin';
 const fortArt = new Map<FortArtKey, HTMLImageElement>();
 let loaded = false;
 
@@ -780,7 +782,7 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           duelArt[w] = null;
         }
       }),
-      ...(['red', 'blue', 'red-ruin', 'blue-ruin'] as const).map(async (k) => {
+      ...(['front', 'rear', 'front-ruin', 'rear-ruin'] as const).map(async (k) => {
         try {
           fortArt.set(k, await loadImage(`${baseUrl}fort-${k}.webp`));
         } catch {
