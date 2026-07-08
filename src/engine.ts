@@ -178,11 +178,25 @@ function groundOpen(st: GameState, x: number, y: number): boolean {
  *  so a small lift here quickens the stride without breaking foot contact. */
 const MARCH_PACE = 1.12;
 
+/** Is this ground position on a collapsed gatehouse's rubble mound? Razed
+ *  lanes stay open, but crossing the debris is a scramble, not a march. */
+export function onRubble(st: GameState, x: number, y: number): boolean {
+  if (st.obelisks.length === 0) return false;
+  const owner = y > FORT_WALL_FRONT[0] ? 0 : y < FORT_WALL_FRONT[1] ? 1 : null;
+  if (owner === null) return false;
+  const lanes = FORT_LANES[owner];
+  const wing = Math.abs(x - lanes[0]) < Math.abs(x - lanes[1]) ? 0 : 1;
+  const gate = st.obelisks.find((o) => o.owner === owner && o.wing === wing);
+  return !!gate && gate.hp <= 0;
+}
+
 function effSpeed(st: GameState, u: RuntimeUnit): number {
   let s = u.stats.speed * MARCH_PACE;
   if (u.buffs.blessed) s *= BLESSING_MULT;
   if (u.buffs.slowTicks > 0 && !u.buffs.berserk) s *= u.buffs.slowMult;
   if (!u.stats.flying && u.stats.heavy && isWater(worldOf(st), u.x, u.y)) s *= 0.6;
+  // Clambering over a razed gate's debris: slow, deliberate scramble.
+  if (!u.stats.flying && onRubble(st, u.x, u.y)) s *= 0.55;
   return s;
 }
 
@@ -349,7 +363,13 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
         Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
       sx = pad.x;
       sy = FORT_SPAWN_Y[input.player];
-      wp = { x: pad.x, y: input.player === 0 ? 9.0 : 6.0 };
+      // March to the CENTRAL plateau (pulled toward mid-field from the
+      // gate lane): both armies converge there and clash before anyone
+      // pushes on down a lane toward the enemy walls.
+      wp = {
+        x: pad.x + (WORLD_W / 2 - pad.x) * 0.5,
+        y: input.player === 0 ? 7.6 : 7.4,
+      };
     } else {
       // Oasis: free vector spawning along your own baseline; the drag
       // vector becomes an entry trajectory the unit sprints down.
@@ -451,23 +471,25 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
       if (!(cs.flying && !u.stats.canHitAir && !u.stats.flying)) return cur;
     }
   }
-  // Eagle stays a global assassin; everyone else only picks fights inside
-  // their aggro bubble — otherwise they push the lane toward the obelisk.
-  // Phase 2 has no lanes: the pond brawl IS the game, so aggro goes global
-  // and the armies actually clash instead of camping their own bank.
+  // Eagle stays a global assassin. Everyone else hunts the NEAREST enemy
+  // anywhere on the field: opposing warriors converge and clash mid-field
+  // instead of marching past each other in parallel lanes, and only the
+  // survivor carries on down the nearest lane to the fortress.
   if (u.species === 'eagle') {
     return enemies.reduce((a, b) => (b.hp < a.hp ? b : a));
   }
   let best: UnitState | null = null;
   let bestD = Infinity;
   const aggroBase2 = AGGRO_RANGE * AGGRO_RANGE;
-  const aggro2 = st.phase === 'oasis' ? Infinity : aggroBase2;
   for (const e of enemies) {
     const eFly = speciesDef(e.species).stats!.flying;
     if (eFly && !u.stats.canHitAir && !u.stats.flying) continue;
     const d = dist2(u.x, u.y, e.x, e.y) + (e.id % 7) * 1e-4;
-    if (d > aggro2) continue;
-    // Never marathon-chase a kiting flyer across the pond — swat it only
+    // Enemies still inside a fortress interior (marching their tunnel) are
+    // out of sight — a duel starts once they step onto the field.
+    if (st.phase === 'basalt'
+      && (e.y > FORT_WALL_FRONT[0] + 0.05 || e.y < FORT_WALL_FRONT[1] - 0.05)) continue;
+    // Never marathon-chase a kiting flyer across the map — swat it only
     // when it strays into the normal aggro bubble.
     if (eFly && !u.stats.flying && d > aggroBase2) continue;
     if (d < bestD) {
