@@ -65,11 +65,13 @@ const spriteHeight = (s: number, species: SpeciesId, colossal: boolean, heavy: b
   s * (colossal ? 2.5 : heavy ? 2.2 : 1.9) * (SIZE_TWEAK[species] ?? 1);
 
 /** Base footprint scale per weight class (px per world unit multiplier).
- *  Tuned against the fortress gates: even a T-Rex stands well inside the
- *  colossal archways, so walking the tunnels reads as a real passage
- *  through a monumental wall — units never rescale to fake it. */
+ *  Tuned against the fortress gates: even a T-Rex clears the painted arch
+ *  openings in BOTH width and height (arch ≈1.0 world-units wide, ≈1.9
+ *  tall; a colossal at 0.58 reads ≈1.1 wide, ≈1.45 tall), so walking the
+ *  tunnels is a real passage through a monumental wall — units never
+ *  rescale to fake it. */
 const unitScale = (colossal: boolean, heavy: boolean): number =>
-  colossal ? 0.68 : heavy ? 0.58 : 0.47;
+  colossal ? 0.58 : heavy ? 0.52 : 0.47;
 
 /* ------------------------------------------------------------------------ */
 
@@ -1663,6 +1665,47 @@ export class Renderer {
             tunnelFade = 1 - 0.5 * clamp(
               Math.min(p.y - wallY, mouthBase - p.y) / (this.unit * 0.9), 0, 1,
             );
+          }
+        }
+      } else if (tunnel && !tunnel.gateUp && !this.fortLayout(tunnel.owner)?.mine) {
+        // A razed ENEMY lane: arrivals march up the far side of the rubble
+        // mound, so they're only visible below its crest — the head rises
+        // first, then the body crests the debris and marches down onto the
+        // field. Without this they'd float against the vista sky.
+        const lay = this.fortLayout(tunnel.owner);
+        if (lay) {
+          const crestY = lay.topY + lay.h * 0.45;
+          const cx = this.worldToScreen(tunnel.laneX, 0).x;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(cx - lay.width * 0.16, crestY, lay.width * 0.32, 4000);
+          ctx.clip();
+          clipped = true;
+        }
+      } else if (!clipped && !tunnel && st.obelisks.length > 0) {
+        // Crossing an ENEMY gate's threshold onto the field: while any part
+        // of the body could still overlap the wall above the arch, keep
+        // everything above the mouth base clipped to the painted opening —
+        // the stone always wins, so a tall back never pokes through the
+        // arch during the exit.
+        const foe = (this.localSeat === 0 ? 1 : 0) as PlayerId;
+        const out = foe === 1 ? d.dy - FORT_WALL_FRONT[1] : FORT_WALL_FRONT[0] - d.dy;
+        if (out >= 0 && out <= 1.1) {
+          const lanes = FORT_LANES[foe];
+          const laneX = Math.abs(d.dx - lanes[0]) < Math.abs(d.dx - lanes[1]) ? lanes[0] : lanes[1];
+          const wing = (lanes[0] === laneX ? 0 : 1) as 0 | 1;
+          const gate = st.obelisks.find((o) => o.owner === foe && o.wing === wing);
+          if (Math.abs(d.dx - laneX) <= FORT_ARCH_HALF_W + 0.55 && gate && gate.hp > 0) {
+            const lay = this.fortLayout(foe);
+            if (lay) {
+              const base = lay.topY + lay.h * lay.art.baseFrac + this.unit * 0.2;
+              ctx.save();
+              ctx.beginPath();
+              this.archPath(ctx, lay, laneX);
+              ctx.rect(lay.left - 2000, base, lay.width + 4000, 4000);
+              ctx.clip();
+              clipped = true;
+            }
           }
         }
       }

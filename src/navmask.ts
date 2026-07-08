@@ -9,7 +9,10 @@
  * characters run the dark basalt paths and never cross the painted lava.
  * ========================================================================== */
 
-import { FORT_ARCH_HALF_W, FORT_LANES, FORT_WALL_FRONT, WORLD_H, WORLD_W } from './types';
+import {
+  BRIDGE_HALF_W, FORT_ARCH_HALF_W, FORT_LANES, FORT_WALL_FRONT, RIVER_BANDS,
+  WORLD_H, WORLD_W,
+} from './types';
 import { BASALT_MASK_B64, NAV_GH, NAV_GW, OASIS_MASK_B64 } from './navmask-data';
 
 export type WorldId = 'basalt' | 'oasis';
@@ -59,8 +62,33 @@ function applyFortresses(mask: Uint8Array): Uint8Array {
   return mask;
 }
 
+/** Seal the lava rivers with exact geometry. The baked colour-traced mask
+ *  misses the dark crusted banks and the cooled rocks floating INSIDE the
+ *  rivers, leaving walkable leaks that let units stroll across painted lava.
+ *  Instead each river is a solid blocked band spanning the full arena width,
+ *  crossed only by the two painted bridge decks of the fortress it guards —
+ *  watertight by construction. */
+function applyRivers(mask: Uint8Array): Uint8Array {
+  const cx = NAV_GW / WORLD_W;
+  const cy = NAV_GH / WORLD_H;
+  for (const owner of [0, 1] as const) {
+    const { y0, y1 } = RIVER_BANDS[owner];
+    const lanes = FORT_LANES[owner];
+    const gy0 = Math.max(0, Math.floor(y0 * cy));
+    const gy1 = Math.min(NAV_GH, Math.ceil(y1 * cy));
+    for (let gy = gy0; gy < gy1; gy++) {
+      for (let gx = 0; gx < NAV_GW; gx++) {
+        const wx = (gx + 0.5) / cx;
+        const onBridge = lanes.some((lx) => Math.abs(wx - lx) <= BRIDGE_HALF_W);
+        mask[gy * NAV_GW + gx] = onBridge ? CELL.WALK : CELL.BLOCKED;
+      }
+    }
+  }
+  return mask;
+}
+
 const MASKS: Record<WorldId, Uint8Array> = {
-  basalt: applyFortresses(decode(BASALT_MASK_B64)),
+  basalt: applyFortresses(applyRivers(decode(BASALT_MASK_B64))),
   oasis: decode(OASIS_MASK_B64),
 };
 

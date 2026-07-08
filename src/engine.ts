@@ -15,9 +15,10 @@
 
 import {
   ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
-  CAPTURE_RATE, DEPLOY_DEPTH, FORT_LANES, FORT_SPAWN_Y, FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
+  BRIDGE_HALF_W, CAPTURE_RATE, DEPLOY_DEPTH, FORT_ARCH_HALF_W, FORT_LANES, FORT_SPAWN_Y,
+  FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
   HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
-  PHASE1_TICKS, PHASE2_TICKS,
+  PHASE1_TICKS, PHASE2_TICKS, RIVER_BANDS,
   TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
 } from './types';
 import type {
@@ -889,6 +890,41 @@ function steerStep(
   return false;
 }
 
+/** Lane discipline: while a ground unit is inside a lava-river band or a
+ *  fortress arch corridor, clamp its sideways position to the corridor's
+ *  centre ± (corridor half-width − the unit's OWN radius). A T-Rex is nearly
+ *  as wide as a bridge deck, so it threads dead-centre; small units keep a
+ *  little natural wiggle but their bodies always stay on the stone. */
+function laneDiscipline(st: GameState): void {
+  if (worldOf(st) !== 'basalt') return;
+  for (const raw of st.units) {
+    if (raw.hp <= 0) continue;
+    const stats = speciesDef(raw.species).stats!;
+    if (stats.flying) continue;
+    let lanes: readonly [number, number] | null = null;
+    let halfW = 0;
+    if (raw.y > FORT_WALL_FRONT[0]) {
+      lanes = FORT_LANES[0];
+      halfW = FORT_ARCH_HALF_W;
+    } else if (raw.y < FORT_WALL_FRONT[1]) {
+      lanes = FORT_LANES[1];
+      halfW = FORT_ARCH_HALF_W;
+    } else {
+      for (const owner of [0, 1] as const) {
+        const band = RIVER_BANDS[owner];
+        if (raw.y >= band.y0 && raw.y <= band.y1) {
+          lanes = FORT_LANES[owner];
+          halfW = BRIDGE_HALF_W;
+        }
+      }
+    }
+    if (!lanes) continue;
+    const laneX = Math.abs(raw.x - lanes[0]) < Math.abs(raw.x - lanes[1]) ? lanes[0] : lanes[1];
+    const play = Math.max(0.05, halfW - stats.radius);
+    raw.x = Math.min(laneX + play, Math.max(laneX - play, raw.x));
+  }
+}
+
 /** Soft separation: overlapping same-layer units push each other apart. */
 function separateUnits(st: GameState): void {
   const units = st.units.filter((u) => u.hp > 0);
@@ -1215,6 +1251,7 @@ export function advanceTick(st: GameState, inputs: PlayerInput[]): TickResult {
     }
     tickProjectiles(st, ev);
     separateUnits(st);
+    laneDiscipline(st);
     for (const u of st.units) if (u.hp > 0) applyFieldEffects(st, ev, rt(u));
     applyZoneEffects(st, ev);
   } else if (st.phase === 'transition') {

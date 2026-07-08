@@ -407,9 +407,22 @@ export const FORT_LANES: Record<PlayerId, readonly [number, number]> = {
  *  seat 0 (bottom) wall front. Everything beyond is fortress interior. */
 export const FORT_WALL_FRONT: Record<PlayerId, number> = { 0: 11.65, 1: 3.35 };
 /** Half-width of the arch corridors carved through each wall — matches the
- *  painted openings AND the bridge width, so units never cross visible stone
- *  or lava. */
-export const FORT_ARCH_HALF_W = 0.62;
+ *  PAINTED openings (measured ≈0.45–0.49 half-width), so a unit's centre can
+ *  never sit behind visible stone. */
+export const FORT_ARCH_HALF_W = 0.48;
+/** Lava rivers as exact geometry (not colour-traced from the painting, which
+ *  leaked through dark crust): each river is a solid blocked band crossed
+ *  ONLY by the two painted bridges of the fortress it guards. The top band
+ *  runs right up to the top fortress wall — the strip in front of that wall
+ *  is painted river bank, so the two gate ledges are separate and a unit
+ *  must return to mid-field to switch lanes. */
+export const RIVER_BANDS: Record<PlayerId, { y0: number; y1: number }> = {
+  1: { y0: FORT_WALL_FRONT[1], y1: 5.35 }, // guards the top fortress (seat 1)
+  0: { y0: 9.35, y1: 10.7 },               // guards the bottom fortress (seat 0)
+};
+/** Walkable half-width of a bridge deck, kerb to kerb — matches the painted
+ *  decks after their slight widening. */
+export const BRIDGE_HALF_W = 0.6;
 /** Wing bodies (the gatehouses units batter) sit just inside the wall. */
 export const FORT_WING_Y: Record<PlayerId, number> = { 0: 12.4, 1: 2.6 };
 export const FORT_WING_R = 0.85;

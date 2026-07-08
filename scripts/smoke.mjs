@@ -109,6 +109,12 @@ if (!ultDisabled) {
 
 /* ------- accelerated full match: both phases through to results --------- */
 await page.goto(`${BASE}?p1ticks=60&p2ticks=40`, { waitUntil: 'networkidle' });
+// The cinematic gate plays on every boot (it doubles as the audio unlock).
+const tap2 = page.locator('.tap-to-begin');
+if (await tap2.count()) {
+  await tap2.click();
+  await page.click('.skip-btn');
+}
 await page.waitForSelector('.menu', { timeout: 5000 });
 await page.click('text=Battle');
 await page.waitForSelector('.faction-select', { timeout: 5000 });
