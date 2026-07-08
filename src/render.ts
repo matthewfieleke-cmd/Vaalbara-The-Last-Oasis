@@ -65,9 +65,11 @@ const spriteHeight = (s: number, species: SpeciesId, colossal: boolean, heavy: b
   s * (colossal ? 2.5 : heavy ? 2.2 : 1.9) * (SIZE_TWEAK[species] ?? 1);
 
 /** Base footprint scale per weight class (px per world unit multiplier).
- *  Generous: with the 4-unit army cap, big readable actors are the point. */
+ *  Tuned against the fortress gates: even a T-Rex stands well inside the
+ *  colossal archways, so walking the tunnels reads as a real passage
+ *  through a monumental wall — units never rescale to fake it. */
 const unitScale = (colossal: boolean, heavy: boolean): number =>
-  colossal ? 0.92 : heavy ? 0.8 : 0.64;
+  colossal ? 0.68 : heavy ? 0.58 : 0.47;
 
 /* ------------------------------------------------------------------------ */
 
@@ -950,6 +952,11 @@ export class Renderer {
       ctx.restore();
     };
 
+    // The world continues BEHIND the enemy wall: a volcanic vista fills the
+    // band between the arena's far edge and the battlements, so the map
+    // doesn't end at the fortress.
+    if (!mine) this.drawBeyondWall(ctx, lay);
+
     // Soft contact shadow so the wall sits INTO the ground.
     ctx.save();
     const sh = ctx.createLinearGradient(0, baseY - u * 0.5, 0, baseY + u * 0.25);
@@ -969,6 +976,14 @@ export class Renderer {
       // Both gatehouses razed: compose the ruin's rubble half on each side.
       drawFacade(ruin, false, 'left');
       drawFacade(ruin, true, 'right');
+    }
+
+    // Torch-lit depth inside each standing enemy gate: units marching the
+    // corridor walk a lit passage rather than dissolving into a black void.
+    if (!mine) {
+      for (const gate of wings) {
+        if (gate.hp > 0) this.drawTunnelInterior(ctx, lay, FORT_LANES[owner][gate.wing]);
+      }
     }
 
     // Smoulder on fallen wings: dust motes and embers drifting off rubble.
@@ -1002,6 +1017,146 @@ export class Renderer {
 
     // Gate pads: your two drop spots, on the apron outside your rear mouths.
     if (mine && st.phase === 'basalt') this.drawGatePads(ctx, st);
+  }
+
+  /** The world does not end at the enemy wall: a volcanic vista — jagged
+   *  ridge silhouettes, ember haze and distant eruption glow — fills the
+   *  band between the arena's far edge and the fortress battlements. */
+  private drawBeyondWall(ctx: CanvasRenderingContext2D, lay: FortLayout): void {
+    const u = this.unit;
+    const r = this.boardRect();
+    const top = r.top - 3;
+    const bot = lay.topY + u * 0.4;
+    if (bot <= top + 2) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(r.left - 3, r.top - 3, r.w + 6, r.h + 6, 12);
+    ctx.clip();
+    // Smoky night sky behind the wall.
+    const sky = ctx.createLinearGradient(0, top, 0, bot);
+    sky.addColorStop(0, 'hsl(354 38% 7%)');
+    sky.addColorStop(0.65, 'hsl(10 42% 10%)');
+    sky.addColorStop(1, 'hsl(16 48% 12%)');
+    ctx.fillStyle = sky;
+    ctx.fillRect(r.left - 3, top, r.w + 6, bot - top);
+    // Distant eruption glows breathing behind the ridge line.
+    for (const [fx, sc, hue] of [[0.26, 1.15, 14], [0.74, 0.9, 22]] as const) {
+      const gx = r.left + r.w * fx;
+      const gy = bot - (bot - top) * 0.22;
+      const rad = (bot - top) * (1.5 * sc + Math.sin(this.time * 0.7 + fx * 9) * 0.08);
+      const g = ctx.createRadialGradient(gx, gy, 1, gx, gy, rad);
+      g.addColorStop(0, `hsla(${hue} 90% 52% / 0.34)`);
+      g.addColorStop(1, 'hsla(20 90% 45% / 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+    }
+    // Two jagged ridge silhouette layers (deterministic peaks — no shimmer).
+    const ridge = (yBase: number, amp: number, freq: number, seed: number, fill: string) => {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(r.left - 3, bot + 2);
+      for (let x = r.left - 3; x <= r.left + r.w + 3; x += 6) {
+        const k = (x - r.left) / r.w;
+        const yy = yBase
+          - Math.abs(Math.sin(k * freq + seed)) * amp
+          - Math.abs(Math.sin(k * freq * 2.7 + seed * 1.7)) * amp * 0.45;
+        ctx.lineTo(x, yy);
+      }
+      ctx.lineTo(r.left + r.w + 3, bot + 2);
+      ctx.closePath();
+      ctx.fill();
+    };
+    ridge(bot - (bot - top) * 0.08, (bot - top) * 0.5, 9, 2.1, 'hsl(357 30% 9%)');
+    ridge(bot + 2, (bot - top) * 0.36, 14, 5.8, 'hsl(350 25% 6%)');
+    // Ember motes drifting up from beyond the wall.
+    if (Math.random() < 0.1) {
+      this.burst(r.left + Math.random() * r.w, bot - Math.random() * (bot - top) * 0.5, 1, 'mote', 22, 0.55);
+    }
+    ctx.restore();
+  }
+
+  /** Torch-lit depth inside a standing enemy gate: receding walls, an
+   *  ember-lit floor and a warm glow at the FAR end of the passage, so a
+   *  warrior marching the corridor reads as walking a lit tunnel — never
+   *  swallowed by a flat black void. */
+  private drawTunnelInterior(ctx: CanvasRenderingContext2D, lay: FortLayout, laneX: number): void {
+    const u = this.unit;
+    const cx = this.worldToScreen(laneX, 0).x;
+    const base = lay.topY + lay.h * lay.art.baseFrac + u * 0.2;
+    const apex = lay.topY + lay.h * lay.art.apexFrac;
+    const hh = base - apex;
+    const half = lay.width * lay.art.halfW * 1.12;
+    ctx.save();
+    ctx.beginPath();
+    this.archPath(ctx, lay, laneX);
+    ctx.clip();
+    // Passage body: near-black at the mouth, warming with depth.
+    const body = ctx.createLinearGradient(0, base, 0, apex);
+    body.addColorStop(0, 'hsl(12 30% 5%)');
+    body.addColorStop(0.75, 'hsl(16 34% 8%)');
+    body.addColorStop(1, 'hsl(18 30% 6%)');
+    ctx.fillStyle = body;
+    ctx.fillRect(cx - half, apex - u, half * 2, hh + u * 2);
+
+    // Floor receding toward the far mouth.
+    const fhalf = half * 0.34;
+    const fb = base - hh * 0.54;
+    const fh = hh * 0.30;
+    ctx.beginPath();
+    ctx.moveTo(cx - half, base);
+    ctx.lineTo(cx - fhalf, fb);
+    ctx.lineTo(cx + fhalf, fb);
+    ctx.lineTo(cx + half, base);
+    ctx.closePath();
+    const floor = ctx.createLinearGradient(0, base, 0, fb);
+    floor.addColorStop(0, 'hsl(14 32% 9%)');
+    floor.addColorStop(1, 'hsl(22 45% 14%)');
+    ctx.fillStyle = floor;
+    ctx.fill();
+    // Wall seams converging on the vanishing arch.
+    ctx.strokeStyle = 'hsla(20 30% 24% / 0.5)';
+    ctx.lineWidth = 1;
+    for (const sgn of [-1, 1] as const) {
+      ctx.beginPath();
+      ctx.moveTo(cx + sgn * half, base);
+      ctx.lineTo(cx + sgn * fhalf, fb);
+      ctx.moveTo(cx + sgn * half, apex + (base - apex) * 0.3);
+      ctx.lineTo(cx + sgn * fhalf, fb - fh * 0.9);
+      ctx.stroke();
+    }
+    // The lit far end — the passage opens onto the enemy's ember-lit ground.
+    ctx.beginPath();
+    ctx.moveTo(cx - fhalf, fb);
+    ctx.lineTo(cx - fhalf, fb - fh * 0.55);
+    ctx.quadraticCurveTo(cx - fhalf, fb - fh, cx, fb - fh);
+    ctx.quadraticCurveTo(cx + fhalf, fb - fh, cx + fhalf, fb - fh * 0.55);
+    ctx.lineTo(cx + fhalf, fb);
+    ctx.closePath();
+    const farG = ctx.createLinearGradient(0, fb - fh, 0, fb);
+    farG.addColorStop(0, 'hsl(20 60% 22%)');
+    farG.addColorStop(1, 'hsl(28 80% 36%)');
+    ctx.fillStyle = farG;
+    ctx.fill();
+    // Glow spilling from the far mouth down the floor.
+    const spill = ctx.createRadialGradient(cx, fb, 1, cx, fb, hh * 0.55);
+    spill.addColorStop(0, 'hsla(28 90% 50% / 0.28)');
+    spill.addColorStop(1, 'hsla(28 90% 45% / 0)');
+    ctx.fillStyle = spill;
+    ctx.fillRect(cx - half, fb - hh * 0.55, half * 2, hh);
+    // Torch pairs flickering down the passage.
+    for (const t of [0.3, 0.62]) {
+      const ty = base - hh * (0.42 + t * 0.2);
+      const tx = half * (1 - t * 0.6) * 0.88;
+      const fl = 0.5 + Math.sin(this.time * 9 + t * 17) * 0.16;
+      for (const sgn of [-1, 1] as const) {
+        const g = ctx.createRadialGradient(cx + sgn * tx, ty, 0.5, cx + sgn * tx, ty, u * 0.3 * (1 - t * 0.3));
+        g.addColorStop(0, `hsla(32 95% 62% / ${fl})`);
+        g.addColorStop(1, 'hsla(26 90% 50% / 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(cx + sgn * tx - u * 0.35, ty - u * 0.35, u * 0.7, u * 0.7);
+      }
+    }
+    ctx.restore();
   }
 
   /** Per-wing HP bars + RAZED plates. Drawn in a LATE pass, above the units
@@ -1366,14 +1521,19 @@ export class Renderer {
 
       const stats = speciesDef(u.species).stats!;
       const flying = stats.flying;
+      // Terrain context up front: gate tunnels and razed-lane rubble shape
+      // the gait, the draw position and the clipping below.
+      const tunnel = this.tunnelOf(st, d.dx, d.dy);
+      const rubble = tunnel && !tunnel.gateUp && !flying ? tunnel : null;
       // Plodding stride cadence: under one full 4-frame cycle per second,
       // rising only slightly with ground speed — every footfall is a
       // deliberate, weighted step. Frame-to-frame crossfading (below)
-      // keeps the slow cadence smooth instead of strobing.
+      // keeps the slow cadence smooth instead of strobing. Scrambling over
+      // rubble the steps come slower and heavier still.
       const wps = (stats.speed / TICK_MS) * 1000;
       d.runPhase += dt * (
         flying ? (u.species === 'bees' ? 10 : 4.6)
-          : moving ? 2.0 + wps * 3.2
+          : moving ? (2.0 + wps * 3.2) * (rubble ? 0.62 : 1)
             : 0.5
       );
 
@@ -1460,22 +1620,31 @@ export class Renderer {
       const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
 
       // Fortress gate tunnels. ENEMY fortress: its doorway faces the camera,
-      // so a unit in its corridor is hard-clipped to the painted opening —
-      // deep inside it reads small and shadowed, swelling and brightening as
-      // it strides out of the dark gateway. YOUR OWN fortress: the rear-view
-      // painting was just drawn over the field, and a unit under it is only
-      // visible through the rear tunnel mouth it walked into, or where its
-      // body already reaches PAST the front battlement crest — so warriors
-      // genuinely disappear beneath the building and re-emerge on the field.
-      const tunnel = this.tunnelOf(st, d.dx, d.dy);
-      let tunnelK = 1;
+      // so a unit in its corridor is hard-clipped to the painted opening and
+      // falls into torch-lit shadow — never rescaled, the perspective stays
+      // honest. YOUR OWN fortress: the rear-view painting was just drawn
+      // over the field, and a unit under it is only visible through the
+      // rear tunnel mouth it walked into, or where its body already reaches
+      // PAST the front battlement crest — so warriors genuinely disappear
+      // beneath the building and re-emerge on the field.
       let tunnelFade = 1;
       let clipped = false;
+      // A razed lane is an open rubble mound: ground units CLIMB it — an
+      // arcing rise over the debris with a laboured, rocking scramble.
+      const rubbleLift = rubble
+        ? Math.sin(clamp(rubble.depth, 0, 1) * Math.PI) * this.unit * 0.42
+        : 0;
+      let rubblePitch = 0;
+      if (rubble && moving) {
+        // Nose up on the ascent, down past the crest, whichever way the
+        // unit is crossing the mound.
+        const dirDeep = (rubble.owner === 0 ? stepY : -stepY) > 0 ? 1 : -1;
+        rubblePitch = Math.cos(clamp(rubble.depth, 0, 1) * Math.PI) * 0.28 * dirDeep;
+      }
       if (tunnel && tunnel.gateUp) {
         const lay = this.fortLayout(tunnel.owner);
         if (lay && !lay.mine) {
-          tunnelK = 1 - tunnel.depth * 0.34;
-          tunnelFade = 1 - tunnel.depth * 0.58;
+          tunnelFade = 1 - tunnel.depth * 0.34;
           ctx.save();
           ctx.beginPath();
           this.archPath(ctx, lay, tunnel.laneX);
@@ -1520,7 +1689,7 @@ export class Renderer {
       // field and grow toward the near edge, selling the 3/4 camera.
       const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
       const depthScale = 0.9 + depthK * 0.2;
-      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale * tunnelK;
+      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale;
 
       const popT = clamp(d.age / 0.45, 0, 1);
       const pb = popT - 1;
@@ -1546,14 +1715,15 @@ export class Renderer {
       ctx.strokeStyle = `hsla(${ringHue} 90% ${mineUnit ? 62 : 56}% / 0.5)`;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.ellipse(p.x, p.y + this.unit * 0.14, s * 0.75 * pop, s * 0.28 * pop, 0, 0, Math.PI * 2);
+      ctx.ellipse(p.x, p.y + this.unit * 0.14 - rubbleLift, s * 0.75 * pop, s * 0.28 * pop, 0, 0, Math.PI * 2);
       ctx.stroke();
       const stride = moving && !flying ? Math.abs(Math.sin(d.runPhase * Math.PI * 0.5)) : 0;
       // In water the contact shadow gives way to the surface disturbance.
+      // On rubble the whole contact plane rides the debris mound.
       ctx.fillStyle = `rgba(0,0,0,${(flying ? 0.24 : 0.36 + stride * 0.06) * (1 - d.wet * 0.75)})`;
       ctx.beginPath();
       ctx.ellipse(
-        p.x, p.y + this.unit * 0.15,
+        p.x, p.y + this.unit * 0.15 - rubbleLift,
         s * (0.62 + stride * 0.1) * pop, s * (0.22 - stride * 0.02) * pop,
         0, 0, Math.PI * 2,
       );
@@ -1570,7 +1740,11 @@ export class Renderer {
           if (Math.random() < 0.5) this.burst(fx, p.y + this.unit * 0.13, 1, 'ripple', 195, 0.5);
           if (Math.random() < 0.25) this.burst(fx, p.y + this.unit * 0.12, 1, 'bubble', 192, 0.5);
         } else {
-          this.burst(fx, p.y + this.unit * 0.12, 1, 'ash', world === 'basalt' ? 30 : 95, 0.32);
+          this.burst(fx, p.y + this.unit * 0.12 - rubbleLift, 1, 'ash', world === 'basalt' ? 30 : 95, rubble ? 0.55 : 0.32);
+          // Scrambling over debris dislodges extra grit and the odd ember.
+          if (rubble && Math.random() < 0.5) {
+            this.burst(fx + (Math.random() - 0.5) * s * 0.5, p.y + this.unit * 0.1 - rubbleLift, 1, 'spark', 24, 0.4);
+          }
         }
       } else if (isWet && !flying && Math.random() < 0.04) {
         // Even standing still, the pond laps gently around the body.
@@ -1644,7 +1818,7 @@ export class Renderer {
       // Ground units plant their feet at the shadow's centre — the sprite's
       // bottom anchor lands on the contact ellipse, never floating above it.
       const groundDrop = flying ? 0 : this.unit * 0.13;
-      ctx.translate(p.x, p.y + hover - s * 0.55 + groundDrop);
+      ctx.translate(p.x, p.y + hover - s * 0.55 + groundDrop - rubbleLift);
 
       const view: ViewDir = framePair?.view ?? 'side';
 
@@ -1695,7 +1869,10 @@ export class Renderer {
       // Travel lean blends into the attack aim during a strike. The rotation
       // sign flips with the mirror so the nose always pitches the right way.
       // Directional (up/down) art never mirrors — it faces the camera axis.
-      const rot = d.lean * (1 - aimEnv) + aimRot * aimEnv;
+      // Rubble scramble: slope pitch (nose up climbing, down descending)
+      // plus a heavier footfall rock — the gait visibly changes on debris.
+      const rubbleRock = rubble && moving ? Math.sin(d.runPhase * Math.PI) * 0.055 : 0;
+      const rot = d.lean * (1 - aimEnv) + aimRot * aimEnv - rubblePitch + rubbleRock;
       const mirrored = view === 'side' && face !== native;
       if (rot !== 0) ctx.rotate(rot * (mirrored ? -1 : 1));
       if (mirrored) ctx.scale(-1, 1);
@@ -1795,7 +1972,7 @@ export class Renderer {
       if (frac < 0.999 && !clipped) {
         const hpw = s * 1.35;
         const hph = 5;
-        const hy = p.y + hover - s * 1.5;
+        const hy = p.y + hover - s * 1.5 - rubbleLift;
         ctx.globalAlpha = stealthAlpha;
         ctx.fillStyle = 'rgba(6,4,10,0.78)';
         ctx.beginPath();
