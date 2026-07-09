@@ -38,10 +38,16 @@ interface FortGateArt {
   halfW: number;
   apexFrac: number;
   baseFrac: number;
+  /** Top of the rubble mound's SADDLE at the razed lane (fraction of the
+   *  ruin painting's height) — the breach floor units scramble over. */
+  saddleFrac: number;
+  /** Half-width of the breach gap in the ruin painting (fraction of its
+   *  width) — the window through which the world behind shows. */
+  gapHalfFrac: number;
 }
 const FORT_ART: Record<'front' | 'rear', FortGateArt> = {
-  front: { arch: [0.229, 0.780], halfW: 0.058, apexFrac: 0.20, baseFrac: 0.995 },
-  rear: { arch: [0.242, 0.762], halfW: 0.049, apexFrac: 0.31, baseFrac: 0.985 },
+  front: { arch: [0.229, 0.780], halfW: 0.058, apexFrac: 0.20, baseFrac: 0.995, saddleFrac: 0.76, gapHalfFrac: 0.085 },
+  rear: { arch: [0.242, 0.762], halfW: 0.049, apexFrac: 0.31, baseFrac: 0.985, saddleFrac: 0.55, gapHalfFrac: 0.08 },
 };
 
 interface FortLayout {
@@ -283,6 +289,16 @@ export class Renderer {
       case 'spawn': {
         const p = this.worldToScreen(e.x, e.y);
         const stats = speciesDef(e.species).stats!;
+        // A spawn hidden inside the ENEMY's fortress zone (behind their wall,
+        // deep in the causeway smoke) gets no fanfare — rings and mist would
+        // float in the vista sky. Reinforcements materialise silently in the
+        // murk and announce themselves by marching out of it.
+        const hiddenSpawn = e.owner !== this.localSeat
+          && (e.owner === 0 ? e.y > FORT_WALL_FRONT[0] : e.y < FORT_WALL_FRONT[1]);
+        if (hiddenSpawn) {
+          this.burst(p.x, p.y, 2, 'ash', 25, 0.4);
+          break;
+        }
         this.burst(p.x, p.y, 10, 'mist', e.owner === this.localSeat ? 190 : 20, 1.4);
         this.burst(p.x, p.y + this.unit * 0.12, 1, 'shockwave', e.owner === this.localSeat ? 190 : 25, 0.6);
         this.burst(p.x, p.y + this.unit * 0.08, 7, 'ash', 35, 1.0);
@@ -543,12 +559,24 @@ export class Renderer {
       this.drawArena(ctx, st);
       this.drawZones(ctx, st, 'under');
       this.drawObjectives(ctx, st, dt);
+      this.aliveIds.clear();
+      if (st.obelisks.length > 0) {
+        // The enemy stronghold sandwiches a unit pass: backdrop (vista +
+        // razed-lane causeways), then the reinforcements marching that
+        // ground BEHIND the wall, then the wall itself — so a collapsed
+        // gatehouse's rubble mound genuinely occludes the enemies climbing
+        // its far side.
+        const foe = (this.localSeat === 0 ? 1 : 0) as PlayerId;
+        this.drawFortressBackdrop(ctx, st, foe);
+        this.drawUnits(ctx, st, dt, now, 'behind');
+        this.drawFortressWalls(ctx, st, foe);
+      }
       this.drawTelegraphs(ctx, st, now);
       this.drawUnits(ctx, st, dt, now, 'field');
       // YOUR fortress is painted OVER the field units (it is the nearest
       // thing to the camera); units inside it draw after it, clipped to its
       // rear tunnel mouths / the ground beyond its front crest.
-      if (st.obelisks.length > 0) this.drawFortress(ctx, st, this.localSeat);
+      if (st.obelisks.length > 0) this.drawFortressWalls(ctx, st, this.localSeat);
       this.drawUnits(ctx, st, dt, now, 'over');
       this.drawProjectiles(ctx, st, now);
       this.drawZones(ctx, st, 'over');
@@ -808,9 +836,8 @@ export class Renderer {
       if (n <= 0) this.obeliskFlash.delete(k);
       else this.obeliskFlash.set(k, n);
     }
-    // Only the ENEMY stronghold draws under the units; yours (nearest the
-    // camera) is painted over them later in the frame.
-    if (st.obelisks.length > 0) this.drawFortress(ctx, st, this.localSeat === 0 ? 1 : 0);
+    // The strongholds themselves are drawn from frame(): backdrop, the
+    // behind-the-wall unit pass, then each facade in its own depth slot.
 
     // Pond control ring: glows in the leading side's colour, harder as the
     // claim approaches 100%.
@@ -893,6 +920,24 @@ export class Renderer {
     ctx.closePath();
   }
 
+  /** Tunnel depth of the rubble mound's CREST at a razed lane: the world
+   *  position whose (unlifted) feet line lands exactly on the painted
+   *  saddle. Units past this depth are on the mound's far side — occluded
+   *  by the debris pile — and cross onto its camera side as they crest it.
+   *  Derived from the ruin painting's measured saddle line so the sim, the
+   *  art and the draw-order transition all agree to the pixel. */
+  private razedCrestDepth(owner: PlayerId): number {
+    const lay = this.fortLayout(owner);
+    if (!lay) return 0.3;
+    const crestY = lay.topY + lay.h * lay.art.saddleFrac;
+    const fy = (crestY - this.oy) / this.unit;
+    const wy = this.localSeat === 1 ? WORLD_H - fy : fy;
+    const depth = owner === 0
+      ? (wy - FORT_WALL_FRONT[0]) / (FORT_SPAWN_Y[0] - FORT_WALL_FRONT[0])
+      : (FORT_WALL_FRONT[1] - wy) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
+    return clamp(depth, 0.05, 0.9);
+  }
+
   /** If (x, y) lies inside a fortress interior on one of its gate lanes,
    *  return which fortress, the lane, tunnel depth (0 at the field-side wall
    *  line, 1 at the outside end) and whether that lane's gatehouse still
@@ -914,14 +959,33 @@ export class Renderer {
     return { owner, laneX, depth: clamp(depth, 0, 1), gateUp: !!gate && gate.hp > 0 };
   }
 
-  /** One Phase-1 stronghold. The ENEMY fortress (front painting) is drawn
-   *  UNDER the units, so attackers stand against its wall and its tunnellers
-   *  are clipped to the painted openings. YOUR fortress (rear painting, seen
-   *  from behind/above like a CR king tower) is drawn OVER the units — your
-   *  warriors walk in through the rear tunnel mouths, vanish beneath the
-   *  building and re-emerge past the front battlement crest. When a wing's
-   *  bar empties the painting swaps to its collapsed-ruin half. */
-  private drawFortress(ctx: CanvasRenderingContext2D, st: GameState, owner: PlayerId): void {
+  /** Everything the fortress sits IN FRONT of, drawn before any unit: the
+   *  volcanic vista band past the enemy wall and — once a wing is razed —
+   *  the grounded basalt causeway its reinforcements march down, so units
+   *  behind the breach walk real ground instead of floating on sky. Your
+   *  own fortress needs no backdrop (the arena apron is already painted). */
+  private drawFortressBackdrop(ctx: CanvasRenderingContext2D, st: GameState, owner: PlayerId): void {
+    if (owner === this.localSeat) return;
+    const lay = this.fortLayout(owner);
+    if (!lay) return;
+    this.drawBeyondWall(ctx, lay);
+    for (const gate of st.obelisks) {
+      if (gate.owner === owner && gate.hp <= 0) {
+        this.drawCauseway(ctx, lay, FORT_LANES[owner][gate.wing]);
+      }
+    }
+  }
+
+  /** One Phase-1 stronghold's walls. The ENEMY fortress (front painting) is
+   *  drawn UNDER the field units, so attackers stand against its wall and
+   *  its tunnellers are clipped to the painted openings — but OVER the
+   *  'behind' unit pass, so a razed wing's rubble mound genuinely occludes
+   *  the enemies marching up its far side. YOUR fortress (rear painting,
+   *  seen from behind/above like a CR king tower) is drawn OVER the units —
+   *  your warriors walk in through the rear tunnel mouths, vanish beneath
+   *  the building and re-emerge past the front battlement crest. When a
+   *  wing's bar empties the painting swaps to its collapsed-ruin half. */
+  private drawFortressWalls(ctx: CanvasRenderingContext2D, st: GameState, owner: PlayerId): void {
     const u = this.unit;
     const wings = st.obelisks
       .filter((o) => o.owner === owner)
@@ -954,10 +1018,14 @@ export class Renderer {
       ctx.restore();
     };
 
-    // The world continues BEHIND the enemy wall: a volcanic vista fills the
-    // band between the arena's far edge and the battlements, so the map
-    // doesn't end at the fortress.
-    if (!mine) this.drawBeyondWall(ctx, lay);
+    // Ember haze at the far end of each razed lane's causeway, OVER the
+    // units marching it: reinforcements are born out of the smoke and
+    // resolve as they close in — never popping into existence.
+    if (!mine) {
+      for (const gate of wings) {
+        if (gate.hp <= 0) this.drawCausewayHaze(ctx, lay, FORT_LANES[owner][gate.wing]);
+      }
+    }
 
     // Soft contact shadow so the wall sits INTO the ground.
     ctx.save();
@@ -1073,6 +1141,150 @@ export class Renderer {
     // Ember motes drifting up from beyond the wall.
     if (Math.random() < 0.1) {
       this.burst(r.left + Math.random() * r.w, bot - Math.random() * (bot - top) * 0.5, 1, 'mote', 22, 0.55);
+    }
+    ctx.restore();
+  }
+
+  /** Once an enemy gatehouse falls, the void behind its breach becomes REAL
+   *  ground: a scorched basalt causeway receding from the rubble mound into
+   *  the volcanic vista, cracked with ember veins — the road the enemy's
+   *  reinforcements march down. Drawn over the vista, under the units. */
+  private drawCauseway(ctx: CanvasRenderingContext2D, lay: FortLayout, laneX: number): void {
+    const u = this.unit;
+    const r = this.boardRect();
+    const cx = this.worldToScreen(laneX, 0).x;
+    const nearY = lay.topY + lay.h * lay.art.saddleFrac + u * 0.12;
+    // The road ends at the FOOT of the vista's ridge line — never in the
+    // sky. (The vista band spans r.top → lay.topY; the ridges root ~40%
+    // down it, so the causeway vanishes behind their silhouettes.)
+    const vTop = r.top - 3;
+    const vBot = lay.topY + u * 0.4;
+    const farY = Math.min(vTop + (vBot - vTop) * 0.42, nearY - u * 0.6);
+    if (nearY <= farY + 4) return;
+    const nearHalf = u * 0.78;
+    const farHalf = u * 0.24;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(r.left - 3, r.top - 3, r.w + 6, r.h + 6, 12);
+    ctx.clip();
+    // Deck: warm charcoal basalt darkening with distance, its far end
+    // matched to the ridge silhouette tone so road and mountain fuse.
+    ctx.beginPath();
+    ctx.moveTo(cx - nearHalf, nearY);
+    ctx.lineTo(cx - farHalf, farY);
+    ctx.lineTo(cx + farHalf, farY);
+    ctx.lineTo(cx + nearHalf, nearY);
+    ctx.closePath();
+    const deck = ctx.createLinearGradient(0, nearY, 0, farY);
+    deck.addColorStop(0, 'hsl(16 22% 13%)');
+    deck.addColorStop(0.5, 'hsl(12 24% 10%)');
+    deck.addColorStop(0.85, 'hsl(357 28% 8.5%)');
+    deck.addColorStop(1, 'hsl(357 30% 9%)');
+    ctx.fillStyle = deck;
+    ctx.fill();
+    // Kerb edges catching the ember light — fading out with distance so
+    // the road dissolves into the dark rather than ending on a hard line.
+    const kerb = ctx.createLinearGradient(0, nearY, 0, farY);
+    kerb.addColorStop(0, 'hsla(22 40% 26% / 0.5)');
+    kerb.addColorStop(0.65, 'hsla(20 35% 20% / 0.2)');
+    kerb.addColorStop(1, 'hsla(20 30% 15% / 0)');
+    ctx.strokeStyle = kerb;
+    ctx.lineWidth = 1.4;
+    for (const sgn of [-1, 1] as const) {
+      ctx.beginPath();
+      ctx.moveTo(cx + sgn * nearHalf, nearY);
+      ctx.lineTo(cx + sgn * farHalf, farY);
+      ctx.stroke();
+    }
+    // Ember veins cracking the NEAR deck (deterministic — no shimmer),
+    // pulsing faintly like the arena's lava seams. They die out past ~60%
+    // of the road: distance swallows their light.
+    const glow = 0.5 + Math.sin(this.time * 1.6 + laneX * 3.1) * 0.18;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const k0 = 0.06 + i * 0.14;
+      const k1 = k0 + 0.11;
+      const wob = Math.sin(i * 12.9 + laneX * 7.7) * 0.5;
+      const side = Math.sin(i * 3.7 + laneX * 5.1); // lateral drift off-centre
+      const y0 = nearY + (farY - nearY) * k0;
+      const y1 = nearY + (farY - nearY) * k1;
+      const half0 = nearHalf + (farHalf - nearHalf) * k0;
+      const x0 = cx + (wob * 0.45 + side * 0.4) * half0;
+      const x1 = cx + (Math.sin(i * 5.3 + laneX * 3.3) * 0.3 + side * 0.32) * half0;
+      const hue = 16 + ((i * 7 + Math.round(laneX)) % 3) * 5;
+      ctx.strokeStyle = `hsla(${hue} 88% 46% / ${(0.28 - i * 0.055) * glow})`;
+      ctx.lineWidth = 2.1 - i * 0.42;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(
+        (x0 + x1) / 2 + wob * 5 + side * 3,
+        (y0 + y1) / 2 + Math.sin(i * 8.1 + laneX) * u * 0.05,
+        x1, y1,
+      );
+      ctx.stroke();
+    }
+    // Warm underlight where the causeway meets the breach — ties the road
+    // into the smouldering rubble in front of it.
+    const meet = ctx.createRadialGradient(cx, nearY, 1, cx, nearY, u * 1.2);
+    meet.addColorStop(0, `hsla(24 85% 45% / ${0.2 * glow})`);
+    meet.addColorStop(1, 'hsla(24 85% 45% / 0)');
+    ctx.fillStyle = meet;
+    ctx.fillRect(cx - u * 1.2, nearY - u * 0.8, u * 2.4, u * 1.4);
+    ctx.restore();
+  }
+
+  /** Ember haze veiling the FAR end of a razed lane's causeway, drawn OVER
+   *  the units marching it: reinforcements are born inside the smoke and
+   *  resolve into full silhouettes as they approach — never popping in. */
+  private drawCausewayHaze(ctx: CanvasRenderingContext2D, lay: FortLayout, laneX: number): void {
+    const u = this.unit;
+    const r = this.boardRect();
+    const cx = this.worldToScreen(laneX, 0).x;
+    const nearY = lay.topY + lay.h * lay.art.saddleFrac;
+    // Same road-end as drawCauseway: the smoke's dense heart sits where the
+    // causeway vanishes behind the ridge foot — exactly where enemy
+    // reinforcements spawn, so they are BORN inside the smoke.
+    const vTop = r.top - 3;
+    const vBot = lay.topY + u * 0.4;
+    const farY = Math.min(vTop + (vBot - vTop) * 0.42, nearY - u * 0.6);
+    if (nearY <= farY + 4) return;
+    const reach = nearY - farY;
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(r.left - 3, r.top - 3, r.w + 6, r.h + 6, 12);
+    ctx.clip();
+    // A near-opaque smoke wall across the spawn zone (from the vista's top
+    // down past the road's end) — a unit materialising there is a dim shape
+    // inside the murk, not a sprite popping onto open sky.
+    const wallBot = farY + reach * 0.34;
+    const wall = ctx.createLinearGradient(0, vTop, 0, wallBot);
+    wall.addColorStop(0, 'hsla(8 35% 8% / 0.9)');
+    wall.addColorStop(0.55, 'hsla(11 38% 10% / 0.72)');
+    wall.addColorStop(1, 'hsla(12 40% 11% / 0)');
+    ctx.fillStyle = wall;
+    ctx.fillRect(cx - u * 2.6, vTop, u * 5.2, wallBot - vTop);
+    // Layered smoke banks: densest at the horizon, dissolving ~60% of the
+    // way down the causeway. A slow drift keeps them alive without strobing.
+    for (const [band, alpha] of [[0.16, 0.62], [0.34, 0.44], [0.52, 0.26], [0.7, 0.13]] as const) {
+      const bandY = farY + reach * band;
+      const drift = Math.sin(this.time * 0.5 + band * 11 + laneX) * u * 0.16;
+      const g = ctx.createRadialGradient(cx + drift, bandY - reach * band * 0.5, u * 0.2, cx + drift, bandY - reach * band * 0.5, u * 2.1);
+      g.addColorStop(0, `hsla(14 45% 16% / ${alpha})`);
+      g.addColorStop(0.6, `hsla(10 40% 12% / ${alpha * 0.7})`);
+      g.addColorStop(1, 'hsla(8 40% 10% / 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - u * 2.4, vTop, u * 4.8, bandY + u - vTop);
+    }
+    // A hot ember glow deep inside the smoke — the burning heart of the
+    // enemy camp the road leads back to.
+    const pulse = 0.6 + Math.sin(this.time * 1.1 + laneX * 2.2) * 0.2;
+    const core = ctx.createRadialGradient(cx, farY + reach * 0.12, 1, cx, farY + reach * 0.12, u * 1.15);
+    core.addColorStop(0, `hsla(26 95% 50% / ${0.3 * pulse})`);
+    core.addColorStop(1, 'hsla(20 90% 45% / 0)');
+    ctx.fillStyle = core;
+    ctx.fillRect(cx - u * 1.2, farY - u * 0.6, u * 2.4, reach * 0.7);
+    if (Math.random() < 0.06) {
+      this.burst(cx + (Math.random() - 0.5) * u * 1.2, farY + reach * (0.1 + Math.random() * 0.3), 1, 'mote', 24, 0.5);
     }
     ctx.restore();
   }
@@ -1456,19 +1668,40 @@ export class Renderer {
     return { a: cycle[0], b: null, mix: 0, view };
   }
 
-  /** Units draw in two passes. 'field': everything on the open battlefield
-   *  and inside the ENEMY fortress (which is painted under them). 'over':
-   *  units inside YOUR OWN fortress footprint — your rear-view facade has
-   *  just been painted over the field, and these units sit between that
-   *  building and the camera (on the apron) or show through its openings. */
-  private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number, pass: 'field' | 'over'): void {
-    const inOwnFort = (y: number): boolean =>
-      this.localSeat === 0 ? y > FORT_WALL_FRONT[0] : y < FORT_WALL_FRONT[1];
-    if (pass === 'field') this.aliveIds.clear();
+  /** Units draw in three depth passes. 'behind': units past the CREST of a
+   *  razed ENEMY gatehouse's rubble mound — painted before the fortress, so
+   *  the debris pile and standing wall genuinely occlude them as they march
+   *  the causeway and climb the far face. 'field': everything on the open
+   *  battlefield, in standing enemy tunnels (painted under them, clipped to
+   *  the arches) and on the camera-side face of any rubble mound. 'over':
+   *  units inside YOUR OWN fortress footprint on the camera side — your
+   *  rear-view facade has just been painted over the field, and these units
+   *  sit between that building and the camera. */
+  private unitPassOf(st: GameState, dx: number, dy: number): 'behind' | 'field' | 'over' {
+    const tunnel = this.tunnelOf(st, dx, dy);
+    if (tunnel && !tunnel.gateUp) {
+      const lay = this.fortLayout(tunnel.owner);
+      if (lay) {
+        const crest = this.razedCrestDepth(tunnel.owner);
+        // Beyond the crest of an enemy mound: occluded by the debris pile.
+        if (!lay.mine && tunnel.depth > crest) return 'behind';
+        // Past the crest of YOUR OWN mound: descending its far (field-side)
+        // face, hidden behind the pile until it clears the breach.
+        if (lay.mine && tunnel.depth <= crest) return 'field';
+      }
+    }
+    const inOwnFort = this.localSeat === 0 ? dy > FORT_WALL_FRONT[0] : dy < FORT_WALL_FRONT[1];
+    return inOwnFort ? 'over' : 'field';
+  }
+
+  private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number, pass: 'behind' | 'field' | 'over'): void {
     const alive = this.aliveIds;
     const unitById = new Map(st.units.map((u) => [u.id, u]));
     const order = [...st.units]
-      .filter((u) => inOwnFort(this.display.get(u.id)?.dy ?? u.y) === (pass === 'over'))
+      .filter((u) => {
+        const d = this.display.get(u.id);
+        return this.unitPassOf(st, d?.dx ?? u.x, d?.dy ?? u.y) === pass;
+      })
       .sort((a, b) => {
         const da = this.display.get(a.id)?.dy ?? a.y;
         const db = this.display.get(b.id)?.dy ?? b.y;
@@ -1631,17 +1864,30 @@ export class Renderer {
       // beneath the building and re-emerge on the field.
       let tunnelFade = 1;
       let clipped = false;
-      // A razed lane is an open rubble mound: ground units CLIMB it — an
-      // arcing rise over the debris with a laboured, rocking scramble.
-      const rubbleLift = rubble
-        ? Math.sin(clamp(rubble.depth, 0, 1) * Math.PI) * this.unit * 0.42
-        : 0;
+      // A razed lane is an open rubble mound whose crest line comes straight
+      // from the ruin painting's measured saddle. The clamber bump peaks at
+      // the crest crossing (feet ride up onto the top blocks) and settles to
+      // the ground plane on both faces; the nose pitches up on any ascent
+      // and down on any descent.
+      const crest = rubble ? this.razedCrestDepth(rubble.owner) : 0;
+      const nearCrest = rubble ? clamp(1 - Math.abs(rubble.depth - crest) / 0.45, 0, 1) : 0;
+      const rubbleLift = rubble ? nearCrest * nearCrest * this.unit * 0.22 : 0;
       let rubblePitch = 0;
       if (rubble && moving) {
-        // Nose up on the ascent, down past the crest, whichever way the
-        // unit is crossing the mound.
+        const rel = clamp((rubble.depth - crest) / 0.35, -1, 1);
         const dirDeep = (rubble.owner === 0 ? stepY : -stepY) > 0 ? 1 : -1;
-        rubblePitch = Math.cos(clamp(rubble.depth, 0, 1) * Math.PI) * 0.28 * dirDeep;
+        rubblePitch = -rel * 0.3 * dirDeep;
+      }
+      // Real distance: an enemy marching the causeway toward its razed
+      // breach starts small in the ember haze and grows as it closes on the
+      // mound — 1.0 exactly at the crest so the scramble hands over
+      // seamlessly to the field pass.
+      let farShrink = 1;
+      let farFade = 1;
+      if (tunnel && !tunnel.gateUp && !this.fortLayout(tunnel.owner)?.mine) {
+        const beyond = clamp((tunnel.depth - this.razedCrestDepth(tunnel.owner)) / Math.max(0.1, 1 - this.razedCrestDepth(tunnel.owner)), 0, 1);
+        farShrink = 1 - beyond * 0.34;
+        farFade = 1 - beyond * 0.42;
       }
       if (tunnel && tunnel.gateUp) {
         const lay = this.fortLayout(tunnel.owner);
@@ -1666,21 +1912,6 @@ export class Renderer {
               Math.min(p.y - wallY, mouthBase - p.y) / (this.unit * 0.9), 0, 1,
             );
           }
-        }
-      } else if (tunnel && !tunnel.gateUp && !this.fortLayout(tunnel.owner)?.mine) {
-        // A razed ENEMY lane: arrivals march up the far side of the rubble
-        // mound, so they're only visible below its crest — the head rises
-        // first, then the body crests the debris and marches down onto the
-        // field. Without this they'd float against the vista sky.
-        const lay = this.fortLayout(tunnel.owner);
-        if (lay) {
-          const crestY = lay.topY + lay.h * 0.45;
-          const cx = this.worldToScreen(tunnel.laneX, 0).x;
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(cx - lay.width * 0.16, crestY, lay.width * 0.32, 4000);
-          ctx.clip();
-          clipped = true;
         }
       } else if (!clipped && !tunnel && st.obelisks.length > 0) {
         // Crossing an ENEMY gate's threshold onto the field: while any part
@@ -1732,7 +1963,7 @@ export class Renderer {
       // field and grow toward the near edge, selling the 3/4 camera.
       const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
       const depthScale = 0.9 + depthK * 0.2;
-      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale;
+      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale * farShrink;
 
       const popT = clamp(d.age / 0.45, 0, 1);
       const pb = popT - 1;
@@ -1747,7 +1978,7 @@ export class Renderer {
         this.burst(p.x, wl - 2, 4, 'mist', 195, 0.9);
       }
 
-      const stealthAlpha = (u.stealthed ? (u.owner === this.localSeat ? 0.45 : 0.08) : 1) * tunnelFade;
+      const stealthAlpha = (u.stealthed ? (u.owner === this.localSeat ? 0.45 : 0.08) : 1) * tunnelFade * farFade;
       const mineUnit = u.owner === this.localSeat;
       ctx.save();
       ctx.globalAlpha = stealthAlpha;
@@ -1775,7 +2006,10 @@ export class Renderer {
       // The ground answers the stride, which sells actual contact: dry land
       // kicks up dust (grey ash on basalt, green-brown scuff in the oasis);
       // wading throws droplets and drags ripple rings off each step.
-      if (moving && !flying && Math.random() < 0.35) {
+      // Units veiled behind a razed wall (farFade < 1) kick up far less
+      // visible dust: particles render over the smoke banks, so a full dust
+      // trail would paint a bright column across the vista sky.
+      if (moving && !flying && Math.random() < 0.35 * farFade * farFade) {
         const back = (this.localSeat === 1 ? -stepX : stepX) / stepLen;
         const fx = p.x - back * s * 0.4 + (Math.random() - 0.5) * s * 0.3;
         if (isWet) {
@@ -1783,10 +2017,10 @@ export class Renderer {
           if (Math.random() < 0.5) this.burst(fx, p.y + this.unit * 0.13, 1, 'ripple', 195, 0.5);
           if (Math.random() < 0.25) this.burst(fx, p.y + this.unit * 0.12, 1, 'bubble', 192, 0.5);
         } else {
-          this.burst(fx, p.y + this.unit * 0.12 - rubbleLift, 1, 'ash', world === 'basalt' ? 30 : 95, rubble ? 0.55 : 0.32);
+          this.burst(fx, p.y + this.unit * 0.12 - rubbleLift, 1, 'ash', world === 'basalt' ? 30 : 95, (rubble ? 0.55 : 0.32) * farFade);
           // Scrambling over debris dislodges extra grit and the odd ember.
-          if (rubble && Math.random() < 0.5) {
-            this.burst(fx + (Math.random() - 0.5) * s * 0.5, p.y + this.unit * 0.1 - rubbleLift, 1, 'spark', 24, 0.4);
+          if (rubble && Math.random() < 0.5 * farFade) {
+            this.burst(fx + (Math.random() - 0.5) * s * 0.5, p.y + this.unit * 0.1 - rubbleLift, 1, 'spark', 24, 0.4 * farFade);
           }
         }
       } else if (isWet && !flying && Math.random() < 0.04) {
@@ -2008,11 +2242,11 @@ export class Renderer {
         this.burst(p.x, p.y + hover - s * 0.5, 1, 'mote', 48, 0.6);
       }
 
-      // HP bar (only once damaged). Suppressed while the unit is inside a
-      // gate tunnel — nothing may cover the arch openings but the warrior
-      // itself glimpsed in the dark.
+      // HP bar (only once damaged). Suppressed while the unit is anywhere
+      // inside a fortress footprint — nothing may cover the arch openings
+      // or the breach but the warrior itself glimpsed in the dark.
       const frac = clamp(u.hp / u.maxHp, 0, 1);
-      if (frac < 0.999 && !clipped) {
+      if (frac < 0.999 && !clipped && !tunnel) {
         const hpw = s * 1.35;
         const hph = 5;
         const hy = p.y + hover - s * 1.5 - rubbleLift;
