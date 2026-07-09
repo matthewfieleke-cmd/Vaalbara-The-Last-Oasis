@@ -82,6 +82,9 @@ export function GameScreen({
     const driver = new TickDriver(session.seed, session.factions, {
       onTick: ({ state, events }) => {
         renderer.onTick(state, events);
+        // Read-only snapshot for playtest/capture tooling (canvas UI has no
+        // DOM to query, so scripts watch the sim through this hook).
+        (window as unknown as { __vbState?: typeof state }).__vbState = state;
         handleGameEvents(events);
         routeEvents(events, state);
         // Battle density feeds the adaptive score.
