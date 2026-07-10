@@ -124,4 +124,75 @@ for (let i = 0; i < 60 && flyers.y > 11.1; i++) {
 }
 assert(flyers.y <= 11.1, `bees never exited the tunnel (y=${flyers.y})`);
 
+// An attacker tucked INSIDE our standing arch (deeper than the old 18%
+// visibility cutoff) while battering the gate is still visible: the defender
+// turns at the rubble crest and engages instead of marching past it.
+resetIds();
+const tucked = createGame(111, ['oasis', 'magma']);
+tucked.obelisks.find((o) => o.owner === 0 && o.wing === 0)!.hp = 0;
+const lurker = unit(1, 'lion', FORT_LANES[0][1], 12.35); // depth ~0.23 in arch
+lurker.buffs.stun = 999;
+const sentinel = unit(0, 'bighorn', FORT_LANES[0][0], FORT_SPAWN_Y[0]);
+sentinel.waypoint = { x: FORT_LANES[0][0], y: 10.85 };
+tucked.units.push(sentinel, lurker);
+let sawEarly = false;
+let hitLurker = false;
+for (let i = 0; i < 140; i++) {
+  advanceTick(tucked, []);
+  // Once over the crest, the defender must already be heading RIGHT along
+  // the ledge — never deeper than the river line on its way to the arch.
+  if (sentinel.y < FORT_WALL_FRONT[0] + 0.05) {
+    assert(
+      sentinel.y > 10.4,
+      `defender overshot toward mid-field instead of turning at the crest (y=${sentinel.y})`,
+    );
+    if (sentinel.targetId === lurker.id) sawEarly = true;
+  }
+  if (lurker.hp < lurker.maxHp) {
+    hitLurker = true;
+    break;
+  }
+}
+assert(sawEarly, 'defender never targeted the arch-tucked attacker');
+assert(hitLurker, 'defender never engaged the arch-tucked attacker');
+
+// Flying threats a ground warrior cannot hit are NOT its home threat: it
+// marches straight down its own lane instead of standing under the bees.
+resetIds();
+const beeSiege = createGame(122, ['oasis', 'magma']);
+beeSiege.obelisks.find((o) => o.owner === 0 && o.wing === 0)!.hp = 0;
+const hoverBees = unit(1, 'bees', FORT_LANES[0][1], 11.2);
+hoverBees.buffs.stun = 999;
+const groundling = unit(0, 'bighorn', FORT_LANES[0][0], FORT_SPAWN_Y[0]);
+groundling.waypoint = { x: FORT_LANES[0][0], y: 10.85 };
+beeSiege.units.push(groundling, hoverBees);
+for (let i = 0; i < 160 && groundling.y > 8.6; i++) {
+  advanceTick(beeSiege, []);
+  assert(
+    groundling.targetId !== hoverBees.id,
+    `ground warrior locked onto flying bees it cannot hit (tick ${i})`,
+  );
+}
+assert(
+  groundling.y <= 8.6,
+  `ground warrior stalled instead of marching on past the unhittable flyers (y=${groundling.y}, x=${groundling.x})`,
+);
+
+// No attackers at either home gate: the warrior goes STRAIGHT — over the
+// rubble and down its own lane, no detours.
+resetIds();
+const clear = createGame(133, ['oasis', 'magma']);
+clear.obelisks.find((o) => o.owner === 0 && o.wing === 0)!.hp = 0;
+const marcher = unit(0, 'bighorn', FORT_LANES[0][0], FORT_SPAWN_Y[0]);
+marcher.waypoint = { x: FORT_LANES[0][0], y: 10.85 };
+clear.units.push(marcher);
+for (let i = 0; i < 160 && marcher.y > 8.6; i++) {
+  advanceTick(clear, []);
+  assert(
+    Math.abs(marcher.x - FORT_LANES[0][0]) < 0.9,
+    `warrior wandered off its lane with no threats present (x=${marcher.x}, y=${marcher.y})`,
+  );
+}
+assert(marcher.y <= 8.6, `warrior failed to march straight ahead (y=${marcher.y})`);
+
 console.log('seven-fix focused regressions: PASS');

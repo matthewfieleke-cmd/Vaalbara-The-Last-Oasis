@@ -502,8 +502,12 @@ export function isCombatVisible(st: GameState, u: UnitState): boolean {
     : (FORT_WALL_FRONT[1] - u.y) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
   if (!gate) return false;
   // A warrior at a standing arch's field mouth is already visible to nearby
-  // defenders. Deep tunnel occupants remain concealed by the gatehouse.
-  if (gate.hp > 0) return depth <= 0.18;
+  // defenders. Deep tunnel occupants remain concealed by the gatehouse —
+  // but only in their OWN tunnel: an intruder inside an enemy arch can only
+  // be there to batter that gate, and it is plainly visible doing so, so it
+  // stays targetable at any depth. Without this, a freshly deployed defender
+  // marches straight past an arch-tucked attacker chewing on its gatehouse.
+  if (gate.hp > 0) return owner !== u.owner || depth <= 0.18;
   // depth=1 is the rear spawn apron; depth=0 is the field-side lip. A unit
   // becomes fightable only after it has crossed the mound and reached the
   // battlefield edge.
@@ -528,11 +532,13 @@ function visibleEnemies(st: GameState, u: RuntimeUnit): UnitState[] {
 function nearestHomeThreat(
   st: GameState,
   owner: PlayerId,
+  canTarget?: (enemy: UnitState) => boolean,
 ): { enemy: UnitState; gate: ObeliskState; d2: number } | null {
   let best: { enemy: UnitState; gate: ObeliskState; d2: number } | null = null;
   const gates = st.obelisks.filter((o) => o.owner === owner);
   for (const enemy of st.units) {
     if (enemy.hp <= 0 || enemy.owner === owner) continue;
+    if (canTarget && !canTarget(enemy)) continue;
     for (const gate of gates) {
       const d2 = dist2(enemy.x, enemy.y, gate.x, gate.y);
       if (d2 > 2.8 * 2.8 || (best && d2 >= best.d2)) continue;
@@ -558,9 +564,14 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
     }
   }
   // Home-side defenders deal with warriors at either friendly gate before
-  // resuming their central push.
+  // resuming their central push. Threats the unit cannot actually FIGHT are
+  // skipped — a ground warrior handed flying bees as its "home threat" would
+  // walk to the gate and stand under them forever, attacking nothing.
   if (st.phase === 'basalt' && onHomeSide(u)) {
-    const threat = nearestHomeThreat(st, u.owner);
+    const threat = nearestHomeThreat(st, u.owner, (e) => {
+      const es = speciesDef(e.species).stats!;
+      return !(es.flying && !u.stats.canHitAir && !u.stats.flying);
+    });
     if (threat && enemies.some((e) => e.id === threat.enemy.id)) return threat.enemy;
   }
   // Eagle hunts the weakest visible heart. Everyone else hunts the NEAREST
