@@ -73,14 +73,14 @@ const PORTRAIT_META: Record<SpeciesId, PortraitMeta> = {
  *  the renderer mirrors them correctly (the T-Rex used to about-face
  *  mid-chomp). */
 const ANIM_FILES: Record<SpeciesId, {
-  run: string; attack: string; swat?: string; attackFacing?: 1 | -1;
+  run: string; attack: string; duelAttack?: string; swat?: string; attackFacing?: 1 | -1;
   up: string; down: string; ko: string;
 }> = {
   trex: { run: 'trex-run', attack: 'trex-attack', attackFacing: -1, up: 'trex-up', down: 'trex-down', ko: 'trex-ko' },
   lion: { run: 'lion-run', attack: 'lion-attack', up: 'lion-up', down: 'lion-down', ko: 'lion-ko' },
   eagle: { run: 'eagle-run', attack: 'eagle-attack', up: 'eagle-up', down: 'eagle-down', ko: 'eagle-ko' },
   honeybadger: { run: 'honeybadger-run', attack: 'honeybadger-attack', up: 'honeybadger-up', down: 'honeybadger-down', ko: 'honeybadger-ko' },
-  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', up: 'scorpion-up', down: 'scorpion-down', ko: 'scorpion-ko' },
+  scorpion: { run: 'scorpion-run', attack: 'scorpion-attack', duelAttack: 'scorpion-duel-attack', up: 'scorpion-up', down: 'scorpion-down', ko: 'scorpion-ko' },
   fireants: { run: 'fireants-run', attack: 'fireants-attack', up: 'fireants-up', down: 'fireants-down', ko: 'fireants-ko' },
   bear: { run: 'bear-run', attack: 'bear-attack', swat: 'bear-swat', up: 'bear-up', down: 'bear-down', ko: 'bear-ko' },
   bighorn: { run: 'bighorn-run', attack: 'bighorn-attack', up: 'bighorn-up', down: 'bighorn-down', ko: 'bighorn-ko' },
@@ -407,6 +407,74 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
   return cv;
 }
 
+/** Extra halo / pocket cleanup on intro parade frames. */
+function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
+  if (species !== 'wolves' && species !== 'bighorn') return;
+  const cx = cv.getContext('2d', { willReadFrequently: true })!;
+  const { width: w, height: h } = cv;
+  const data = cx.getImageData(0, 0, w, h);
+  const px = data.data;
+  const paper = (i4: number): boolean => {
+    const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
+    const mn = Math.min(px[i4], px[i4 + 1], px[i4 + 2]);
+    return mx > 162 && mx - mn < 52;
+  };
+  const passes = species === 'wolves' ? 7 : 5;
+  for (let pass = 0; pass < passes; pass++) {
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const i4 = i * 4;
+        if (px[i4 + 3] === 0) continue;
+        const adjHole =
+          px[(i - 1) * 4 + 3] === 0 || px[(i + 1) * 4 + 3] === 0
+          || px[(i - w) * 4 + 3] === 0 || px[(i + w) * 4 + 3] === 0;
+        if (adjHole && paper(i4)) px[i4 + 3] = 0;
+      }
+    }
+  }
+  if (species === 'bighorn') {
+    const y0 = Math.floor(h * 0.04);
+    const y1 = Math.floor(h * 0.42);
+    for (let y = y0; y < y1; y++) {
+      for (let x = 0; x < w; x++) {
+        const i4 = (y * w + x) * 4;
+        if (!paper(i4) || px[i4 + 3] === 0) continue;
+        let ink = 0;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          const ni = (ny * w + nx) * 4;
+          if (!paper(ni) && px[ni + 3] > 20) ink++;
+        }
+        if (ink >= 3) px[i4 + 3] = 0;
+      }
+    }
+  }
+  if (species === 'wolves') {
+    // Leg-gap pockets: white paper between haunches reads as a flash on cycle.
+    const y0 = Math.floor(h * 0.48);
+    const y1 = Math.floor(h * 0.88);
+    for (let y = y0; y < y1; y++) {
+      for (let x = Math.floor(w * 0.18); x < Math.floor(w * 0.82); x++) {
+        const i4 = (y * w + x) * 4;
+        if (!paper(i4) || px[i4 + 3] === 0) continue;
+        let ink = 0;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          const ni = (ny * w + nx) * 4;
+          if (!paper(ni) && px[ni + 3] > 20) ink++;
+        }
+        if (ink >= 2) px[i4 + 3] = 0;
+      }
+    }
+  }
+  cx.putImageData(data, 0, 0);
+}
+
 function contentBounds(cv: HTMLCanvasElement): { minX: number; minY: number; maxX: number; maxY: number } | null {
   const cx = cv.getContext('2d', { willReadFrequently: true })!;
   const { width: w, height: h } = cv;
@@ -696,7 +764,7 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
       ...species.map(async (sp) => {
         const files = ANIM_FILES[sp];
         try {
-          const [runImg, atkImg, swatImg, upImg, downImg, koImg, introImg] = await Promise.all([
+          const [runImg, atkImg, swatImg, upImg, downImg, koImg, introImg, duelAtkImg] = await Promise.all([
             loadImage(`${baseUrl}anim/${files.run}.webp`),
             loadImage(`${baseUrl}anim/${files.attack}.webp`),
             files.swat ? loadImage(`${baseUrl}anim/${files.swat}.webp`) : Promise.resolve(null),
@@ -704,6 +772,9 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
             loadImage(`${baseUrl}anim/${files.down}.webp`).catch(() => null),
             loadImage(`${baseUrl}anim/${files.ko}.webp`).catch(() => null),
             loadImage(`${baseUrl}anim/${files.run.split('-')[0]}-intro.webp`).catch(() => null),
+            files.duelAttack
+              ? loadImage(`${baseUrl}anim/${files.duelAttack}.webp`).catch(() => null)
+              : Promise.resolve(null),
           ]);
           // The run set defines the species' reference scale; attack/swat
           // sets are area-matched against it so the animal never changes
@@ -713,10 +784,13 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           const runArea = meanContentArea(runFrames);
           const crossH = (frames: HTMLCanvasElement[]): number =>
             runH * Math.sqrt(meanContentArea(frames) / runArea);
-          const atkFrames = splitStrip(atkImg, 3);
+          const atkSource = duelAtkImg ?? atkImg;
+          const atkCount = duelAtkImg ? 6 : 3;
+          const atkFrames = splitStrip(atkSource, atkCount);
+          const atkFacing: 1 | -1 = duelAtkImg ? 1 : (files.attackFacing ?? 1);
           const set: AnimSet = {
             run: toFrameSprites(runFrames),
-            attack: toFrameSprites(atkFrames, 0.03, crossH(atkFrames), files.attackFacing ?? 1),
+            attack: toFrameSprites(atkFrames, 0.03, crossH(atkFrames), atkFacing),
           };
           if (swatImg) {
             const swatFrames = splitStrip(swatImg, 3);
@@ -735,9 +809,8 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
             // Intro frames are only ever shown alone (the cinematic), so
             // they normalise against their own tallest frame.
             set.intro = toFrameSprites(introFrames);
+            for (const s of set.intro) polishIntroFrame(s.canvas, sp);
             if (sp === 'scorpion') {
-              const tailStrike = [introFrames[3], introFrames[4], introFrames[5], introFrames[6]];
-              set.attack = toFrameSprites(tailStrike, 0.03, crossH(tailStrike), -1);
               for (const s of set.intro) {
                 const b = contentBounds(s.canvas);
                 if (b) s.anchorX = (b.minX + b.maxX) / 2;

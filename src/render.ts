@@ -937,6 +937,30 @@ export class Renderer {
     return clamp(depth, 0.05, 0.9);
   }
 
+  /** Screen-space causeway deck sample — matches drawCauseway geometry. */
+  private causewayAt(lay: FortLayout, laneX: number, depth: number): { x: number; y: number } {
+    const u = this.unit;
+    const cx = this.worldToScreen(laneX, 0).x;
+    const nearY = lay.topY + lay.h * lay.art.saddleFrac + u * 0.12;
+    const r = this.boardRect();
+    const vTop = r.top - 3;
+    const vBot = lay.topY + u * 0.4;
+    const farY = Math.min(vTop + (vBot - vTop) * 0.42, nearY - u * 0.6);
+    const d = clamp(depth, 0, 1);
+    return { x: cx, y: nearY + (farY - nearY) * d };
+  }
+
+  /** Depth-based scale on a razed lane: 40% at spawn → 100% at the wall,
+   *  stepped 40-50-60-70-80-90-100 with smooth ramps between each band. */
+  private causewayPerspectiveScale(depth: number, ownExitNoShrink: boolean): number {
+    if (ownExitNoShrink) return 1;
+    const d = clamp(depth, 0, 1) * 6;
+    const step = Math.min(5, Math.floor(d));
+    const t = d - step;
+    const scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+    return lerp(scales[step], scales[step + 1], t * t * (3 - 2 * t));
+  }
+
   /** If (x, y) lies inside a fortress interior on one of its gate lanes,
    *  return which fortress, the lane, tunnel depth (0 at the field-side wall
    *  line, 1 at the outside end) and whether that lane's gatehouse still
@@ -1737,7 +1761,8 @@ export class Renderer {
       // Terrain context up front: gate tunnels and razed-lane rubble shape
       // the gait, the draw position and the clipping below.
       const tunnel = this.tunnelOf(st, d.dx, d.dy);
-      const rubble = tunnel && !tunnel.gateUp && !flying ? tunnel : null;
+      const razedLane = tunnel && !tunnel.gateUp ? tunnel : null;
+      const rubble = razedLane && !flying ? razedLane : null;
       // Plodding stride cadence: under one full 4-frame cycle per second,
       // rising only slightly with ground speed — every footfall is a
       // deliberate, weighted step. Frame-to-frame crossfading (below)
@@ -1829,8 +1854,10 @@ export class Renderer {
       }
       d.lean += (leanTarget - d.lean) * clamp(dt * 6, 0, 1);
 
-      const p = this.worldToScreen(d.dx, d.dy);
-      const hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
+      let p = this.worldToScreen(d.dx, d.dy);
+      let hover = flying ? -this.unit * 0.55 - Math.sin(this.time * 2.2 + u.id) * 3 : 0;
+      let causewayScale = 1;
+      let causewayHoverMul = 1;
 
       // Fortress gate tunnels. ENEMY fortress: its doorway faces the camera,
       // so a unit in its corridor is hard-clipped to the painted opening and
@@ -1847,33 +1874,55 @@ export class Renderer {
       // the crest crossing (feet ride up onto the top blocks) and settles to
       // the ground plane on both faces; the nose pitches up on any ascent
       // and down on any descent.
-      const crest = rubble ? this.razedCrestDepth(rubble.owner) : 0;
+      const crest = rubble ? this.razedCrestDepth(rubble.owner) : razedLane ? this.razedCrestDepth(razedLane.owner) : 0;
       const nearCrest = rubble ? clamp(1 - Math.abs(rubble.depth - crest) / 0.5, 0, 1) : 0;
-      const rubbleDepthScale = rubble ? 0.68 + rubble.depth * 0.38 : 1;
-      const rubbleLift = rubble
-        ? (nearCrest * nearCrest * this.unit * 0.34 + rubble.depth * this.unit * 0.08)
-        : 0;
+      let rubbleLift = 0;
       let rubblePitch = 0;
-      if (rubble && moving) {
-        const rel = clamp((rubble.depth - crest) / 0.35, -1, 1);
-        const dirDeep = (rubble.owner === 0 ? stepY : -stepY) > 0 ? 1 : -1;
-        rubblePitch = -rel * 0.3 * dirDeep;
+      if (rubble) {
+        rubbleLift = nearCrest * nearCrest * this.unit * 0.28;
+        if (moving) {
+          const rel = clamp((rubble.depth - crest) / 0.35, -1, 1);
+          const dirDeep = (rubble.owner === 0 ? stepY : -stepY) > 0 ? 1 : -1;
+          rubblePitch = -rel * 0.3 * dirDeep;
+        }
       }
-      // Real distance: an enemy marching the causeway toward its razed
-      // breach starts small in the ember haze and grows as it closes on the
-      // mound — 1.0 exactly at the crest so the scramble hands over
-      // seamlessly to the field pass.
-      let farShrink = 1;
+
+      // Razed lane: ride the painted causeway with depth perspective.
+      if (razedLane) {
+        const lay = this.fortLayout(razedLane.owner);
+        if (lay) {
+          const road = this.causewayAt(lay, razedLane.laneX, razedLane.depth);
+          const ownExit = razedLane.owner === this.localSeat && u.owner === this.localSeat;
+          causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit);
+          causewayHoverMul = flying ? 0.42 : 1;
+          const snap = clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
+          const snapEase = snap * snap * (3 - 2 * snap);
+          p = {
+            x: lerp(p.x, road.x, snapEase),
+            y: lerp(p.y, road.y, snapEase),
+          };
+        }
+      }
+
       let farFade = 1;
-      if (tunnel && !tunnel.gateUp && !this.fortLayout(tunnel.owner)?.mine) {
-        const beyond = clamp((tunnel.depth - this.razedCrestDepth(tunnel.owner)) / Math.max(0.1, 1 - this.razedCrestDepth(tunnel.owner)), 0, 1);
-        farShrink = 1 - beyond * 0.34;
-        farFade = 1 - beyond * 0.42;
+      if (razedLane && razedLane.depth > 0.72) {
+        farFade = 0.72 + (1 - razedLane.depth) * 0.36;
       }
       if (tunnel && tunnel.gateUp) {
         const lay = this.fortLayout(tunnel.owner);
         if (lay && !lay.mine) {
           tunnelFade = 1 - tunnel.depth * 0.34;
+          if (flying) {
+            const apex = lay.topY + lay.h * lay.art.apexFrac;
+            const base = lay.topY + lay.h * lay.art.baseFrac;
+            const archH = Math.max(8, base - apex);
+            const maxRise = archH * 0.32;
+            hover = -Math.min(maxRise, this.unit * 0.42) - Math.sin(this.time * 2.2 + u.id) * 2;
+            causewayScale = this.causewayPerspectiveScale(tunnel.depth, false);
+            causewayHoverMul = 0.4;
+            const roadX = this.worldToScreen(tunnel.laneX, 0).x;
+            p = { x: lerp(p.x, roadX, clamp(tunnel.depth * 1.4, 0, 1)), y: p.y };
+          }
           ctx.save();
           ctx.beginPath();
           this.archPath(ctx, lay, tunnel.laneX);
@@ -1881,6 +1930,16 @@ export class Renderer {
           clipped = true;
         } else if (lay && lay.mine) {
           const mouthBase = lay.topY + lay.h * lay.art.baseFrac;
+          if (flying) {
+            const apex = lay.topY + lay.h * lay.art.apexFrac;
+            const base = lay.topY + lay.h * lay.art.baseFrac;
+            const archH = Math.max(8, base - apex);
+            const maxRise = archH * 0.32;
+            hover = -Math.min(maxRise, this.unit * 0.42) - Math.sin(this.time * 2.2 + u.id) * 2;
+            causewayHoverMul = 0.4;
+            const roadX = this.worldToScreen(tunnel.laneX, 0).x;
+            p = { x: lerp(p.x, roadX, clamp(tunnel.depth * 1.4, 0, 1)), y: p.y };
+          }
           if (p.y <= mouthBase + this.unit * 0.05) {
             ctx.save();
             ctx.beginPath();
@@ -1943,8 +2002,9 @@ export class Renderer {
       // Clash-style depth: actors shrink slightly toward the far end of the
       // field and grow toward the near edge, selling the 3/4 camera.
       const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
-      const depthScale = (0.9 + depthK * 0.2) * rubbleDepthScale;
-      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale * farShrink;
+      const depthScale = (0.9 + depthK * 0.2) * causewayScale;
+      const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale;
+      const flyHover = flying ? hover * causewayHoverMul : 0;
 
       const popT = clamp(d.age / 0.45, 0, 1);
       const pb = popT - 1;
@@ -2076,7 +2136,7 @@ export class Renderer {
       // Ground units plant their feet at the shadow's centre — the sprite's
       // bottom anchor lands on the contact ellipse, never floating above it.
       const groundDrop = flying ? 0 : this.unit * 0.13;
-      ctx.translate(p.x, p.y + hover - s * 0.55 + groundDrop - rubbleLift);
+      ctx.translate(p.x, p.y + flyHover - s * 0.55 + groundDrop - rubbleLift);
 
       const view: ViewDir = framePair?.view ?? 'side';
 
@@ -2205,14 +2265,14 @@ export class Renderer {
 
       // Status FX.
       if (u.buffs.burnStacks > 0 && Math.random() < 0.3) {
-        this.burst(p.x, p.y + hover - s * 0.4, 1, 'spark', 22, 0.5);
+        this.burst(p.x, p.y + flyHover - s * 0.4, 1, 'spark', 22, 0.5);
       }
       if (u.buffs.stun > 0) {
         ctx.fillStyle = 'hsl(55 100% 70%)';
         for (let i = 0; i < 3; i++) {
           const a = this.time * 4 + (i * Math.PI * 2) / 3;
           ctx.beginPath();
-          ctx.arc(p.x + Math.cos(a) * s * 0.5, p.y + hover - s * 0.9 + Math.sin(a) * 3, 1.8, 0, Math.PI * 2);
+          ctx.arc(p.x + Math.cos(a) * s * 0.5, p.y + flyHover - s * 0.9 + Math.sin(a) * 3, 1.8, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -2220,7 +2280,7 @@ export class Renderer {
         this.burst(p.x, p.y - s * 0.3, 1, 'spark', 0, 0.6);
       }
       if (u.buffs.blessed && Math.random() < 0.05) {
-        this.burst(p.x, p.y + hover - s * 0.5, 1, 'mote', 48, 0.6);
+        this.burst(p.x, p.y + flyHover - s * 0.5, 1, 'mote', 48, 0.6);
       }
 
       // HP bar (only once damaged). Suppressed while the unit is anywhere
@@ -2230,7 +2290,7 @@ export class Renderer {
       if (frac < 0.999 && !clipped && !tunnel) {
         const hpw = s * 1.35;
         const hph = 5;
-        const hy = p.y + hover - s * 1.5 - rubbleLift;
+        const hy = p.y + flyHover - s * 1.5 - rubbleLift;
         ctx.globalAlpha = stealthAlpha;
         ctx.fillStyle = 'rgba(6,4,10,0.78)';
         ctx.beginPath();

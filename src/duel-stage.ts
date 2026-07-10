@@ -675,10 +675,12 @@ export class DuelStage {
       case 'clash': {
         // Timeline offsets: special moves get a slow-motion charge-up
         // prologue — the whole stage bends around the gathering power.
-        const pre = ev.special ? 1.05 : 0;
         const scorpionTail = A.species === 'scorpion';
-        const wEnd = pre + (scorpionTail ? 0.44 : 0.32);
-        const dEnd = wEnd + (scorpionTail ? 0.30 : 0.26);
+        const pre = ev.special ? (scorpionTail ? 1.35 : 1.05) : 0;
+        const wEnd = pre + (scorpionTail ? 0.50 : 0.32);
+        const strikeDur = scorpionTail ? 0.80 : 0.26;
+        const contactAt = scorpionTail ? wEnd + strikeDur * (4 / 5) : wEnd + strikeDur;
+        const dEnd = scorpionTail ? contactAt + 0.22 : wEnd + 0.26;
         if (ev.special) {
           this.fire(step, 'announce', 0, () => {
             this.banner = {
@@ -781,31 +783,33 @@ export class DuelStage {
           }
           A.aura = Math.max(0, A.aura - 0.03);
         } else if (t < dEnd) {
-          // Dash across the arena (specials streak with afterimages).
           if (scorpionTail) {
             A.mode = 'attack';
             A.animT = t - wEnd;
-            A.x = A.face * easeIn(ph(t, wEnd, dEnd)) * this.W * 0.08;
+            A.x = 0;
+            this.fire(step, 'impact', contactAt, () => this.clashImpact(step, A, D));
           } else {
+            // Dash across the arena (specials streak with afterimages).
             A.mode = 'dash';
             const k = easeIn(ph(t, wEnd, dEnd));
             A.x = A.face * (k * (gap - this.W * 0.13) - this.W * 0.05 * (1 - k));
             A.squash = 0;
             A.runPhase += 0.6;
           }
-          if (ev.special) {
+          if (ev.special && !scorpionTail) {
             this.zoomTarget = 1.08;
             this.zoomCX = 0.5;
           }
-          if (Math.random() < 0.7) this.dust(this.fighterPx(A).x, this.groundY());
+          if (!scorpionTail && Math.random() < 0.7) this.dust(this.fighterPx(A).x, this.groundY());
         } else {
-          // Impact and recovery.
-          this.fire(step, 'impact', dEnd, () => this.clashImpact(step, A, D));
+          if (!scorpionTail) {
+            this.fire(step, 'impact', dEnd, () => this.clashImpact(step, A, D));
+          }
           const k = easeOut(ph(t, dEnd + 0.18, step.dur));
-          A.x = A.face * (gap - this.W * 0.13) * (1 - k);
+          A.x = scorpionTail ? 0 : A.face * (gap - this.W * 0.13) * (1 - k);
           if (t > dEnd + 0.18) {
-            A.mode = 'dash';
-            A.runPhase += 0.35;
+            A.mode = scorpionTail ? 'idle' : 'dash';
+            if (!scorpionTail) A.runPhase += 0.35;
           }
           if (!ev.evaded) {
             // Defender knockback skid away from the attacker, then settle.
@@ -1272,12 +1276,12 @@ export class DuelStage {
         const n = anim.run.length;
         return { a: anim.run[Math.floor(f.runPhase) % n], b: null, mix: 0 };
       }
-      const atkDur = f.species === 'scorpion' ? 0.68 : 0.5;
+      const atkDur = f.species === 'scorpion' ? 0.80 : 0.5;
       const at = clamp01(f.animT / atkDur);
       const nAtk = anim.attack.length;
       if (f.species === 'scorpion') {
-        const idx = at < 0.22 ? 0 : at < 0.48 ? 1 : at < 0.72 ? 2 : Math.min(3, nAtk - 1);
-        return { a: anim.attack[Math.min(idx, nAtk - 1)], b: null, mix: 0 };
+        const idx = Math.min(nAtk - 1, Math.floor(at * nAtk * 0.98 + 0.001));
+        return { a: anim.attack[idx], b: null, mix: 0 };
       }
       const idx = at < 0.35 ? 0 : at < 0.7 ? 1 : 2;
       return { a: anim.attack[Math.min(idx, nAtk - 1)], b: null, mix: 0 };

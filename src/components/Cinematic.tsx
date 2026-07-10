@@ -40,12 +40,13 @@ const HERO_SCALE: Partial<Record<SpeciesId, number>> = {
   beetles: 0.86,
 };
 
-/** Per-species intro width cap — keeps long tails/snouts inside the frame. */
+/** Per-species intro width cap — keeps busy frames inside the frame. */
 const INTRO_WIDTH_FRAC: Partial<Record<SpeciesId, number>> = {
-  trex: 0.66,
   lion: 0.70,
   bear: 0.68,
 };
+/** T-Rex uses per-frame width (up to 90% of screen) — never clip snout/tail. */
+const INTRO_WIDTH_MAX = 0.90;
 
 function heroBeats(at: number, world: 'basalt' | 'oasis', heroes: Beat['hero'][]): Beat[] {
   return heroes.map((hero, i) => ({ at: at + i * HERO_TIME, hero, world }));
@@ -214,7 +215,8 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
       // The animated hero: run-cycle frames striding in place, fading in and
       // out on the exact same envelope as its DOM title card.
       if (t >= 0 && active.hero) {
-        const anim = getAnim(active.hero.species);
+        const hero = active.hero;
+        const anim = getAnim(hero.species);
         const beatT = t - active.at;
         const beatDur = (activeIdx + 1 < BEATS.length ? BEATS[activeIdx + 1].at : TOTAL) - active.at;
         const heroAlpha = Math.max(0, Math.min(
@@ -229,8 +231,8 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.globalAlpha = heroAlpha;
         // Ground glow.
         const glow = ctx.createRadialGradient(cx, cy + H * 0.07, 4, cx, cy + H * 0.07, W * 0.34);
-        glow.addColorStop(0, `hsla(${active.hero.hue} 85% 55% / 0.4)`);
-        glow.addColorStop(1, `hsla(${active.hero.hue} 85% 50% / 0)`);
+        glow.addColorStop(0, `hsla(${hero.hue} 85% 55% / 0.4)`);
+        glow.addColorStop(1, `hsla(${hero.hue} 85% 50% / 0)`);
         ctx.fillStyle = glow;
         ctx.fillRect(0, cy - H * 0.1, W, H * 0.3);
         if (anim) {
@@ -239,13 +241,13 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           // motion step, which is what reads as film-smooth.
           const frames = anim.intro && anim.intro.length >= 6 ? anim.intro : anim.run;
           const n = frames.length;
-          const flying = active.hero.species === 'eagle' || active.hero.species === 'bees';
+          const flying = hero.species === 'eagle' || hero.species === 'bees';
           const cps = flying ? 0.8 : 0.62; // full gait cycles per second
           const phase = beatT * cps * n;
           const i0 = Math.floor(phase) % n;
           const frac = phase - Math.floor(phase);
           const mix = frac * frac * (3 - 2 * frac);
-          const targetH = H * 0.3 * (HERO_SCALE[active.hero.species] ?? 1);
+          const targetH = H * 0.3 * (HERO_SCALE[hero.species] ?? 1);
           // No glow on the hero: a canvas shadow re-renders for BOTH
           // crossfade layers, so its intensity pumps with the blend and
           // reads as flicker around the silhouette.
@@ -258,20 +260,20 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           // ONE scale for the whole cycle. Per-frame width clamps made the
           // hero visibly bump each time the crop width changed; instead
           // clamp against the widest frame of the set so scale never moves.
-          const maxW = Math.max(...frames.map((f) => f.w));
-          const widthFrac = INTRO_WIDTH_FRAC[active.hero.species] ?? 0.78;
-          const scale = Math.min(targetH / frames[0].h, (W * widthFrac) / maxW);
+          const widthFrac = INTRO_WIDTH_FRAC[hero.species] ?? 0.78;
           // Walkers anchor at their feet on the ground line; flyers anchor
           // at their stabilised point (head/centre) hovering above it.
           const anchorLineY = flying && frames === anim.intro ? cy - H * 0.03 : cy + H * 0.07;
           const drawHero = (f: typeof frames[number], alpha: number) => {
+            const capW = hero.species === 'trex' ? W * INTRO_WIDTH_MAX : W * widthFrac;
+            const frameScale = Math.min(targetH / f.h, capW / f.w);
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
-              cx - f.anchorX * scale,
-              anchorLineY - f.anchorY * scale + bob,
-              f.canvas.width * scale,
-              f.canvas.height * scale,
+              cx - f.anchorX * frameScale,
+              anchorLineY - f.anchorY * frameScale + bob,
+              f.canvas.width * frameScale,
+              f.canvas.height * frameScale,
             );
           };
           // Duels-style non-dipping crossfade: base frame fully opaque, next
@@ -280,7 +282,7 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           if (mix > 0.02) drawHero(frames[(i0 + 1) % n], mix);
         } else {
           ctx.translate(cx, cy);
-          drawSpecies(ctx, active.hero.species, W * 0.16, t);
+          drawSpecies(ctx, hero.species, W * 0.16, t);
         }
         ctx.restore();
       }
