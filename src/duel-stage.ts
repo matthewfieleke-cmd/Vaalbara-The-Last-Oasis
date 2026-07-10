@@ -1290,15 +1290,24 @@ export class DuelStage {
       const n = parade.length;
       const i = Math.floor(f.runPhase * 0.5) % n;
       const frac = (f.runPhase * 0.5) - Math.floor(f.runPhase * 0.5);
-      const mix = frac * frac * (3 - 2 * frac);
-      return { a: parade[i], b: parade[(i + 1) % n], mix };
+      // Narrow blend — full-cycle crossfade read as two scorpions.
+      const blendStart = 0.88;
+      const mix = frac < blendStart ? 0 : (() => {
+        const u = (frac - blendStart) / (1 - blendStart);
+        return u * u * (3 - 2 * u);
+      })();
+      return { a: parade[i], b: mix > 0.02 ? parade[(i + 1) % n] : null, mix };
     }
     if (parade && f.mode === 'dash') {
       const n = parade.length;
       const i = Math.floor(f.runPhase) % n;
       const frac = f.runPhase - Math.floor(f.runPhase);
-      const mix = frac * frac * (3 - 2 * frac);
-      return { a: parade[i], b: parade[(i + 1) % n], mix };
+      const blendStart = 0.88;
+      const mix = frac < blendStart ? 0 : (() => {
+        const u = (frac - blendStart) / (1 - blendStart);
+        return u * u * (3 - 2 * u);
+      })();
+      return { a: parade[i], b: mix > 0.02 ? parade[(i + 1) % n] : null, mix };
     }
     if (f.mode === 'dash' || FLYERS.has(f.species)) {
       if (FLYERS.has(f.species) && f.mode !== 'dash') f.runPhase += 0.12;

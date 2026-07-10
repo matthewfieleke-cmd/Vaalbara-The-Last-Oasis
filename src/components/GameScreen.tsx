@@ -10,6 +10,7 @@ import { Renderer } from '../render';
 import { handleGameEvents, music, playUi } from '../audio';
 import type { MatchSession } from '../net';
 import { SpriteArt } from './SpriteArt';
+import { getDuelArt, loadSprites } from '../sprites';
 
 interface Banner {
   id: number;
@@ -503,7 +504,8 @@ export function GameScreen({
   );
 }
 
-/** Procedural art for the Lava Rain spell card — volcanic desolation, brutal. */
+/** Lava Rain card art — cropped from the Basalt Fields duel backdrop with
+ *  living lava cascade motion (same aesthetic as Duels, not cartoon abstract). */
 function LavaRainArt({ hue }: { hue: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -512,8 +514,36 @@ function LavaRainArt({ hue }: { hue: number }) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     let raf = 0;
+    let disposed = false;
     const start = performance.now();
+    let flowStrip: HTMLCanvasElement | null = null;
+
+    const buildFlow = (art: HTMLImageElement) => {
+      // Hot lava band from the duel painting (lower-mid cascades / pool).
+      const sx = Math.floor(art.naturalWidth * 0.28);
+      const sy = Math.floor(art.naturalHeight * 0.42);
+      const sw = Math.floor(art.naturalWidth * 0.44);
+      const sh = Math.floor(art.naturalHeight * 0.38);
+      const cv = document.createElement('canvas');
+      cv.width = sw;
+      cv.height = sh;
+      const c = cv.getContext('2d', { willReadFrequently: true });
+      if (!c) return null;
+      c.drawImage(art, sx, sy, sw, sh, 0, 0, sw, sh);
+      const px = c.getImageData(0, 0, sw, sh);
+      const d = px.data;
+      for (let i = 0; i < sw * sh; i++) {
+        const r = d[i * 4];
+        const b = d[i * 4 + 2];
+        const hot = Math.max(0, Math.min(1, (r - b - 30) / 90)) * Math.max(0, Math.min(1, (r - 120) / 80));
+        d[i * 4 + 3] = Math.round(d[i * 4 + 3] * hot);
+      }
+      c.putImageData(px, 0, 0);
+      return cv;
+    };
+
     const frame = () => {
+      if (disposed) return;
       const t = (performance.now() - start) / 1000;
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -523,95 +553,85 @@ function LavaRainArt({ hue }: { hue: number }) {
         canvas.width = W;
         canvas.height = H;
       }
-      // Ash-choked sky — near-black, no soft gradients.
-      const sky = ctx.createLinearGradient(0, 0, 0, H);
-      sky.addColorStop(0, `hsl(${hue - 12} 18% 4%)`);
-      sky.addColorStop(0.55, `hsl(${hue - 6} 28% 7%)`);
-      sky.addColorStop(1, `hsl(${hue} 35% 3%)`);
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, W, H);
-      // Scorched basalt floor — jagged horizon, not a circle.
-      ctx.fillStyle = `hsl(${hue - 18} 22% 8%)`;
-      ctx.beginPath();
-      ctx.moveTo(0, H * 0.72);
-      for (let x = 0; x <= W; x += W / 8) {
-        const jag = Math.sin(x * 0.04 + t * 0.3) * H * 0.012 + Math.sin(x * 0.11) * H * 0.006;
-        ctx.lineTo(x, H * 0.68 + jag);
-      }
-      ctx.lineTo(W, H);
-      ctx.lineTo(0, H);
-      ctx.closePath();
-      ctx.fill();
-      // Distant caldera glare — thin, harsh, not a soft orb.
-      const pulse = 0.45 + Math.sin(t * 1.8) * 0.18;
-      ctx.fillStyle = `hsla(${hue + 8} 90% 42% / ${0.22 * pulse})`;
-      ctx.fillRect(0, H * 0.62, W, H * 0.04);
-      // Lava veins crawling across the ground.
-      for (let v = 0; v < 4; v++) {
-        const vy = H * (0.74 + v * 0.05);
-        ctx.strokeStyle = `hsla(${hue + 14} 95% 48% / ${0.35 + pulse * 0.2})`;
-        ctx.lineWidth = Math.max(1, W * 0.008);
-        ctx.beginPath();
-        let px = 0;
-        ctx.moveTo(0, vy);
-        while (px < W) {
-          px += W * (0.06 + (v % 3) * 0.02);
-          const py = vy + Math.sin(px * 0.02 + t * 1.2 + v) * H * 0.018;
-          ctx.lineTo(px, py);
+
+      const art = getDuelArt('basalt');
+      if (art && art.naturalWidth > 0) {
+        if (!flowStrip) flowStrip = buildFlow(art);
+        // Cover-fit crop of the painted basalt arena — bottom-weighted like Duels.
+        const scale = Math.max(W / art.naturalWidth, H / art.naturalHeight) * 1.15;
+        const dw = art.naturalWidth * scale;
+        const dh = art.naturalHeight * scale;
+        const ox = (W - dw) / 2;
+        const oy = H - dh * 0.92;
+        ctx.drawImage(art, ox, oy, dw, dh);
+        // Dark vignette so the card chrome still reads.
+        const vig = ctx.createRadialGradient(W / 2, H * 0.55, H * 0.15, W / 2, H * 0.5, H * 0.75);
+        vig.addColorStop(0, 'rgba(0,0,0,0)');
+        vig.addColorStop(1, 'rgba(8,4,2,0.45)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, W, H);
+        // Living lava: scroll the chroma-masked cascade strip (cinemagraph).
+        if (flowStrip) {
+          const fw = W * 0.7;
+          const fh = H * 0.55;
+          const fx = (W - fw) / 2;
+          const fy = H * 0.28;
+          const scroll = ((t * 0.22) % 1);
+          ctx.save();
+          ctx.globalAlpha = 0.85;
+          ctx.beginPath();
+          ctx.rect(fx, fy, fw, fh);
+          ctx.clip();
+          const drawFlowCopy = (phase: number, alpha: number) => {
+            ctx.globalAlpha = 0.85 * alpha;
+            const yOff = fy - fh * phase;
+            ctx.drawImage(flowStrip!, fx, yOff, fw, fh);
+            ctx.drawImage(flowStrip!, fx, yOff + fh, fw, fh);
+          };
+          drawFlowCopy(scroll, 1);
+          drawFlowCopy((scroll + 0.5) % 1, 0.55);
+          ctx.restore();
         }
-        ctx.stroke();
-      }
-      // Falling debris — angular shards, not round embers.
-      for (let i = 0; i < 9; i++) {
-        const seed = i * 2.41;
-        const fall = ((t * 0.75 + seed) % 1);
-        const tx = W * (0.12 + (seed % 5) * 0.16);
-        const ty = H * (0.06 + fall * 0.58);
-        const len = W * (0.035 + (i % 3) * 0.012);
-        const ang = 0.6 + seed * 0.3 + t * 0.4;
-        ctx.strokeStyle = `hsla(${hue + 10} 85% 55% / ${0.75 * (1 - fall * 0.3)})`;
-        ctx.lineWidth = Math.max(1.2, W * 0.01);
-        ctx.lineCap = 'butt';
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(tx + Math.cos(ang) * len, ty + Math.sin(ang) * len * 1.6);
-        ctx.stroke();
-      }
-      // Central impact column — vertical heat shimmer, not a pin or bubble.
-      const shimmer = Math.sin(t * 4.2) * W * 0.006;
-      const colX = W * 0.5 + shimmer;
-      const colGrad = ctx.createLinearGradient(colX, H * 0.2, colX, H * 0.78);
-      colGrad.addColorStop(0, `hsla(${hue + 20} 100% 70% / 0)`);
-      colGrad.addColorStop(0.35, `hsla(${hue + 16} 100% 58% / ${0.55 * pulse})`);
-      colGrad.addColorStop(0.7, `hsla(${hue + 6} 90% 38% / ${0.35 * pulse})`);
-      colGrad.addColorStop(1, `hsla(${hue} 70% 18% / 0)`);
-      ctx.fillStyle = colGrad;
-      ctx.fillRect(colX - W * 0.06, H * 0.18, W * 0.12, H * 0.62);
-      // Fractured crust chunks at the strike zone.
-      for (let c = 0; c < 5; c++) {
-        const cx = W * 0.5 + Math.sin(c * 2.1 + t * 0.5) * W * 0.1;
-        const cy = H * 0.62 + c * H * 0.025;
-        ctx.fillStyle = `hsl(${hue - 10} 30% ${12 + c * 2}%)`;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(cx + W * 0.04, cy - H * 0.02);
-        ctx.lineTo(cx + W * 0.03, cy + H * 0.015);
-        ctx.closePath();
-        ctx.fill();
-      }
-      // Smoke plume — layered rects, gritty not fluffy.
-      for (let s = 0; s < 6; s++) {
-        const sx = W * 0.5 + Math.sin(t * 0.6 + s * 1.7) * W * 0.08;
-        const sy = H * (0.28 - s * 0.04) - Math.sin(t * 0.9 + s) * H * 0.02;
-        const sw = W * (0.14 + s * 0.02);
-        const sh = H * 0.035;
-        ctx.fillStyle = `hsla(${hue - 20} 12% 12% / ${0.18 - s * 0.02})`;
-        ctx.fillRect(sx - sw / 2, sy, sw, sh);
+        // Sparse embers drifting up — match duel basalt particles.
+        for (let i = 0; i < 10; i++) {
+          const seed = i * 1.7;
+          const life = (t * 0.35 + seed) % 1;
+          const ex = W * (0.2 + (seed % 5) * 0.12) + Math.sin(t + seed) * W * 0.02;
+          const ey = H * (0.85 - life * 0.7);
+          ctx.fillStyle = `hsla(${18 + (i % 3) * 8} 95% ${55 + life * 20}% / ${0.55 * (1 - life)})`;
+          ctx.beginPath();
+          ctx.arc(ex, ey, Math.max(1, W * 0.008 * (1 - life * 0.4)), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else {
+        // Fallback until duel art loads — charcoal + molten, not cartoon.
+        const sky = ctx.createLinearGradient(0, 0, 0, H);
+        sky.addColorStop(0, `hsl(${hue - 10} 30% 8%)`);
+        sky.addColorStop(1, `hsl(${hue} 40% 4%)`);
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, W, H);
+        const pulse = 0.5 + Math.sin(t * 1.6) * 0.2;
+        const lava = ctx.createRadialGradient(W * 0.5, H * 0.7, 2, W * 0.5, H * 0.75, W * 0.55);
+        lava.addColorStop(0, `hsla(18 95% 48% / ${0.55 * pulse})`);
+        lava.addColorStop(0.5, `hsla(12 80% 28% / ${0.3 * pulse})`);
+        lava.addColorStop(1, 'hsla(0 0% 0% / 0)');
+        ctx.fillStyle = lava;
+        ctx.fillRect(0, 0, W, H);
       }
       raf = requestAnimationFrame(frame);
     };
+
+    void loadSprites().then(() => {
+      if (!disposed) {
+        flowStrip = null;
+        raf = requestAnimationFrame(frame);
+      }
+    });
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(raf);
+    };
   }, [hue]);
   return <canvas ref={ref} />;
 }

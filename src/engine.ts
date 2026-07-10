@@ -376,12 +376,10 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
       const ownGate = st.obelisks.find((o) => o.owner === input.player && o.wing === wing);
       const ownRazed = !!ownGate && ownGate.hp <= 0;
       if (ownRazed) {
-        // Own gate down: materialise just behind the rubble lip and scramble
-        // over the crest onto the causeway — not through the far tunnel.
-        const inset = 0.36;
-        sy = input.player === 0
-          ? FORT_WALL_FRONT[0] + inset
-          : FORT_WALL_FRONT[1] - inset;
+        // Own gate down: materialise on the rear apron (NOT on the field) so
+        // the warrior marches a couple steps, then scrambles over the rubble
+        // pile before entering the battlefield.
+        sy = FORT_SPAWN_Y[input.player];
         wp = {
           x: pad.x + (WORLD_W / 2 - pad.x) * 0.42,
           y: input.player === 0 ? 10.85 : 4.15,
