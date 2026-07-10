@@ -1891,22 +1891,22 @@ export class Renderer {
         }
       }
 
-      // Razed lane: ride the painted causeway with depth perspective.
+      // Razed lane on the ENEMY fortress: its breach opens onto the painted
+      // causeway receding into the vista, so units marching it are remapped
+      // onto that road and perspective-shrunk with depth. YOUR OWN fortress
+      // is different: its rear-ruin painting is world-anchored and camera-
+      // near, so every unit on your razed lane — your warriors scrambling out
+      // AND enemy raiders climbing in — keeps its true world position and
+      // full scale. (Remapping them onto causewayAt, whose far end is tuned
+      // for the top-of-screen vista, used to fling the sprite up toward
+      // mid-field and drag it back — the "racing then reversing" warrior.)
       if (razedLane) {
         const lay = this.fortLayout(razedLane.owner);
-        if (lay) {
+        if (lay && !lay.mine) {
           const road = this.causewayAt(lay, razedLane.laneX, razedLane.depth);
-          const ownExit = razedLane.owner === this.localSeat && u.owner === this.localSeat;
-          causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit, crest);
+          causewayScale = this.causewayPerspectiveScale(razedLane.depth, false, crest);
           causewayHoverMul = flying ? 0.42 : 1;
-          // A locally deployed warrior starts at depth=1 on the rear apron.
-          // Keep its real world position there so it appears at the bottom of
-          // the screen, marches a couple steps, then joins the painted rubble
-          // only as it reaches the mound. The old depth mapping snapped
-          // depth=1 straight to the field-side causeway.
-          const snap = ownExit
-            ? clamp((crest + 0.28 - razedLane.depth) / 0.28, 0, 1)
-            : clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
+          const snap = clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
           const snapEase = snap * snap * (3 - 2 * snap);
           p = {
             x: lerp(p.x, road.x, snapEase),
@@ -1916,7 +1916,7 @@ export class Renderer {
       }
 
       let farFade = 1;
-      if (razedLane && razedLane.depth > 0.72) {
+      if (razedLane && razedLane.depth > 0.72 && razedLane.owner !== this.localSeat) {
         farFade = 0.72 + (1 - razedLane.depth) * 0.36;
       }
       if (tunnel && tunnel.gateUp) {
