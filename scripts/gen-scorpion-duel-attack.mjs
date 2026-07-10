@@ -245,6 +245,26 @@ async function main() {
       }
     }
   }
+  // Static hip stub: the tail's proximal pixels around the root joint are
+  // baked back INTO the body so the hip socket is always covered by original
+  // paint, whatever pose the chain takes. Without it, the root piece's
+  // rotation exposes the polygon cut line at the backside — the arena shows
+  // through between tail base and body and the tail reads as detached.
+  {
+    const root = { x: 126, y: 280 };
+    const STUB_R = 52;
+    for (let y = Math.max(0, root.y - STUB_R); y <= Math.min(h - 1, root.y + STUB_R); y++) {
+      for (let x = Math.max(0, root.x - STUB_R); x <= Math.min(w - 1, root.x + STUB_R); x++) {
+        if (Math.hypot(x - root.x, y - root.y) > STUB_R) continue;
+        const i = (y * w + x) * 4;
+        if (tailOnly[i + 3] === 0) continue;
+        body[i] = data[i];
+        body[i + 1] = data[i + 1];
+        body[i + 2] = data[i + 2];
+        body[i + 3] = data[i + 3];
+      }
+    }
+  }
   const bodyPng = await sharp(body, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
   const idleUri = `data:image/png;base64,${idlePng.toString('base64')}`;
   const bodyUri = `data:image/png;base64,${bodyPng.toString('base64')}`;
@@ -273,7 +293,7 @@ async function main() {
   // tail forms one continuous forward arc whose stinger lands well past the
   // claws, at the opponent's body height. The root swings LEAST — its base
   // must stay socketed in the hip — and the mid-tail carries the throw.
-  const deltas = [50, 97, 93, 70, 49, -4, -49];
+  const deltas = [22, 104, 98, 74, 53, -4, -49];
 
   // Cut each chain piece from the tail-only bitmap.
   const pieces = [];
