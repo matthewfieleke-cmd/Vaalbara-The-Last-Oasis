@@ -12,7 +12,7 @@
  * ========================================================================== */
 
 import type { CardDef, CardId, FactionId, SpeciesId, UnitStats } from './types';
-import { PHASE_SPELL_CARD } from './types';
+import { LAVA_RAIN_CARD, PHASE_SPELL_CARD } from './types';
 
 const U = (s: Partial<UnitStats> & Pick<UnitStats, 'hp' | 'dmg' | 'speed' | 'atkCd'>): UnitStats => ({
   range: 0.95,
@@ -132,10 +132,20 @@ export const PHASE_SPELL_DEF: Record<'sulfur' | 'thicket', CardDef> = {
   },
 };
 
+export const LAVA_RAIN_CARD_DEF: CardDef = {
+  id: LAVA_RAIN_CARD,
+  name: 'Lava Rain',
+  title: 'Judgement of Old Vaalbara',
+  cost: 5,
+  kind: 'spell',
+  blurb: 'A 1.2 s shadow warns the sky is falling. Centre: annihilation (flyers doubly so). Mid-ring: heavy burns. Rim: a scalding kiss. Enemies only.',
+  hue: 12,
+};
+
 export const LAVA_RAIN = {
   name: 'Lava Rain',
   title: 'Judgement of Old Vaalbara',
-  blurb: 'Once per round. A 1.2 s shadow warns the sky is falling. Centre: annihilation (flyers doubly so). Mid-ring: heavy burns. Rim: a scalding kiss. Enemies only.',
+  blurb: LAVA_RAIN_CARD_DEF.blurb,
   telegraphTicks: 4,
   centerDmg: 130,
   flyerCenterMult: 1.6,
@@ -178,6 +188,7 @@ for (const c of [...MAGMA_CARDS, ...OASIS_CARDS]) CARD_INDEX.set(c.id, c);
 
 /** Resolve a card id to its definition. Phase spell resolves per game phase. */
 export function cardDef(id: CardId, phase: 'basalt' | 'transition' | 'oasis' | 'ended'): CardDef {
+  if (id === LAVA_RAIN_CARD) return LAVA_RAIN_CARD_DEF;
   if (id === PHASE_SPELL_CARD) {
     return phase === 'oasis' || phase === 'ended' ? PHASE_SPELL_DEF.thicket : PHASE_SPELL_DEF.sulfur;
   }
@@ -192,9 +203,9 @@ export function speciesDef(id: SpeciesId): CardDef {
   return def;
 }
 
-/** The full 7-card deck for a faction: 6 units + the shifting phase spell. */
+/** The full 8-card deck: 6 units + shifting phase spell + Lava Rain. */
 export function buildDeck(faction: FactionId): CardId[] {
-  return [...FACTIONS[faction].cards.map((c) => c.id), PHASE_SPELL_CARD];
+  return [...FACTIONS[faction].cards.map((c) => c.id), PHASE_SPELL_CARD, LAVA_RAIN_CARD];
 }
 
 /** Species-specific mechanic constants, kept together for tuning at a glance. */

@@ -69,7 +69,9 @@ export type SpellId = 'sulfur' | 'thicket' | 'lavarain';
 
 /** The 7th deck slot shifts identity with the game phase. */
 export const PHASE_SPELL_CARD = 'phase-spell' as const;
-export type CardId = SpeciesId | typeof PHASE_SPELL_CARD;
+/** Repeatable area-denial spell — fixed in every deck. */
+export const LAVA_RAIN_CARD = 'lavarain' as const;
+export type CardId = SpeciesId | typeof PHASE_SPELL_CARD | typeof LAVA_RAIN_CARD;
 
 export interface UnitStats {
   readonly hp: number;
@@ -246,7 +248,6 @@ export interface PlayerBoardState {
   aqua: number;
   hand: CardId[];
   queue: CardId[];
-  ultUsed: boolean;
   damageDealt: number;
   territoryScore: number;
   blessed: boolean;
@@ -274,13 +275,7 @@ export interface SpellAction {
   readonly y: number;
 }
 
-export interface UltAction {
-  readonly type: 'ult';
-  readonly x: number;
-  readonly y: number;
-}
-
-export type PlayerAction = DeployAction | SpellAction | UltAction;
+export type PlayerAction = DeployAction | SpellAction;
 
 export interface PlayerInput {
   readonly seq: number;
@@ -447,7 +442,12 @@ export const MAX_ARMY = 6;
 export const CAPTURE_RATE = 1;
 /** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
  *  with its own HP. The Basalt Fields end only when a fortress loses both. */
-export const OBELISK_HP = 4000;
+/** Tuned for ~4 min average Phase-1 gatehouse collapse vs the scripted bot. */
+export const OBELISK_HP = 3100;
+
+/** On a razed lane, warriors become combat-visible once they've climbed
+ *  onto the causeway / rubble pile (depth from the field-side wall lip). */
+export const RUBBLE_VISIBLE_DEPTH = 0.06;
 export const OBELISK_RADIUS = 0.55;
 /** Units only auto-acquire enemies inside this radius; otherwise they push
  *  the lane toward the enemy obelisk (Clash-Royale-style tower pressure). */

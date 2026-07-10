@@ -46,8 +46,8 @@ interface FortGateArt {
   gapHalfFrac: number;
 }
 const FORT_ART: Record<'front' | 'rear', FortGateArt> = {
-  front: { arch: [0.229, 0.780], halfW: 0.058, apexFrac: 0.20, baseFrac: 0.995, saddleFrac: 0.76, gapHalfFrac: 0.085 },
-  rear: { arch: [0.242, 0.762], halfW: 0.049, apexFrac: 0.31, baseFrac: 0.985, saddleFrac: 0.55, gapHalfFrac: 0.08 },
+  front: { arch: [0.229, 0.780], halfW: 0.058, apexFrac: 0.20, baseFrac: 0.995, saddleFrac: 0.76, gapHalfFrac: 0.11 },
+  rear: { arch: [0.242, 0.762], halfW: 0.049, apexFrac: 0.31, baseFrac: 0.985, saddleFrac: 0.55, gapHalfFrac: 0.095 },
 };
 
 interface FortLayout {
@@ -156,7 +156,7 @@ export interface DragOverlay {
 export interface TelegraphOverlay {
   active: boolean;
   x: number; y: number;
-  kind: 'spell' | 'ult';
+  kind: 'spell' | 'ult' | 'lavarain';
 }
 
 /* ------------------------------------------------------------------------ */
@@ -568,7 +568,6 @@ export class Renderer {
         // its far side.
         const foe = (this.localSeat === 0 ? 1 : 0) as PlayerId;
         this.drawFortressBackdrop(ctx, st, foe);
-        this.drawUnits(ctx, st, dt, now, 'behind');
         this.drawFortressWalls(ctx, st, foe);
       }
       this.drawTelegraphs(ctx, st, now);
@@ -1056,15 +1055,12 @@ export class Renderer {
       }
     }
 
-    // Smoulder on fallen wings: dust motes and embers drifting off rubble.
+    // Smoulder on fallen wings: light dust only — keep fighters readable.
     for (const [wing, down] of [[wl, downL], [wr, downR]] as const) {
       if (!down) continue;
       const wp = this.worldToScreen(wing.x, wing.y);
-      if (Math.random() < 0.2) {
-        this.burst(wp.x + (Math.random() - 0.5) * u * 2.4, baseY - h * (0.1 + Math.random() * 0.2), 1, 'ash', 25, 1.2);
-      }
-      if (Math.random() < 0.08) {
-        this.burst(wp.x + (Math.random() - 0.5) * u * 2, baseY - h * 0.15, 1, 'mote', 25, 0.8);
+      if (Math.random() < 0.06) {
+        this.burst(wp.x + (Math.random() - 0.5) * u * 2.4, baseY - h * (0.1 + Math.random() * 0.2), 1, 'ash', 25, 0.7);
       }
     }
 
@@ -1668,33 +1664,15 @@ export class Renderer {
     return { a: cycle[0], b: null, mix: 0, view };
   }
 
-  /** Units draw in three depth passes. 'behind': units past the CREST of a
-   *  razed ENEMY gatehouse's rubble mound — painted before the fortress, so
-   *  the debris pile and standing wall genuinely occlude them as they march
-   *  the causeway and climb the far face. 'field': everything on the open
-   *  battlefield, in standing enemy tunnels (painted under them, clipped to
-   *  the arches) and on the camera-side face of any rubble mound. 'over':
-   *  units inside YOUR OWN fortress footprint on the camera side — your
-   *  rear-view facade has just been painted over the field, and these units
-   *  sit between that building and the camera. */
-  private unitPassOf(st: GameState, dx: number, dy: number): 'behind' | 'field' | 'over' {
-    const tunnel = this.tunnelOf(st, dx, dy);
-    if (tunnel && !tunnel.gateUp) {
-      const lay = this.fortLayout(tunnel.owner);
-      if (lay) {
-        const crest = this.razedCrestDepth(tunnel.owner);
-        // Beyond the crest of an enemy mound: occluded by the debris pile.
-        if (!lay.mine && tunnel.depth > crest) return 'behind';
-        // Past the crest of YOUR OWN mound: descending its far (field-side)
-        // face, hidden behind the pile until it clears the breach.
-        if (lay.mine && tunnel.depth <= crest) return 'field';
-      }
-    }
+  /** Units draw in two depth passes on the field. Warriors on rubble piles
+   *  always paint ON TOP of the ruin art so scrambles and duels stay readable.
+   *  'over': units inside YOUR OWN fortress footprint on the camera side. */
+  private unitPassOf(st: GameState, dx: number, dy: number): 'field' | 'over' {
     const inOwnFort = this.localSeat === 0 ? dy > FORT_WALL_FRONT[0] : dy < FORT_WALL_FRONT[1];
     return inOwnFort ? 'over' : 'field';
   }
 
-  private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number, pass: 'behind' | 'field' | 'over'): void {
+  private drawUnits(ctx: CanvasRenderingContext2D, st: GameState, dt: number, now: number, pass: 'field' | 'over'): void {
     const alive = this.aliveIds;
     const unitById = new Map(st.units.map((u) => [u.id, u]));
     const order = [...st.units]
@@ -1870,8 +1848,11 @@ export class Renderer {
       // the ground plane on both faces; the nose pitches up on any ascent
       // and down on any descent.
       const crest = rubble ? this.razedCrestDepth(rubble.owner) : 0;
-      const nearCrest = rubble ? clamp(1 - Math.abs(rubble.depth - crest) / 0.45, 0, 1) : 0;
-      const rubbleLift = rubble ? nearCrest * nearCrest * this.unit * 0.22 : 0;
+      const nearCrest = rubble ? clamp(1 - Math.abs(rubble.depth - crest) / 0.5, 0, 1) : 0;
+      const rubbleDepthScale = rubble ? 0.68 + rubble.depth * 0.38 : 1;
+      const rubbleLift = rubble
+        ? (nearCrest * nearCrest * this.unit * 0.34 + rubble.depth * this.unit * 0.08)
+        : 0;
       let rubblePitch = 0;
       if (rubble && moving) {
         const rel = clamp((rubble.depth - crest) / 0.35, -1, 1);
@@ -1962,7 +1943,7 @@ export class Renderer {
       // Clash-style depth: actors shrink slightly toward the far end of the
       // field and grow toward the near edge, selling the 3/4 camera.
       const depthK = clamp((p.y - this.oy) / Math.max(1, WORLD_H * this.unit), 0, 1);
-      const depthScale = 0.9 + depthK * 0.2;
+      const depthScale = (0.9 + depthK * 0.2) * rubbleDepthScale;
       const s = this.unit * unitScale(stats.colossal, stats.heavy) * depthScale * farShrink;
 
       const popT = clamp(d.age / 0.45, 0, 1);
@@ -2419,9 +2400,9 @@ export class Renderer {
   private drawPlacementTelegraph(ctx: CanvasRenderingContext2D): void {
     if (!this.telegraph.active) return;
     const p = this.worldToScreen(this.telegraph.x, this.telegraph.y);
-    const r = this.telegraph.kind === 'ult' ? 2.6 : 1.5;
+    const r = this.telegraph.kind === 'ult' || this.telegraph.kind === 'lavarain' ? 2.6 : 1.5;
     const pulse = 0.65 + Math.sin(this.time * 5) * 0.25;
-    ctx.strokeStyle = this.telegraph.kind === 'ult'
+    ctx.strokeStyle = this.telegraph.kind === 'ult' || this.telegraph.kind === 'lavarain'
       ? `hsla(14 100% 58% / ${pulse})`
       : `hsla(150 90% 60% / ${pulse})`;
     ctx.lineWidth = 2.5;

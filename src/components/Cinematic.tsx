@@ -28,7 +28,7 @@ const FADE = 0.55;
 /** Per-species hero size (× of the base 30%-of-screen height). Frames crop
  *  differently, so a flat size lets busy frames (wolf) swallow the screen. */
 const HERO_SCALE: Partial<Record<SpeciesId, number>> = {
-  trex: 1.06,
+  trex: 1.02,
   bear: 1.04,
   eagle: 0.94,
   honeybadger: 0.9,
@@ -38,6 +38,13 @@ const HERO_SCALE: Partial<Record<SpeciesId, number>> = {
   wolves: 0.76,
   porcupine: 0.9,
   beetles: 0.86,
+};
+
+/** Per-species intro width cap — keeps long tails/snouts inside the frame. */
+const INTRO_WIDTH_FRAC: Partial<Record<SpeciesId, number>> = {
+  trex: 0.66,
+  lion: 0.70,
+  bear: 0.68,
 };
 
 function heroBeats(at: number, world: 'basalt' | 'oasis', heroes: Beat['hero'][]): Beat[] {
@@ -252,7 +259,8 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           // hero visibly bump each time the crop width changed; instead
           // clamp against the widest frame of the set so scale never moves.
           const maxW = Math.max(...frames.map((f) => f.w));
-          const scale = Math.min(targetH / frames[0].h, (W * 0.78) / maxW);
+          const widthFrac = INTRO_WIDTH_FRAC[active.hero.species] ?? 0.78;
+          const scale = Math.min(targetH / frames[0].h, (W * widthFrac) / maxW);
           // Walkers anchor at their feet on the ground line; flyers anchor
           // at their stabilised point (head/centre) hovering above it.
           const anchorLineY = flying && frames === anim.intro ? cy - H * 0.03 : cy + H * 0.07;

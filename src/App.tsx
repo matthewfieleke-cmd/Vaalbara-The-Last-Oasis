@@ -13,8 +13,6 @@ import { Results } from './components/Results';
 import { DuelSetup } from './components/DuelSetup';
 import { DuelScreen } from './components/DuelScreen';
 
-const INTRO_SEEN_KEY = 'vaalbara.introSeen';
-
 export function App() {
   const [screen, setScreen] = useState<Screen>('boot');
   const [profile, setProfile] = useState<Profile>(() => loadProfile());
@@ -38,8 +36,7 @@ export function App() {
     ]);
     void Promise.all([minSplash, spriteWait]).then(() => {
       if (!alive) return;
-      const seen = localStorage.getItem(INTRO_SEEN_KEY) === '1';
-      setScreen(seen ? 'menu' : 'cinematic');
+      setScreen('cinematic');
     });
     return () => {
       alive = false;
@@ -54,7 +51,6 @@ export function App() {
   }, []);
 
   const finishIntro = useCallback(() => {
-    localStorage.setItem(INTRO_SEEN_KEY, '1');
     setScreen('menu');
   }, []);
 

@@ -18,7 +18,7 @@ import {
   BRIDGE_HALF_W, CAPTURE_RATE, DEPLOY_DEPTH, FORT_ARCH_HALF_W, FORT_LANES, FORT_SPAWN_Y,
   FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
   HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
-  PHASE1_TICKS, PHASE2_TICKS, RIVER_BANDS,
+  PHASE1_TICKS, PHASE2_TICKS, RUBBLE_VISIBLE_DEPTH, RIVER_BANDS,
   TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
 } from './types';
 import type {
@@ -26,6 +26,7 @@ import type {
   PlayerInput, PropState, TickResult, UnitState, UnitStats, Vec2,
 } from './types';
 import { LAVA_RAIN, MECHANICS, SPELL_BALANCE, buildDeck, cardDef, speciesDef } from './data';
+import { LAVA_RAIN_CARD } from './types';
 import { CELL, cellAt, isDeep, isWater, nextCorridor, walkableAt } from './navmask';
 import type { WorldId } from './navmask';
 
@@ -121,7 +122,6 @@ export function createGame(
       aqua: 5,
       hand: deck.slice(0, HAND_SIZE),
       queue: deck.slice(HAND_SIZE),
-      ultUsed: false,
       damageDealt: 0,
       territoryScore: 0,
       blessed: false,
@@ -177,7 +177,7 @@ function groundOpen(st: GameState, x: number, y: number): boolean {
 
 /** Global march pace. The plodding gait animation reads the ACTUAL speed,
  *  so a small lift here quickens the stride without breaking foot contact. */
-const MARCH_PACE = 1.12;
+const MARCH_PACE = 1.20;
 
 /** Is this ground position on a collapsed gatehouse's rubble mound? Razed
  *  lanes stay open, but crossing the debris is a scramble, not a march. */
@@ -315,23 +315,26 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
   const p = st.players[input.player];
   const a = input.action;
 
-  if (a.type === 'ult') {
-    if (p.ultUsed) return;
+  if (a.type === 'spell') {
+    const handIdx = p.hand.indexOf(a.card);
+    if (handIdx === -1) return;
+    const def = cardDef(a.card, st.phase);
+    if (p.aqua < def.cost) return;
     if (!inWorld(a.x, a.y)) return;
-    p.ultUsed = true;
-    st.pendingLava.push({ owner: input.player, x: a.x, y: a.y, resolveTick: st.tick + LAVA_RAIN.telegraphTicks });
-    ev.push({ type: 'lavaTelegraph', x: a.x, y: a.y });
-    ev.push({ type: 'spellCast', spell: 'lavarain', owner: input.player, x: a.x, y: a.y });
-    return;
-  }
 
-  const handIdx = p.hand.indexOf(a.card);
-  if (handIdx === -1) return;
-  const def = cardDef(a.card, st.phase);
-  if (p.aqua < def.cost) return;
+    if (a.card === LAVA_RAIN_CARD) {
+      p.aqua -= def.cost;
+      cycleCard(p, handIdx);
+      st.pendingLava.push({
+        owner: input.player, x: a.x, y: a.y,
+        resolveTick: st.tick + LAVA_RAIN.telegraphTicks,
+      });
+      ev.push({ type: 'lavaTelegraph', x: a.x, y: a.y });
+      ev.push({ type: 'spellCast', spell: 'lavarain', owner: input.player, x: a.x, y: a.y });
+      return;
+    }
 
-  if (a.type === 'spell' && def.kind === 'spell') {
-    if (!inWorld(a.x, a.y)) return;
+    if (def.kind !== 'spell') return;
     p.aqua -= def.cost;
     cycleCard(p, handIdx);
     const spell = def.name === 'Thicket' ? 'thicket' : 'sulfur';
@@ -343,6 +346,11 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
     ev.push({ type: 'spellCast', spell, owner: input.player, x: a.x, y: a.y });
     return;
   }
+
+  const handIdx = p.hand.indexOf(a.card);
+  if (handIdx === -1) return;
+  const def = cardDef(a.card, st.phase);
+  if (p.aqua < def.cost) return;
 
   if (a.type === 'deploy' && def.kind === 'unit' && def.species) {
     if (!inWorld(a.x, a.y)) return;
@@ -450,6 +458,34 @@ function cycleCard(p: GameState['players'][0], handIdx: number): void {
 }
 
 /* ------------------------------------------------------------------------ */
+/* Combat visibility — no invisible warriors attack or are attacked           */
+/* ------------------------------------------------------------------------ */
+
+/** True when a warrior is visible enough to fight: on the open field, or
+ *  climbing a razed gate's rubble pile / causeway in the breach lane. */
+export function isCombatVisible(st: GameState, u: UnitState): boolean {
+  if (st.phase !== 'basalt') return true;
+
+  // Central battlefield between both fortress wall fronts.
+  if (u.y <= FORT_WALL_FRONT[0] + 0.05 && u.y >= FORT_WALL_FRONT[1] - 0.05) return true;
+
+  const owner: PlayerId | null =
+    u.y > FORT_WALL_FRONT[0] + 0.05 ? 0 : u.y < FORT_WALL_FRONT[1] - 0.05 ? 1 : null;
+  if (owner === null) return false;
+
+  const lanes = FORT_LANES[owner];
+  const wing = Math.abs(u.x - lanes[0]) < Math.abs(u.x - lanes[1]) ? 0 : 1;
+  const gate = st.obelisks.find((o) => o.owner === owner && o.wing === wing);
+  if (!gate || gate.hp > 0) return false;
+
+  if (Math.abs(u.x - lanes[wing]) > FORT_ARCH_HALF_W + 0.55) return false;
+  const depth = owner === 0
+    ? (u.y - FORT_WALL_FRONT[0]) / (FORT_SPAWN_Y[0] - FORT_WALL_FRONT[0])
+    : (FORT_WALL_FRONT[1] - u.y) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
+  return depth >= RUBBLE_VISIBLE_DEPTH;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Targeting                                                                  */
 /* ------------------------------------------------------------------------ */
 
@@ -462,7 +498,7 @@ function visibleEnemies(st: GameState, u: RuntimeUnit): UnitState[] {
 }
 
 function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
-  const enemies = visibleEnemies(st, u);
+  const enemies = visibleEnemies(st, u).filter((e) => isCombatVisible(st, e));
   if (enemies.length === 0) return null;
   // Engagement stickiness: locked duels stay locked while in reach.
   if (u.targetId !== null) {
@@ -472,10 +508,8 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
       if (!(cs.flying && !u.stats.canHitAir && !u.stats.flying)) return cur;
     }
   }
-  // Eagle stays a global assassin. Everyone else hunts the NEAREST enemy
-  // anywhere on the field: opposing warriors converge and clash mid-field
-  // instead of marching past each other in parallel lanes, and only the
-  // survivor carries on down the nearest lane to the fortress.
+  // Eagle hunts the weakest visible heart. Everyone else hunts the NEAREST
+  // visible enemy anywhere on the field.
   if (u.species === 'eagle') {
     return enemies.reduce((a, b) => (b.hp < a.hp ? b : a));
   }
@@ -486,12 +520,6 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
     const eFly = speciesDef(e.species).stats!.flying;
     if (eFly && !u.stats.canHitAir && !u.stats.flying) continue;
     const d = dist2(u.x, u.y, e.x, e.y) + (e.id % 7) * 1e-4;
-    // Enemies still inside a fortress interior (marching their tunnel) are
-    // out of sight — a duel starts once they step onto the field.
-    if (st.phase === 'basalt'
-      && (e.y > FORT_WALL_FRONT[0] + 0.05 || e.y < FORT_WALL_FRONT[1] - 0.05)) continue;
-    // Never marathon-chase a kiting flyer across the map — swat it only
-    // when it strays into the normal aggro bubble.
     if (eFly && !u.stats.flying && d > aggroBase2) continue;
     if (d < bestD) {
       bestD = d;
@@ -529,7 +557,8 @@ function attackReach(u: RuntimeUnit): number {
   return range;
 }
 
-function canAttack(u: RuntimeUnit, target: UnitState): boolean {
+function canAttack(st: GameState, u: RuntimeUnit, target: UnitState): boolean {
+  if (!isCombatVisible(st, u) || !isCombatVisible(st, target)) return false;
   const tStats = speciesDef(target.species).stats!;
   if (tStats.flying && !u.stats.canHitAir && !u.stats.flying) return false;
   const reach = attackReach(u) + u.stats.radius + tStats.radius;
@@ -992,7 +1021,7 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   // 1. Attack when a target is in reach.
   const target = pickTarget(st, u);
   u.targetId = target?.id ?? null;
-  if (target && canAttack(u, target)) {
+  if (target && canAttack(st, u, target)) {
     if (u.atkTimer <= 0) performAttack(st, ev, u, target);
     else u.facing = target.x >= u.x ? 1 : -1;
     return;
@@ -1395,13 +1424,13 @@ export class BotBrain {
 
   think(st: GameState): PlayerInput['action'] | null {
     if (st.phase !== 'basalt' && st.phase !== 'oasis') return null;
-    if (st.tick % 4 !== 0) return null;
+    if (st.tick % 2 !== 0) return null;
     const me = st.players[this.seat];
-    const phaseLen = st.phase === 'basalt' ? st.cfg.phase1Ticks : st.cfg.phase2Ticks;
 
-    if (!me.ultUsed && st.phaseTicksLeft < phaseLen * 0.55) {
-      const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
-      if (enemies.length >= 3) {
+    const lavaInHand = me.hand.includes(LAVA_RAIN_CARD);
+    if (lavaInHand && me.aqua >= cardDef(LAVA_RAIN_CARD, st.phase).cost) {
+      const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat && isCombatVisible(st, u));
+      if (enemies.length >= 2) {
         let best: Vec2 | null = null;
         let bestScore = 2;
         for (const e of enemies) {
@@ -1411,33 +1440,36 @@ export class BotBrain {
             best = { x: e.x, y: e.y };
           }
         }
-        if (best) return { type: 'ult', x: best.x, y: best.y };
+        if (best && (bestScore >= 3 || (this.rng() < 0.45 && bestScore >= 2))) {
+          return { type: 'spell', card: LAVA_RAIN_CARD, x: best.x, y: best.y };
+        }
       }
     }
 
-    if (me.aqua < 4 || this.rng() < 0.35) return null;
+    if (me.aqua < 2) return null;
+    if (this.rng() < 0.12) return null;
     if (armySize(st, this.seat) >= MAX_ARMY) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
     if (affordable.length === 0) return null;
-    const pick = affordable[Math.floor(this.rng() * affordable.length)] as CardId;
+    affordable.sort((a, b) => cardDef(b, st.phase).cost - cardDef(a, st.phase).cost);
+    const pick = affordable[Math.floor(this.rng() * Math.min(3, affordable.length))] as CardId;
     const def = cardDef(pick, st.phase);
 
-    if (def.kind === 'spell') {
-      const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
+    if (def.kind === 'spell' && pick !== LAVA_RAIN_CARD) {
+      const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat && isCombatVisible(st, u));
       if (enemies.length === 0) return null;
       const e = enemies[Math.floor(this.rng() * enemies.length)];
       return { type: 'spell', card: pick, x: e.x, y: e.y };
     }
+    if (def.kind === 'spell') return null;
 
     const dirY = this.seat === 0 ? -1 : 1;
     if (st.phase === 'basalt') {
-      // Siege play: pick a gate. Prefer the lane whose enemy gatehouse is
-      // weaker (press the crack), with some noise so lanes stay contested.
       const pads = fortPads(this.seat);
       const wings = st.obelisks.filter((o) => o.owner !== this.seat && o.hp > 0);
       let lane = this.rng() < 0.5 ? 0 : 1;
-      if (wings.length > 0 && this.rng() < 0.65) {
+      if (wings.length > 0 && this.rng() < 0.78) {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
         lane = weakest.wing;
       }

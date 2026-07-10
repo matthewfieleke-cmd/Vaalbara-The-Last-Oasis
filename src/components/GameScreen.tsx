@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W,
+  LAVA_RAIN_CARD, MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W,
   fortPads, inDeployBand,
 } from '../types';
 import type { CardId, GameEvent, GameState, PlayerId } from '../types';
@@ -34,13 +34,10 @@ export function GameScreen({
 
   const [ui, setUi] = useState<GameState | null>(null);
   const [selectedCard, setSelectedCard] = useState<CardId | null>(null);
-  const [ultArming, setUltArming] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const selectedRef = useRef<CardId | null>(null);
-  const ultArmingRef = useRef(false);
   selectedRef.current = selectedCard;
-  ultArmingRef.current = ultArming;
   const endedRef = useRef(false);
 
   const showToast = useCallback((text: string) => {
@@ -201,15 +198,6 @@ export function GameScreen({
     const st = driver.state;
     if (st.phase !== 'basalt' && st.phase !== 'oasis') return;
 
-    // Ultimate targeting takes priority.
-    if (ultArmingRef.current) {
-      driver.submit(seat, { type: 'ult', x: gx, y: gy });
-      setUltArming(false);
-      renderer.telegraph.active = false;
-      playUi('tap');
-      return;
-    }
-
     const card = selectedRef.current;
     if (!card) return;
     const def = cardDef(card, st.phase);
@@ -262,6 +250,17 @@ export function GameScreen({
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     const renderer = rendererRef.current;
     const drag = dragRef.current;
+    const card = selectedRef.current;
+    if (renderer && card === LAVA_RAIN_CARD) {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const t = renderer.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+      if (t.x >= -1.6 && t.x <= WORLD_W + 1.6 && t.y >= -1.6 && t.y <= WORLD_H + 1.6) {
+        renderer.telegraph.active = true;
+        renderer.telegraph.kind = 'lavarain';
+        renderer.telegraph.x = Math.max(0.25, Math.min(WORLD_W - 0.25, t.x));
+        renderer.telegraph.y = Math.max(0.25, Math.min(WORLD_H - 0.25, t.y));
+      }
+    }
     if (!renderer || !drag || drag.pointerId !== e.pointerId) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const t = renderer.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
@@ -358,19 +357,13 @@ export function GameScreen({
       showToast(`Need ${def.cost} aqua for ${def.name}`);
       return;
     }
-    setUltArming(false);
-    if (rendererRef.current) rendererRef.current.telegraph.active = false;
-    setSelectedCard((c) => (c === card ? null : card));
-    playUi('tap');
-  };
-
-  const armUlt = () => {
-    if (!me || me.ultUsed) return;
-    setSelectedCard(null);
-    setUltArming((v) => {
-      const next = !v;
-      if (rendererRef.current) rendererRef.current.telegraph.active = false;
-      if (next) showToast('Tap anywhere — the sky will fall in 1.2 s');
+    setSelectedCard((c) => {
+      const next = c === card ? null : card;
+      if (rendererRef.current) {
+        rendererRef.current.telegraph.active = next === LAVA_RAIN_CARD;
+        rendererRef.current.telegraph.kind = 'lavarain';
+      }
+      if (next === LAVA_RAIN_CARD) showToast('Tap anywhere in the arena — sky falls in 1.2 s');
       return next;
     });
     playUi('tap');
@@ -449,16 +442,6 @@ export function GameScreen({
         <canvas ref={canvasRef} />
       </div>
 
-      <button
-        className={`ult-btn ${ultArming ? 'arming' : ''}`}
-        disabled={!me || me.ultUsed || phase === 'transition' || phase === 'ended'}
-        onClick={armUlt}
-        aria-label="Lava Rain ultimate"
-      >
-        <span className="flame">☄</span>
-        Lava Rain
-      </button>
-
       <div className="hand-dock">
         <div className="aqua-bar">
           <div className="aqua-cells">
@@ -491,6 +474,8 @@ export function GameScreen({
                 <div className="art">
                   {def.species ? (
                     <SpriteArt species={def.species} hue={def.hue} />
+                  ) : card === LAVA_RAIN_CARD ? (
+                    <LavaRainArt hue={def.hue} />
                   ) : (
                     <SpellArt hue={def.hue} phase2={card === PHASE_SPELL_CARD && (ui?.phase === 'oasis' || ui?.phase === 'ended')} />
                   )}
@@ -515,6 +500,58 @@ export function GameScreen({
       )}
     </div>
   );
+}
+
+/** Procedural art for the Lava Rain spell card. */
+function LavaRainArt({ hue }: { hue: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    let raf = 0;
+    const start = performance.now();
+    const frame = () => {
+      const t = (performance.now() - start) / 1000;
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const W = Math.max(1, Math.round(rect.width * dpr));
+      const H = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== W || canvas.height !== H) {
+        canvas.width = W;
+        canvas.height = H;
+      }
+      const g = ctx.createRadialGradient(W / 2, H * 0.38, 2, W / 2, H / 2, W * 0.72);
+      g.addColorStop(0, `hsl(${hue} 85% 42%)`);
+      g.addColorStop(0.55, `hsl(${hue} 70% 18%)`);
+      g.addColorStop(1, `hsl(${hue} 55% 7%)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      const pulse = 0.55 + Math.sin(t * 3.2) * 0.25;
+      for (let i = 0; i < 5; i++) {
+        const ang = t * 1.4 + i * 1.26;
+        const rx = W * (0.5 + Math.cos(ang) * 0.18);
+        const ry = H * (0.34 + Math.sin(ang * 1.3) * 0.1);
+        const rg = ctx.createRadialGradient(rx, ry, 1, rx, ry, W * 0.22);
+        rg.addColorStop(0, `hsla(${hue + 8} 100% 62% / ${pulse * 0.55})`);
+        rg.addColorStop(1, `hsla(${hue} 90% 40% / 0)`);
+        ctx.fillStyle = rg;
+        ctx.beginPath();
+        ctx.arc(rx, ry, W * 0.22, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = `hsla(${hue + 15} 100% 72% / ${0.7 + pulse * 0.2})`;
+      ctx.font = `bold ${Math.max(10, W * 0.22)}px system-ui`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('☄', W / 2, H * 0.52);
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [hue]);
+  return <canvas ref={ref} />;
 }
 
 /** Procedural art for the shifting phase-spell card. */

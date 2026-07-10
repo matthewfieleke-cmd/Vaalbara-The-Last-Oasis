@@ -342,6 +342,10 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
     if (comp.length >= minPocket && rimTotal > 0 && rimDark / rimTotal > 0.55) {
       for (const i of comp) px[i * 4 + 3] = 0;
     }
+    // Smaller enclosed gaps (horn clefts, tight limb crossings).
+    if (comp.length >= 36 && comp.length < minPocket && rimTotal > 0 && rimDark / rimTotal > 0.62) {
+      for (const i of comp) px[i * 4 + 3] = 0;
+    }
   }
 
   // HALO EROSION — kill the white ghost around legs and bellies.
@@ -359,9 +363,9 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
     const b = px[i4 + 2];
     const mx = Math.max(r, g, b);
     const mn = Math.min(r, g, b);
-    return mx > 178 && mx - mn < 40;
+    return mx > 165 && mx - mn < 44;
   };
-  for (let pass = 0; pass < 3; pass++) {
+  for (let pass = 0; pass < 5; pass++) {
     let ate = false;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -394,7 +398,7 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
       if (px[(i + w) * 4 + 3] === 0) holes++;
       if (holes > 0) {
         const mx = Math.max(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
-        const bright = mx > 165 ? 74 : 48;
+        const bright = mx > 152 ? 82 : 48;
         px[i * 4 + 3] = Math.min(px[i * 4 + 3], 255 - holes * bright);
       }
     }
@@ -731,15 +735,25 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
             // Intro frames are only ever shown alone (the cinematic), so
             // they normalise against their own tallest frame.
             set.intro = toFrameSprites(introFrames);
+            if (sp === 'scorpion') {
+              const tailStrike = [introFrames[3], introFrames[4], introFrames[5], introFrames[6]];
+              set.attack = toFrameSprites(tailStrike, 0.03, crossH(tailStrike), -1);
+              for (const s of set.intro) {
+                const b = contentBounds(s.canvas);
+                if (b) s.anchorX = (b.minX + b.maxX) / 2;
+              }
+            }
             // Flyers must NOT be bottom-anchored: the crop bottom is talons
             // on one frame and a downswept wingtip on the next, so the body
             // would leap between frames and the crossfade would double it.
-            // Pin the eagle by its head (the still point of a wingbeat) and
-            // the bee swarm by its centre of mass.
+            // Center the eagle on its full body; bees on centre of mass.
             if (sp === 'eagle') {
               for (const s of set.intro) {
-                s.anchorX = s.canvas.width * 0.82;
-                s.anchorY = rightBandCenterY(s.canvas);
+                const b = contentBounds(s.canvas);
+                if (b) {
+                  s.anchorX = (b.minX + b.maxX) / 2;
+                  s.anchorY = rightBandCenterY(s.canvas);
+                }
               }
             } else if (sp === 'bees') {
               for (const s of set.intro) {

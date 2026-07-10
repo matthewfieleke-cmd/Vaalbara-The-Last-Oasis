@@ -676,6 +676,9 @@ export class DuelStage {
         // Timeline offsets: special moves get a slow-motion charge-up
         // prologue — the whole stage bends around the gathering power.
         const pre = ev.special ? 1.05 : 0;
+        const scorpionTail = A.species === 'scorpion';
+        const wEnd = pre + (scorpionTail ? 0.44 : 0.32);
+        const dEnd = wEnd + (scorpionTail ? 0.30 : 0.26);
         if (ev.special) {
           this.fire(step, 'announce', 0, () => {
             this.banner = {
@@ -723,8 +726,6 @@ export class DuelStage {
             }
           });
         }
-        const wEnd = pre + 0.32;
-        const dEnd = wEnd + 0.26;
         // Bombardier Beetles fire their special like real artillery: they
         // whip around rear-to-foe and hose boiling acid across the arena
         // instead of charging in head-first.
@@ -759,9 +760,10 @@ export class DuelStage {
             });
           }
         }
-        // Wind-up: coil back and crouch.
+        // Wind-up: coil back and crouch (scorpion enters tail-strike pose).
         if (t < wEnd) {
-          A.mode = 'idle';
+          A.mode = scorpionTail && t >= pre + 0.18 ? 'attack' : 'idle';
+          if (scorpionTail && A.mode === 'attack') A.animT = t - (pre + 0.18);
           A.x = -A.face * easeOut(ph(t, pre, wEnd)) * this.W * 0.05;
           A.squash = easeOut(ph(t, pre, wEnd)) * 0.12;
           D.guarding = !!ev.blocked;
@@ -780,11 +782,17 @@ export class DuelStage {
           A.aura = Math.max(0, A.aura - 0.03);
         } else if (t < dEnd) {
           // Dash across the arena (specials streak with afterimages).
-          A.mode = 'dash';
-          const k = easeIn(ph(t, wEnd, dEnd));
-          A.x = A.face * (k * (gap - this.W * 0.13) - this.W * 0.05 * (1 - k));
-          A.squash = 0;
-          A.runPhase += 0.6;
+          if (scorpionTail) {
+            A.mode = 'attack';
+            A.animT = t - wEnd;
+            A.x = A.face * easeIn(ph(t, wEnd, dEnd)) * this.W * 0.08;
+          } else {
+            A.mode = 'dash';
+            const k = easeIn(ph(t, wEnd, dEnd));
+            A.x = A.face * (k * (gap - this.W * 0.13) - this.W * 0.05 * (1 - k));
+            A.squash = 0;
+            A.runPhase += 0.6;
+          }
           if (ev.special) {
             this.zoomTarget = 1.08;
             this.zoomCX = 0.5;
@@ -1245,6 +1253,7 @@ export class DuelStage {
       const p = getSprite(f.species);
       return p ? { a: p, b: null, mix: 0 } : null;
     }
+    const parade = f.species === 'scorpion' && anim.intro && anim.intro.length >= 6 ? anim.intro : null;
     if (f.mode === 'ko' && anim.ko && anim.ko.length > 0) {
       // Painted collapse: sweep through the KO frames over ~1.1s with a
       // short crossfade between poses, then hold the final lying pose.
@@ -1263,9 +1272,29 @@ export class DuelStage {
         const n = anim.run.length;
         return { a: anim.run[Math.floor(f.runPhase) % n], b: null, mix: 0 };
       }
-      const at = clamp01(f.animT / 0.5);
+      const atkDur = f.species === 'scorpion' ? 0.68 : 0.5;
+      const at = clamp01(f.animT / atkDur);
+      const nAtk = anim.attack.length;
+      if (f.species === 'scorpion') {
+        const idx = at < 0.22 ? 0 : at < 0.48 ? 1 : at < 0.72 ? 2 : Math.min(3, nAtk - 1);
+        return { a: anim.attack[Math.min(idx, nAtk - 1)], b: null, mix: 0 };
+      }
       const idx = at < 0.35 ? 0 : at < 0.7 ? 1 : 2;
-      return { a: anim.attack[Math.min(idx, anim.attack.length - 1)], b: null, mix: 0 };
+      return { a: anim.attack[Math.min(idx, nAtk - 1)], b: null, mix: 0 };
+    }
+    if (parade && (f.mode === 'idle' || f.mode === 'guard')) {
+      const n = parade.length;
+      const i = Math.floor(f.runPhase * 0.5) % n;
+      const frac = (f.runPhase * 0.5) - Math.floor(f.runPhase * 0.5);
+      const mix = frac * frac * (3 - 2 * frac);
+      return { a: parade[i], b: parade[(i + 1) % n], mix };
+    }
+    if (parade && f.mode === 'dash') {
+      const n = parade.length;
+      const i = Math.floor(f.runPhase) % n;
+      const frac = f.runPhase - Math.floor(f.runPhase);
+      const mix = frac * frac * (3 - 2 * frac);
+      return { a: parade[i], b: parade[(i + 1) % n], mix };
     }
     if (f.mode === 'dash' || FLYERS.has(f.species)) {
       if (FLYERS.has(f.species) && f.mode !== 'dash') f.runPhase += 0.12;
