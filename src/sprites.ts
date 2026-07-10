@@ -310,12 +310,16 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
   // a genuine background gap is walled in by the character's dark outline
   // and limbs, while a pale patch inside a white body is bounded by more
   // pale paint. Clear a pocket only when its boundary is mostly dark ink.
+  // A SATURATED rim is the opposite tell: a bright core ringed by vivid
+  // paint (the scorpion's glowing crystal claw) is a highlight, never a
+  // background gap — genuine gaps measure near-zero rim chroma.
   const minPocket = Math.max(120, Math.round(w * h * 0.002));
   for (let s = 0; s < w * h; s++) {
     if (!deep[s] || reach[s]) continue;
     const comp: number[] = [s];
     reach[s] = 3;
     let rimDark = 0;
+    let rimChroma = 0;
     let rimTotal = 0;
     for (let k = 0; k < comp.length; k++) {
       const cur = comp[k];
@@ -341,13 +345,17 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
             if (bg[si]) continue;
             const i4 = si * 4;
             const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
+            const mn = Math.min(px[i4], px[i4 + 1], px[i4 + 2]);
             rimTotal++;
             if (mx < 150) rimDark++;
+            if (mx - mn > 60) rimChroma++;
             break;
           }
         }
       }
     }
+    const glowCore = rimTotal > 0 && rimChroma / rimTotal > 0.25;
+    if (glowCore) continue;
     if (comp.length >= minPocket && rimTotal > 0 && rimDark / rimTotal > 0.55) {
       for (const i of comp) px[i * 4 + 3] = 0;
     }

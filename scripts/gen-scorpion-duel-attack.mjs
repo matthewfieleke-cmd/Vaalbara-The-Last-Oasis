@@ -86,17 +86,61 @@ async function main() {
   const idlePng = await sharp(data, {
     raw: { width: w, height: h, channels: 4 },
   }).png().toBuffer();
+
+  // Background paper inside the tail polygon is only the paper CONNECTED to
+  // the polygon's rim. Enclosed bright pixels — the white glow core inside
+  // the crystal stinger — are paint and must ride along with the tail, or
+  // the strike frames show punched-out holes where the glow used to be.
+  const inPoly = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (insidePoly(tailPoly, x, y)) inPoly[y * w + x] = 1;
+    }
+  }
+  const rimPaper = new Uint8Array(w * h);
+  {
+    const stack = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const p = y * w + x;
+        if (!inPoly[p] || !paper(p * 4)) continue;
+        const edge =
+          x === 0 || x === w - 1 || y === 0 || y === h - 1 ||
+          !inPoly[p - 1] || !inPoly[p + 1] || !inPoly[p - w] || !inPoly[p + w];
+        if (edge) {
+          rimPaper[p] = 1;
+          stack.push(p);
+        }
+      }
+    }
+    while (stack.length) {
+      const p = stack.pop();
+      const px2 = p % w;
+      const py2 = (p / w) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = px2 + dx;
+        const ny = py2 + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const n = ny * w + nx;
+        if (rimPaper[n] || !inPoly[n] || !paper(n * 4)) continue;
+        rimPaper[n] = 1;
+        stack.push(n);
+      }
+    }
+  }
+
   const body = Buffer.from(data);
   const tailOnly = Buffer.alloc(w * h * 4);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      if (!insidePoly(tailPoly, x, y)) continue;
+      const p = y * w + x;
+      const i = p * 4;
+      if (!inPoly[p]) continue;
       body[i] = 255;
       body[i + 1] = 255;
       body[i + 2] = 255;
       body[i + 3] = 255;
-      if (!paper(i)) {
+      if (!rimPaper[p]) {
         tailOnly[i] = data[i];
         tailOnly[i + 1] = data[i + 1];
         tailOnly[i + 2] = data[i + 2];
@@ -207,22 +251,29 @@ async function main() {
 
   // Real tail centreline, root -> stinger base, traced from the painting.
   // The final entry is the stinger TIP (length reference for the last piece).
+  // The root joint sits DEEP inside the hip silhouette: pixels near the cut
+  // line barely move when the root piece rotates about it, so the tail never
+  // tears away from the backside mid-strike.
   const joints = [
-    { x: 118, y: 272 }, { x: 80, y: 242 }, { x: 62, y: 205 }, { x: 62, y: 165 },
+    { x: 126, y: 280 }, { x: 80, y: 242 }, { x: 62, y: 205 }, { x: 62, y: 165 },
     { x: 82, y: 133 }, { x: 115, y: 112 }, { x: 165, y: 135 },
   ];
   const tip = { x: 183, y: 232 };
   const ends = [...joints.slice(1), tip];
   // Per-piece capsule radius (crystal stinger is much wider than a segment)
-  // and joint overlap so adjacent pieces always share seam pixels.
-  const radii = [30, 27, 25, 25, 25, 28, 54];
-  const OVERLAP = 12;
+  // and joint overlap so adjacent pieces always share seam pixels. Generous
+  // values are safe: pieces crop from the tail-only bitmap, so a fat capsule
+  // can never grab body paint — it only guarantees the seams stay covered at
+  // full extension instead of thinning where neighbouring pieces bend apart.
+  const radii = [34, 31, 30, 30, 30, 33, 56];
+  const OVERLAP = 24;
 
   // Heading change per piece from coiled pose to the struck pose (degrees,
   // clockwise = forward). Derived from the painted headings so the released
   // tail forms one continuous forward arc whose stinger lands well past the
-  // claws, at the opponent's body height.
-  const deltas = [72, 86, 85, 66, 47, -5, -49];
+  // claws, at the opponent's body height. The root swings LEAST — its base
+  // must stay socketed in the hip — and the mid-tail carries the throw.
+  const deltas = [50, 97, 93, 70, 49, -4, -49];
 
   // Cut each chain piece from the tail-only bitmap.
   const pieces = [];
@@ -280,12 +331,15 @@ async function main() {
     let over = '';
     if (base > 0) {
       // Whip stagger: distal pieces release a beat after the root so the
-      // uncurl travels along the tail instead of rotating as one slab.
+      // uncurl travels along the tail instead of rotating as one slab. The
+      // stagger is gentle — adjacent pieces stay within a few degrees of one
+      // another mid-sweep, so the chain reads as one bowed tail, never a
+      // kinked or stretched-flat line.
       let cx = joints[0].x;
       let cy = joints[0].y;
       const placed = [];
       for (let i = 0; i < pieces.length; i++) {
-        const lag = Math.max(0, Math.min(1, base * 1.3 - i * 0.05));
+        const lag = Math.max(0, Math.min(1, base * 1.18 - i * 0.035));
         const p = lag * lag * (3 - 2 * lag);
         const ang = (deltas[i] * p * Math.PI) / 180;
         const cos = Math.cos(ang);
