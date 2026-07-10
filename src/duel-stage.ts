@@ -785,7 +785,10 @@ export class DuelStage {
         } else if (t < dEnd) {
           if (scorpionTail) {
             A.mode = 'attack';
-            A.animT = t - wEnd;
+            // Hold the full-extension painted-tail frame through impact and
+            // hit-freeze; otherwise the 100ms contact pose can fall between
+            // display frames and read as if the tail never struck.
+            A.animT = Math.min(t - wEnd, strikeDur * (4 / 5));
             // Close only part of the gap; the painted rear-mounted tail does
             // the remaining reach and makes contact while the body stays
             // facing forward.
