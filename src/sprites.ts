@@ -736,7 +736,7 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
           const crossH = (frames: HTMLCanvasElement[]): number =>
             runH * Math.sqrt(meanContentArea(frames) / runArea);
           const atkSource = duelAtkImg ?? atkImg;
-          const atkCount = duelAtkImg ? 6 : 3;
+          const atkCount = duelAtkImg ? 8 : 3;
           const atkFrames = splitStrip(atkSource, atkCount);
           const atkFacing: 1 | -1 = duelAtkImg ? 1 : (files.attackFacing ?? 1);
           const set: AnimSet = {

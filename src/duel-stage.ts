@@ -14,6 +14,13 @@ import type { Sprite } from './sprites';
 
 export type DuelWorld = 'basalt' | 'oasis';
 
+/** Scorpion tail-strike timing: total sweep duration and the fraction of it
+ *  at which the stinger reaches full extension (= the contact beat). Shared
+ *  by the clash timeline and the frame picker so pose and impact stay
+ *  perfectly in sync. */
+const SCORPION_STRIKE_DUR = 0.55;
+const SCORPION_CONTACT_FRAC = 4 / 5;
+
 /** Relative draw height per species (fraction of stage height). */
 const DUEL_SCALE: Partial<Record<SpeciesId, number>> = {
   trex: 1.32,
@@ -385,7 +392,9 @@ export class DuelStage {
   /** The shared impact beat of a clash: hit-stop, FX, damage readout. */
   private clashImpact(step: Step, A: FighterVis, D: FighterVis): void {
     const ev = step.ev;
-    if (!A.spray) {
+    if (!A.spray && A.species !== 'scorpion') {
+      // (The scorpion's animT is timeline-driven; resetting it here would
+      // flash the coiled first frame at the exact moment of contact.)
       A.mode = 'attack';
       A.animT = 0;
     }
@@ -678,8 +687,10 @@ export class DuelStage {
         const scorpionTail = A.species === 'scorpion';
         const pre = ev.special ? (scorpionTail ? 1.35 : 1.05) : 0;
         const wEnd = pre + (scorpionTail ? 0.50 : 0.32);
-        const strikeDur = scorpionTail ? 0.80 : 0.26;
-        const contactAt = scorpionTail ? wEnd + strikeDur * (4 / 5) : wEnd + strikeDur;
+        const strikeDur = scorpionTail ? SCORPION_STRIKE_DUR : 0.26;
+        const contactAt = scorpionTail
+          ? wEnd + strikeDur * SCORPION_CONTACT_FRAC
+          : wEnd + strikeDur;
         const dEnd = scorpionTail ? contactAt + 0.22 : wEnd + 0.26;
         if (ev.special) {
           this.fire(step, 'announce', 0, () => {
@@ -788,7 +799,7 @@ export class DuelStage {
             // Hold the full-extension painted-tail frame through impact and
             // hit-freeze; otherwise the 100ms contact pose can fall between
             // display frames and read as if the tail never struck.
-            A.animT = Math.min(t - wEnd, strikeDur * (4 / 5));
+            A.animT = Math.min(t - wEnd, strikeDur * SCORPION_CONTACT_FRAC);
             // Close only part of the gap; the painted rear-mounted tail does
             // the remaining reach and makes contact while the body stays
             // facing forward.
@@ -815,9 +826,21 @@ export class DuelStage {
           A.x = scorpionTail
             ? A.face * gap * 0.28 * (1 - k)
             : A.face * (gap - this.W * 0.13) * (1 - k);
-          if (t > dEnd + 0.18) {
-            A.mode = scorpionTail ? 'idle' : 'dash';
-            if (!scorpionTail) A.runPhase += 0.35;
+          if (scorpionTail) {
+            // Spring-back: rewind the SAME painted frames so the tail
+            // recoils along its strike path, then settle into the idle coil.
+            const rewind = Math.max(
+              0, strikeDur * SCORPION_CONTACT_FRAC - (t - dEnd) * 2.1,
+            );
+            if (rewind > 0) {
+              A.mode = 'attack';
+              A.animT = rewind;
+            } else {
+              A.mode = 'idle';
+            }
+          } else if (t > dEnd + 0.18) {
+            A.mode = 'dash';
+            A.runPhase += 0.35;
           }
           if (!ev.evaded) {
             // Defender knockback skid away from the attacker, then settle.
@@ -1284,12 +1307,25 @@ export class DuelStage {
         const n = anim.run.length;
         return { a: anim.run[Math.floor(f.runPhase) % n], b: null, mix: 0 };
       }
-      const atkDur = f.species === 'scorpion' ? 0.80 : 0.5;
+      const atkDur = f.species === 'scorpion' ? SCORPION_STRIKE_DUR : 0.5;
       const at = clamp01(f.animT / atkDur);
       const nAtk = anim.attack.length;
       if (f.species === 'scorpion') {
-        const idx = Math.min(nAtk - 1, Math.floor(at * nAtk * 0.98 + 0.001));
-        return { a: anim.attack[idx], b: null, mix: 0 };
+        // Frames 0..n-2 sweep coil -> full extension (the last frame is the
+        // authored reset pose, never shown mid-strike). Full extension lands
+        // exactly on the contact beat, and adjacent painted poses crossfade
+        // so the sprung tail reads as one fluid whip instead of a strobe.
+        const sweep = nAtk - 2;
+        const k = Math.min(sweep, (at / SCORPION_CONTACT_FRAC) * sweep);
+        const i = Math.floor(k);
+        const frac = k - i;
+        const mix = frac * frac * (3 - 2 * frac);
+        const j = Math.min(sweep, i + 1);
+        return {
+          a: anim.attack[Math.min(i, sweep)],
+          b: j > i && mix > 0.02 ? anim.attack[j] : null,
+          mix,
+        };
       }
       const idx = at < 0.35 ? 0 : at < 0.7 ? 1 : 2;
       return { a: anim.attack[Math.min(idx, nAtk - 1)], b: null, mix: 0 };
