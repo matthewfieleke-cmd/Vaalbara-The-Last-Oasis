@@ -14,16 +14,19 @@ await page.click('text=Duels');
 await page.waitForSelector('.duel-setup', { timeout: 8000 });
 await page.waitForTimeout(800);
 
-// Pick Scorpion first in roster (Magma Vanguard).
-const scorpion = page.locator('.duel-roster .duel-card', { hasText: 'Scorpion' });
-if (await scorpion.count()) await scorpion.first().click();
-// Fill remaining slots in order.
+// Order roster with Scorpion fighting first.
 const cards = page.locator('.duel-roster .duel-card');
 const n = await cards.count();
-for (let i = 0; i < n; i++) await cards.nth(i).click();
+const labels = [];
+for (let i = 0; i < n; i++) labels.push((await cards.nth(i).innerText()).trim());
+const scorpionIdx = labels.findIndex((t) => /scorpion/i.test(t));
+const order = scorpionIdx >= 0
+  ? [scorpionIdx, ...labels.map((_, i) => i).filter((i) => i !== scorpionIdx)]
+  : labels.map((_, i) => i);
+for (const i of order) await cards.nth(i).click();
 
 await page.screenshot({ path: `${DIR}/00-setup.png` });
-await page.click('text=Enter the Arena');
+await page.getByRole('button', { name: /Enter the Arena/ }).click();
 await page.waitForSelector('.duel-screen', { timeout: 8000 });
 await page.waitForTimeout(1400);
 await page.screenshot({ path: `${DIR}/01-entrance.png` });
