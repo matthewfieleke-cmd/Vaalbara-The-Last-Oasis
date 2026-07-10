@@ -163,7 +163,7 @@ function toCanvas(img: HTMLImageElement): HTMLCanvasElement {
  *  through 1–2 px anti-aliased bridges into bright fur/wool inside the body
  *  (the Bighorn's white back). A final bounded dilation then eats the
  *  anti-aliased rim the strict fill leaves behind. */
-function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
+function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }): HTMLCanvasElement {
   const w = cv.width;
   const h = cv.height;
   const cx = cv.getContext('2d', { willReadFrequently: true })!;
@@ -294,6 +294,7 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
   }
 
   // ENCLOSED PAPER POCKETS — legs crossing under a belly can seal a pocket
+  if (!opts?.skipPockets) {
   // of raw paper off from the border (the wolf intro's belly gap), and the
   // border fill can never reach it, so it survives as a solid white blob.
   // But bright BODY paint (the bighorn's white wool) can pass the same
@@ -347,6 +348,7 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
       for (const i of comp) px[i * 4 + 3] = 0;
     }
   }
+  }
 
   // HALO EROSION — kill the white ghost around legs and bellies.
   // The bounded dilation above only eats pixels the fill FLAGGED as bg-like;
@@ -365,7 +367,8 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
     const mn = Math.min(r, g, b);
     return mx > 165 && mx - mn < 44;
   };
-  for (let pass = 0; pass < 5; pass++) {
+  const haloPasses = opts?.skipPockets ? 2 : 5;
+  for (let pass = 0; pass < haloPasses; pass++) {
     let ate = false;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -407,9 +410,9 @@ function keyBackground(cv: HTMLCanvasElement): HTMLCanvasElement {
   return cv;
 }
 
-/** Extra halo / pocket cleanup on intro parade frames. */
+/** Wolves intro: leg-gap halo cleanup only. Bighorn uses clearBighornHornCleft. */
 function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
-  if (species !== 'wolves' && species !== 'bighorn') return;
+  if (species !== 'wolves') return;
   const cx = cv.getContext('2d', { willReadFrequently: true })!;
   const { width: w, height: h } = cv;
   const data = cx.getImageData(0, 0, w, h);
@@ -419,7 +422,7 @@ function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
     const mn = Math.min(px[i4], px[i4 + 1], px[i4 + 2]);
     return mx > 162 && mx - mn < 52;
   };
-  const passes = species === 'wolves' ? 7 : 5;
+  const passes = 7;
   for (let pass = 0; pass < passes; pass++) {
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
@@ -430,25 +433,6 @@ function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
           px[(i - 1) * 4 + 3] === 0 || px[(i + 1) * 4 + 3] === 0
           || px[(i - w) * 4 + 3] === 0 || px[(i + w) * 4 + 3] === 0;
         if (adjHole && paper(i4)) px[i4 + 3] = 0;
-      }
-    }
-  }
-  if (species === 'bighorn') {
-    const y0 = Math.floor(h * 0.04);
-    const y1 = Math.floor(h * 0.42);
-    for (let y = y0; y < y1; y++) {
-      for (let x = 0; x < w; x++) {
-        const i4 = (y * w + x) * 4;
-        if (!paper(i4) || px[i4 + 3] === 0) continue;
-        let ink = 0;
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-          const ni = (ny * w + nx) * 4;
-          if (!paper(ni) && px[ni + 3] > 20) ink++;
-        }
-        if (ink >= 3) px[i4 + 3] = 0;
       }
     }
   }
@@ -470,6 +454,44 @@ function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
         }
         if (ink >= 2) px[i4 + 3] = 0;
       }
+    }
+  }
+  cx.putImageData(data, 0, 0);
+}
+
+/** Clear the paper pocket between the horns where the head meets the rack.
+ *  Wool is one connected white mass, so flood-fill can't isolate the cleft —
+ *  instead erase paper pixels flanked by dark horn ink on both sides. */
+function clearBighornHornCleft(cv: HTMLCanvasElement): void {
+  const cx = cv.getContext('2d', { willReadFrequently: true })!;
+  const { width: w, height: h } = cv;
+  const data = cx.getImageData(0, 0, w, h);
+  const px = data.data;
+  const paper = (i4: number): boolean => {
+    const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
+    const mn = Math.min(px[i4], px[i4 + 1], px[i4 + 2]);
+    return mx > 175 && mx - mn < 42;
+  };
+  const hornInk = (i4: number): boolean =>
+    px[i4 + 3] > 40 && px[i4 + 1] > Math.max(px[i4], px[i4 + 2]) * 0.82;
+
+  const y0 = Math.floor(h * 0.04);
+  const y1 = Math.floor(h * 0.17);
+  const x0 = Math.floor(w * 0.30);
+  const x1 = Math.floor(w * 0.70);
+  const reach = Math.max(12, Math.round(w * 0.26));
+
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i4 = (y * w + x) * 4;
+      if (!paper(i4) || px[i4 + 3] === 0) continue;
+      let hornL = false;
+      let hornR = false;
+      for (let dx = 1; dx <= reach; dx++) {
+        if (x - dx >= 0 && hornInk((y * w + x - dx) * 4)) hornL = true;
+        if (x + dx < w && hornInk((y * w + x + dx) * 4)) hornR = true;
+      }
+      if (hornL && hornR) px[i4 + 3] = 0;
     }
   }
   cx.putImageData(data, 0, 0);
@@ -523,7 +545,7 @@ function sliceCanvas(cv: HTMLCanvasElement, x0: number, x1: number): HTMLCanvasE
  * Split a film strip into panels. Prefers magenta separator columns; falls
  * back to N equal slices. Returns keyed, cropped frames.
  */
-function splitStrip(img: HTMLImageElement, expected: number): HTMLCanvasElement[] {
+function splitStrip(img: HTMLImageElement, expected: number, bleed = 0): HTMLCanvasElement[] {
   const fullW = img.naturalWidth;
   const fullH = img.naturalHeight;
   const full = document.createElement('canvas');
@@ -619,20 +641,28 @@ function splitStrip(img: HTMLImageElement, expected: number): HTMLCanvasElement[
   if (cuts.length >= expected - 1) {
     const used = cuts.slice(0, expected - 1);
     for (let i = 0; i < expected; i++) {
-      const x0 = i === 0 ? 0 : used[i - 1].b + inset;
-      const x1 = i === expected - 1 ? w : used[i].a - inset;
+      let x0 = i === 0 ? 0 : used[i - 1].b + inset;
+      let x1 = i === expected - 1 ? w : used[i].a - inset;
+      if (bleed > 0) {
+        x0 = Math.max(0, x0 - bleed);
+        x1 = Math.min(w, x1 + bleed);
+      }
       panels.push(sliceCanvas(probe, x0, x1));
     }
   } else {
     // Equal-width fallback — shave the shared edge in case a rule sits there.
     const step = w / expected;
     for (let i = 0; i < expected; i++) {
-      const x0 = Math.round(i * step) + (i === 0 ? 0 : inset);
-      const x1 = Math.round((i + 1) * step) - (i === expected - 1 ? 0 : inset);
+      let x0 = Math.round(i * step) + (i === 0 ? 0 : inset);
+      let x1 = Math.round((i + 1) * step) - (i === expected - 1 ? 0 : inset);
+      if (bleed > 0) {
+        x0 = Math.max(0, x0 - bleed);
+        x1 = Math.min(w, x1 + bleed);
+      }
       panels.push(sliceCanvas(probe, x0, x1));
     }
   }
-  return panels.map((p) => autoCrop(keyBackground(p)));
+  return panels.map((p) => autoCrop(keyBackground(p, bleed > 0 ? { skipPockets: true } : undefined)));
 }
 
 /** Alpha-weighted content centroid — the visual centre of mass. */
@@ -809,7 +839,11 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
             // Intro frames are only ever shown alone (the cinematic), so
             // they normalise against their own tallest frame.
             set.intro = toFrameSprites(introFrames);
-            for (const s of set.intro) polishIntroFrame(s.canvas, sp);
+            if (sp === 'bighorn') {
+              for (const s of set.intro) clearBighornHornCleft(s.canvas);
+            } else if (sp === 'wolves') {
+              for (const s of set.intro) polishIntroFrame(s.canvas, sp);
+            }
             if (sp === 'scorpion') {
               for (const s of set.intro) {
                 const b = contentBounds(s.canvas);

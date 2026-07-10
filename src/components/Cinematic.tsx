@@ -212,6 +212,12 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.fill();
       }
 
+      // Letterbox under heroes — champions paint on top so snout/tail survive.
+      const barH = H * 0.085;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, barH);
+      ctx.fillRect(0, H - barH, W, barH);
+
       // The animated hero: run-cycle frames striding in place, fading in and
       // out on the exact same envelope as its DOM title card.
       if (t >= 0 && active.hero) {
@@ -265,8 +271,16 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           // at their stabilised point (head/centre) hovering above it.
           const anchorLineY = flying && frames === anim.intro ? cy - H * 0.03 : cy + H * 0.07;
           const drawHero = (f: typeof frames[number], alpha: number) => {
-            const capW = hero.species === 'trex' ? W * INTRO_WIDTH_MAX : W * widthFrac;
-            const frameScale = Math.min(targetH / f.h, capW / f.w);
+            let frameScale: number;
+            if (hero.species === 'trex') {
+              // Per-frame fit against the full keyed panel (not content crop).
+              frameScale = Math.min(
+                (H * 0.94) / f.canvas.height,
+                (W * INTRO_WIDTH_MAX) / f.canvas.width,
+              );
+            } else {
+              frameScale = Math.min(targetH / f.h, (W * widthFrac) / f.w);
+            }
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
@@ -286,11 +300,6 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         }
         ctx.restore();
       }
-
-      // Letterbox.
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, W, H * 0.085);
-      ctx.fillRect(0, H * 0.915, W, H * 0.085);
 
       raf = requestAnimationFrame(frame);
     };
