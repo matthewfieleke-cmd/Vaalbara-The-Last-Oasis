@@ -184,6 +184,8 @@ export interface ProjectileState {
   vy: number;
   dmg: number;
   ticksLeft: number;
+  /** Homing lock — acid jets steer toward this unit each tick. */
+  targetId?: number;
 }
 
 /* ------------------------------------------------------------------------ */

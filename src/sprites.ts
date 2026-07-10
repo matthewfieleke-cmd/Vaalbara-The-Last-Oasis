@@ -438,14 +438,14 @@ function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
   }
   if (species === 'wolves') {
     // Leg-gap pockets: white paper between haunches reads as a flash on cycle.
-    const y0 = Math.floor(h * 0.48);
-    const y1 = Math.floor(h * 0.88);
+    const y0 = Math.floor(h * 0.42);
+    const y1 = Math.floor(h * 0.92);
     for (let y = y0; y < y1; y++) {
-      for (let x = Math.floor(w * 0.18); x < Math.floor(w * 0.82); x++) {
+      for (let x = Math.floor(w * 0.14); x < Math.floor(w * 0.86); x++) {
         const i4 = (y * w + x) * 4;
         if (!paper(i4) || px[i4 + 3] === 0) continue;
         let ink = 0;
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0]] as const) {
           const nx = x + dx;
           const ny = y + dy;
           if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
@@ -453,6 +453,29 @@ function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
           if (!paper(ni) && px[ni + 3] > 20) ink++;
         }
         if (ink >= 2) px[i4 + 3] = 0;
+      }
+    }
+    // Right-side leg gap (front/rear leg flash) — tighter band, all frames.
+    const rx0 = Math.floor(w * 0.52);
+    const rx1 = Math.floor(w * 0.78);
+    const ry0 = Math.floor(h * 0.52);
+    const ry1 = Math.floor(h * 0.82);
+    for (let y = ry0; y < ry1; y++) {
+      for (let x = rx0; x < rx1; x++) {
+        const i4 = (y * w + x) * 4;
+        if (!paper(i4) || px[i4 + 3] === 0) continue;
+        let fur = 0;
+        for (let dy = -3; dy <= 3; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const ni = (ny * w + nx) * 4;
+            if (!paper(ni) && px[ni + 3] > 30) fur++;
+          }
+        }
+        if (fur >= 4) px[i4 + 3] = 0;
       }
     }
   }
@@ -475,11 +498,11 @@ function clearBighornHornCleft(cv: HTMLCanvasElement): void {
   const hornInk = (i4: number): boolean =>
     px[i4 + 3] > 40 && px[i4 + 1] > Math.max(px[i4], px[i4 + 2]) * 0.82;
 
-  const y0 = Math.floor(h * 0.04);
-  const y1 = Math.floor(h * 0.17);
-  const x0 = Math.floor(w * 0.30);
-  const x1 = Math.floor(w * 0.70);
-  const reach = Math.max(12, Math.round(w * 0.26));
+  const y0 = Math.floor(h * 0.02);
+  const y1 = Math.floor(h * 0.20);
+  const x0 = Math.floor(w * 0.28);
+  const x1 = Math.floor(w * 0.72);
+  const reach = Math.max(14, Math.round(w * 0.30));
 
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
