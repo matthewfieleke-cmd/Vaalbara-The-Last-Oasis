@@ -188,7 +188,13 @@ export function onRubble(st: GameState, x: number, y: number): boolean {
   const lanes = FORT_LANES[owner];
   const wing = Math.abs(x - lanes[0]) < Math.abs(x - lanes[1]) ? 0 : 1;
   const gate = st.obelisks.find((o) => o.owner === owner && o.wing === wing);
-  return !!gate && gate.hp <= 0;
+  if (!gate || gate.hp > 0) return false;
+  const depth = owner === 0
+    ? (y - FORT_WALL_FRONT[0]) / (FORT_SPAWN_Y[0] - FORT_WALL_FRONT[0])
+    : (FORT_WALL_FRONT[1] - y) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
+  // Rear apron is open walking ground. The rubble starts after a couple of
+  // steps and continues to the field-side wall lip.
+  return depth >= 0 && depth <= 0.72;
 }
 
 function effSpeed(st: GameState, u: RuntimeUnit): number {
@@ -497,7 +503,10 @@ export function isCombatVisible(st: GameState, u: UnitState): boolean {
   const depth = owner === 0
     ? (u.y - FORT_WALL_FRONT[0]) / (FORT_SPAWN_Y[0] - FORT_WALL_FRONT[0])
     : (FORT_WALL_FRONT[1] - u.y) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
-  return depth >= RUBBLE_VISIBLE_DEPTH;
+  // depth=1 is the rear spawn apron; depth=0 is the field-side lip. A unit
+  // becomes fightable only after it has crossed the mound and reached the
+  // battlefield edge.
+  return depth <= RUBBLE_VISIBLE_DEPTH;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1459,12 +1468,14 @@ export class TickDriver {
 
 export class BotBrain {
   private rng: () => number;
+  private nextActionTick = 0;
   constructor(private seat: PlayerId, seed: number) {
     this.rng = makeRng(seed ^ 0xb07);
   }
 
   think(st: GameState): PlayerInput['action'] | null {
     if (st.phase !== 'basalt' && st.phase !== 'oasis') return null;
+    if (st.tick < this.nextActionTick) return null;
     if (st.tick % 2 !== 0) return null;
     const me = st.players[this.seat];
 
@@ -1482,6 +1493,7 @@ export class BotBrain {
           }
         }
         if (best && (bestScore >= 3 || (this.rng() < 0.45 && bestScore >= 2))) {
+          this.nextActionTick = st.tick + 6;
           return { type: 'spell', card: LAVA_RAIN_CARD, x: best.x, y: best.y };
         }
       }
@@ -1501,6 +1513,7 @@ export class BotBrain {
       const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat && isCombatVisible(st, u));
       if (enemies.length === 0) return null;
       const e = enemies[Math.floor(this.rng() * enemies.length)];
+      this.nextActionTick = st.tick + 6;
       return { type: 'spell', card: pick, x: e.x, y: e.y };
     }
     if (def.kind === 'spell') return null;
@@ -1515,12 +1528,14 @@ export class BotBrain {
         lane = weakest.wing;
       }
       const pad = pads[lane];
+      this.nextActionTick = st.tick + 6;
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };
     }
     const x = Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5));
     const y = this.seat === 0
       ? WORLD_H - DEPLOY_DEPTH + 0.4 + this.rng() * (DEPLOY_DEPTH - 0.9)
       : 0.5 + this.rng() * (DEPLOY_DEPTH - 0.9);
+    this.nextActionTick = st.tick + 6;
     return { type: 'deploy', card: pick, x, y, dirX: (this.rng() - 0.5) * 0.8, dirY };
   }
 }

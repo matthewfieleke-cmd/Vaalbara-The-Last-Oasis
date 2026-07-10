@@ -12,12 +12,12 @@ mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
 await page.goto('http://localhost:4310', { waitUntil: 'networkidle' });
-await page.evaluate(() => localStorage.setItem('vaalbara.introSeen', '1'));
+await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: 'networkidle' });
-try {
-  await page.click('.tap-to-begin', { timeout: 4000 });
-  await page.click('.skip-btn', { timeout: 4000 });
-} catch { /* already on menu */ }
+await page.waitForSelector('.tap-to-begin', { timeout: 12000 });
+await page.click('.tap-to-begin');
+await page.waitForSelector('.skip-btn', { timeout: 8000 });
+await page.click('.skip-btn');
 await page.waitForSelector('.menu', { timeout: 8000 });
 await page.click('text=Battle');
 await page.click('.faction-card.oasis');
@@ -25,6 +25,17 @@ await page.click('text=March to the Basalt Fields');
 await page.click('text=Play offline now');
 await page.waitForSelector('.game-screen', { timeout: 8000 });
 await page.waitForTimeout(1200);
+
+// QC shortcut: open the enemy's left breach immediately so we can inspect
+// bot reinforcements marching from distance without waiting for a full siege.
+const forceEnemyRaze = process.env.FORCE_ENEMY_RAZE === '1';
+if (forceEnemyRaze) {
+  await page.evaluate(() => {
+    const st = window.__vbState;
+    const gate = st?.obelisks.find((o) => o.owner === 1 && o.wing === 0);
+    if (gate) gate.hp = 0;
+  });
+}
 
 // Exact screen position of the LEFT gate pad (world 1.75, 14.55) using the
 // same letterboxed board fit as the renderer.
@@ -85,6 +96,7 @@ for (let i = 0; i < 500; i++) {
   if (traffic.length) {
     console.log(`frame ${shot}: traffic`, JSON.stringify(traffic));
     await snap('traffic');
+    if (forceEnemyRaze && shot >= 24) break;
     await page.waitForTimeout(220);
   } else {
     if (i % 4 === 0) await snap('idle');

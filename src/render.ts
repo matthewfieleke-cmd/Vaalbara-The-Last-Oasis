@@ -952,9 +952,13 @@ export class Renderer {
 
   /** Depth-based scale on a razed lane: 40% at spawn → 100% at the wall,
    *  stepped 40-50-60-70-80-90-100 with smooth ramps between each band. */
-  private causewayPerspectiveScale(depth: number, ownExitNoShrink: boolean): number {
+  private causewayPerspectiveScale(depth: number, ownExitNoShrink: boolean, crestDepth: number): number {
     if (ownExitNoShrink) return 1;
-    const d = clamp(depth, 0, 1) * 6;
+    // depth=1 is the distant fortress spawn; depth falls as the warrior
+    // approaches us. Grow from 40% in the distance to full size exactly at
+    // the rubble crest, then hold full size over the mound.
+    const progress = clamp((1 - depth) / Math.max(0.08, 1 - crestDepth), 0, 1);
+    const d = progress * 6;
     const step = Math.min(5, Math.floor(d));
     const t = d - step;
     const scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
@@ -1893,9 +1897,16 @@ export class Renderer {
         if (lay) {
           const road = this.causewayAt(lay, razedLane.laneX, razedLane.depth);
           const ownExit = razedLane.owner === this.localSeat && u.owner === this.localSeat;
-          causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit);
+          causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit, crest);
           causewayHoverMul = flying ? 0.42 : 1;
-          const snap = clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
+          // A locally deployed warrior starts at depth=1 on the rear apron.
+          // Keep its real world position there so it appears at the bottom of
+          // the screen, marches a couple steps, then joins the painted rubble
+          // only as it reaches the mound. The old depth mapping snapped
+          // depth=1 straight to the field-side causeway.
+          const snap = ownExit
+            ? clamp((crest + 0.28 - razedLane.depth) / 0.28, 0, 1)
+            : clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
           const snapEase = snap * snap * (3 - 2 * snap);
           p = {
             x: lerp(p.x, road.x, snapEase),
@@ -1918,7 +1929,7 @@ export class Renderer {
             const archH = Math.max(8, base - apex);
             const maxRise = archH * 0.32;
             hover = -Math.min(maxRise, this.unit * 0.42) - Math.sin(this.time * 2.2 + u.id) * 2;
-            causewayScale = this.causewayPerspectiveScale(tunnel.depth, false);
+            causewayScale = this.causewayPerspectiveScale(tunnel.depth, false, 0);
             causewayHoverMul = 0.4;
             const roadX = this.worldToScreen(tunnel.laneX, 0).x;
             p = { x: lerp(p.x, roadX, clamp(tunnel.depth * 1.4, 0, 1)), y: p.y };

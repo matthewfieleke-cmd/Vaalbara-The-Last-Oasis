@@ -1289,25 +1289,14 @@ export class DuelStage {
     if (parade && (f.mode === 'idle' || f.mode === 'guard')) {
       const n = parade.length;
       const i = Math.floor(f.runPhase * 0.5) % n;
-      const frac = (f.runPhase * 0.5) - Math.floor(f.runPhase * 0.5);
-      // Narrow blend — full-cycle crossfade read as two scorpions.
-      const blendStart = 0.88;
-      const mix = frac < blendStart ? 0 : (() => {
-        const u = (frac - blendStart) / (1 - blendStart);
-        return u * u * (3 - 2 * u);
-      })();
-      return { a: parade[i], b: mix > 0.02 ? parade[(i + 1) % n] : null, mix };
+      // Scorpion must remain one readable fighter — never composite two
+      // full-body parade poses.
+      return { a: parade[i], b: null, mix: 0 };
     }
     if (parade && f.mode === 'dash') {
       const n = parade.length;
       const i = Math.floor(f.runPhase) % n;
-      const frac = f.runPhase - Math.floor(f.runPhase);
-      const blendStart = 0.88;
-      const mix = frac < blendStart ? 0 : (() => {
-        const u = (frac - blendStart) / (1 - blendStart);
-        return u * u * (3 - 2 * u);
-      })();
-      return { a: parade[i], b: mix > 0.02 ? parade[(i + 1) % n] : null, mix };
+      return { a: parade[i], b: null, mix: 0 };
     }
     if (f.mode === 'dash' || FLYERS.has(f.species)) {
       if (FLYERS.has(f.species) && f.mode !== 'dash') f.runPhase += 0.12;
@@ -1424,6 +1413,52 @@ export class DuelStage {
     };
     drawOne(frames.a, 1);
     if (frames.b && frames.mix > 0.02) drawOne(frames.b, frames.mix);
+
+    // Scorpion tail strike: the body remains squarely facing the opponent
+    // while the articulated tail reaches from behind, arches over the back,
+    // and drives its crystal stinger forward. This is intentionally separate
+    // from body facing — never turn the whole scorpion around to make its
+    // rear-mounted weapon connect.
+    if (f.species === 'scorpion' && f.mode === 'attack') {
+      const at = clamp01(f.animT / 0.8);
+      const reach = at < 0.72
+        ? easeOut(clamp01(at / 0.72))
+        : 1 - easeIn(clamp01((at - 0.72) / 0.28)) * 0.18;
+      const rearX = -f.face * targetH * 0.28;
+      const rearY = -targetH * 0.34;
+      const tipX = f.face * targetH * (0.18 + reach * 0.78);
+      const tipY = -targetH * (0.58 - reach * 0.12);
+      const controlX = -f.face * targetH * (0.15 - reach * 0.42);
+      const controlY = -targetH * (1.08 - reach * 0.2);
+      const segments = 9;
+      for (let i = 0; i < segments; i++) {
+        const q = i / (segments - 1);
+        const inv = 1 - q;
+        const sx = inv * inv * rearX + 2 * inv * q * controlX + q * q * tipX;
+        const sy = inv * inv * rearY + 2 * inv * q * controlY + q * q * tipY;
+        const radius = targetH * (0.085 - q * 0.035);
+        const grad = ctx.createRadialGradient(
+          sx - radius * 0.25, sy - radius * 0.3, radius * 0.1,
+          sx, sy, radius,
+        );
+        grad.addColorStop(0, i === segments - 1 ? '#d991ff' : '#4d3a72');
+        grad.addColorStop(0.48, i === segments - 1 ? '#8d31d2' : '#171326');
+        grad.addColorStop(1, '#05040a');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(sx, sy, radius, radius * 0.68, f.face * 0.18, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Faceted stinger points directly at the opponent.
+      const stinger = targetH * 0.18;
+      ctx.fillStyle = '#8f2de0';
+      ctx.beginPath();
+      ctx.moveTo(tipX + f.face * stinger, tipY);
+      ctx.lineTo(tipX - f.face * stinger * 0.18, tipY - stinger * 0.42);
+      ctx.lineTo(tipX - f.face * stinger * 0.08, tipY + stinger * 0.45);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
 
     // Guard stance: a glowing ward arc in front of the champion.

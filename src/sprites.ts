@@ -410,164 +410,6 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
   return cv;
 }
 
-/** Wolves intro: leg-gap halo cleanup only. Bighorn uses clearBighornHornCleft. */
-function polishIntroFrame(cv: HTMLCanvasElement, species: SpeciesId): void {
-  if (species !== 'wolves') return;
-  const cx = cv.getContext('2d', { willReadFrequently: true })!;
-  const { width: w, height: h } = cv;
-  const data = cx.getImageData(0, 0, w, h);
-  const px = data.data;
-  const paper = (i4: number): boolean => {
-    const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
-    const mn = Math.min(px[i4], px[i4 + 1], px[i4 + 2]);
-    return mx > 162 && mx - mn < 52;
-  };
-  const passes = 7;
-  for (let pass = 0; pass < passes; pass++) {
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const i = y * w + x;
-        const i4 = i * 4;
-        if (px[i4 + 3] === 0) continue;
-        const adjHole =
-          px[(i - 1) * 4 + 3] === 0 || px[(i + 1) * 4 + 3] === 0
-          || px[(i - w) * 4 + 3] === 0 || px[(i + w) * 4 + 3] === 0;
-        if (adjHole && paper(i4)) px[i4 + 3] = 0;
-      }
-    }
-  }
-  if (species === 'wolves') {
-    // Belly / chest paper block — the big white rectangle under the torso.
-    const by0 = Math.floor(h * 0.38);
-    const by1 = Math.floor(h * 0.72);
-    const bx0 = Math.floor(w * 0.22);
-    const bx1 = Math.floor(w * 0.78);
-    for (let y = by0; y < by1; y++) {
-      for (let x = bx0; x < bx1; x++) {
-        const i4 = (y * w + x) * 4;
-        if (!paper(i4) || px[i4 + 3] === 0) continue;
-        // Enclosed bright pocket: paper with fur/ink on multiple sides.
-        let fur = 0;
-        let hole = 0;
-        for (let dy = -4; dy <= 4; dy++) {
-          for (let dx = -4; dx <= 4; dx++) {
-            if (!dx && !dy) continue;
-            const nx = x + dx;
-            const ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            const ni = (ny * w + nx) * 4;
-            if (px[ni + 3] === 0) hole++;
-            else if (!paper(ni) && px[ni + 3] > 25) fur++;
-          }
-        }
-        if (fur >= 6 || (fur >= 3 && hole >= 2)) px[i4 + 3] = 0;
-      }
-    }
-    // Leg-gap pockets: white paper between haunches reads as a flash on cycle.
-    const y0 = Math.floor(h * 0.42);
-    const y1 = Math.floor(h * 0.92);
-    for (let y = y0; y < y1; y++) {
-      for (let x = Math.floor(w * 0.14); x < Math.floor(w * 0.86); x++) {
-        const i4 = (y * w + x) * 4;
-        if (!paper(i4) || px[i4 + 3] === 0) continue;
-        let ink = 0;
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0]] as const) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-          const ni = (ny * w + nx) * 4;
-          if (!paper(ni) && px[ni + 3] > 20) ink++;
-        }
-        if (ink >= 2) px[i4 + 3] = 0;
-      }
-    }
-    // Right-side leg gap (front/rear leg flash) — tighter band, all frames.
-    const rx0 = Math.floor(w * 0.52);
-    const rx1 = Math.floor(w * 0.78);
-    const ry0 = Math.floor(h * 0.52);
-    const ry1 = Math.floor(h * 0.82);
-    for (let y = ry0; y < ry1; y++) {
-      for (let x = rx0; x < rx1; x++) {
-        const i4 = (y * w + x) * 4;
-        if (!paper(i4) || px[i4 + 3] === 0) continue;
-        let fur = 0;
-        for (let dy = -3; dy <= 3; dy++) {
-          for (let dx = -3; dx <= 3; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = x + dx;
-            const ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            const ni = (ny * w + nx) * 4;
-            if (!paper(ni) && px[ni + 3] > 30) fur++;
-          }
-        }
-        if (fur >= 4) px[i4 + 3] = 0;
-      }
-    }
-  }
-  cx.putImageData(data, 0, 0);
-}
-
-/** Clear the paper pocket between the horns where the head meets the rack.
- *  Wool is one connected white mass, so flood-fill can't isolate the cleft —
- *  instead erase paper pixels flanked by dark horn ink on both sides. */
-function clearBighornHornCleft(cv: HTMLCanvasElement): void {
-  const cx = cv.getContext('2d', { willReadFrequently: true })!;
-  const { width: w, height: h } = cv;
-  const data = cx.getImageData(0, 0, w, h);
-  const px = data.data;
-  const paper = (i4: number): boolean => {
-    const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
-    const mn = Math.min(px[i4], px[i4 + 1], px[i4 + 2]);
-    // Slightly looser — catches warm-grey paper left in the horn cleft.
-    return mx > 155 && mx - mn < 55;
-  };
-  const hornInk = (i4: number): boolean =>
-    px[i4 + 3] > 35 && px[i4 + 1] > Math.max(px[i4], px[i4 + 2]) * 0.75;
-
-  const y0 = Math.floor(h * 0.01);
-  const y1 = Math.floor(h * 0.28);
-  const x0 = Math.floor(w * 0.24);
-  const x1 = Math.floor(w * 0.76);
-  const reach = Math.max(16, Math.round(w * 0.34));
-
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const i4 = (y * w + x) * 4;
-      if (px[i4 + 3] === 0) continue;
-      const isPaper = paper(i4);
-      // Also clear near-white wool-gap pixels that aren't pure paper.
-      const mx = Math.max(px[i4], px[i4 + 1], px[i4 + 2]);
-      const softGap = mx > 140 && px[i4 + 1] > px[i4] * 0.9;
-      if (!isPaper && !softGap) continue;
-      let hornL = false;
-      let hornR = false;
-      for (let dx = 1; dx <= reach; dx++) {
-        if (x - dx >= 0 && hornInk((y * w + x - dx) * 4)) hornL = true;
-        if (x + dx < w && hornInk((y * w + x + dx) * 4)) hornR = true;
-      }
-      if (hornL && hornR) px[i4 + 3] = 0;
-    }
-  }
-  // Second pass: any remaining bright pocket fully enclosed by horn/head ink.
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const i4 = (y * w + x) * 4;
-      if (px[i4 + 3] === 0 || !paper(i4)) continue;
-      let inkN = 0;
-      for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [-3, -1], [3, -1]] as const) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-        const ni = (ny * w + nx) * 4;
-        if (!paper(ni) && px[ni + 3] > 40) inkN++;
-      }
-      if (inkN >= 3) px[i4 + 3] = 0;
-    }
-  }
-  cx.putImageData(data, 0, 0);
-}
-
 function contentBounds(cv: HTMLCanvasElement): { minX: number; minY: number; maxX: number; maxY: number } | null {
   const cx = cv.getContext('2d', { willReadFrequently: true })!;
   const { width: w, height: h } = cv;
@@ -906,21 +748,18 @@ export function loadSprites(baseUrl = './art/'): Promise<void> {
             set.down = toFrameSprites(downFrames, 0.03, crossH(downFrames));
           }
           if (introImg) {
+            // prep-art converts the authored 4×2 source grid into one
+            // sanitized eight-panel horizontal strip.
             const introFrames = splitStrip(introImg, 8);
             // Intro frames are only ever shown alone (the cinematic), so
             // they normalise against their own tallest frame.
             set.intro = toFrameSprites(introFrames);
-            if (sp === 'bighorn') {
-              for (const s of set.intro) clearBighornHornCleft(s.canvas);
-            } else if (sp === 'wolves') {
-              for (const s of set.intro) polishIntroFrame(s.canvas, sp);
-            }
             if (sp === 'scorpion') {
               for (const s of set.intro) {
                 const b = contentBounds(s.canvas);
                 if (b) s.anchorX = (b.minX + b.maxX) / 2;
-                // Intro parade is painted facing LEFT; duel-attack is flipped RIGHT.
-                s.nativeFacing = -1;
+                // Intro art is painted facing RIGHT — the opponent for side 0.
+                s.nativeFacing = 1;
               }
             }
             if (sp === 'trex') {
