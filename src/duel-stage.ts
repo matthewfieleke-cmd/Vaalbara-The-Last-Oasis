@@ -762,10 +762,10 @@ export class DuelStage {
             });
           }
         }
-        // Wind-up: coil back and crouch (scorpion enters tail-strike pose).
+        // Wind-up: coil the body without playing any strike frames. The
+        // actual tail animation begins once, after the wind-up completes.
         if (t < wEnd) {
-          A.mode = scorpionTail && t >= pre + 0.18 ? 'attack' : 'idle';
-          if (scorpionTail && A.mode === 'attack') A.animT = t - (pre + 0.18);
+          A.mode = 'idle';
           A.x = -A.face * easeOut(ph(t, pre, wEnd)) * this.W * 0.05;
           A.squash = easeOut(ph(t, pre, wEnd)) * 0.12;
           D.guarding = !!ev.blocked;
