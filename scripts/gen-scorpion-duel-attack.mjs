@@ -134,7 +134,15 @@ async function main() {
     }).join('');
     const stingerX = offsetX + hinge.x + (350 - hinge.x) * p;
     const stingerY = hinge.y + (178 - hinge.y) * p;
-    const tailImages = p === 0 ? '' : `${chainImages}
+    const rootX = offsetX + hinge.x;
+    const controlX = rootX + (stingerX - rootX) * 0.48;
+    const controlY = Math.min(hinge.y, stingerY) - 8 * p;
+    const tailImages = p === 0 ? '' : `
+      <path d="M ${rootX} ${hinge.y} Q ${controlX} ${controlY} ${stingerX} ${stingerY}"
+        fill="none" stroke="#100d18" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M ${rootX} ${hinge.y} Q ${controlX} ${controlY} ${stingerX} ${stingerY}"
+        fill="none" stroke="#30243e" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+      ${chainImages}
       <g transform="translate(${stingerX} ${stingerY}) rotate(${-58 * p}) translate(${-stinger.w / 2} ${-stinger.h / 2})">
         <image href="${stinger.uri}" width="${stinger.w}" height="${stinger.h}"/>
       </g>`;

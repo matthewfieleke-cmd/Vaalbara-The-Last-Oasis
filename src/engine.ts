@@ -386,9 +386,13 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
         // the warrior marches a couple steps, then scrambles over the rubble
         // pile before entering the battlefield.
         sy = FORT_SPAWN_Y[input.player];
+        const threat = nearestHomeThreat(st, input.player);
         wp = {
-          x: pad.x + (WORLD_W / 2 - pad.x) * 0.42,
-          y: input.player === 0 ? 10.85 : 4.15,
+          // If the other gate is under attack, cross the safe rear apron
+          // first and emerge through that lane. Never march onto the main
+          // bridge only to double back toward a threat we already know about.
+          x: threat?.gate.x ?? pad.x + (WORLD_W / 2 - pad.x) * 0.42,
+          y: threat ? FORT_SPAWN_Y[input.player] : input.player === 0 ? 10.85 : 4.15,
         };
       } else {
         sy = FORT_SPAWN_Y[input.player];
@@ -497,12 +501,14 @@ export function isCombatVisible(st: GameState, u: UnitState): boolean {
   const lanes = FORT_LANES[owner];
   const wing = Math.abs(u.x - lanes[0]) < Math.abs(u.x - lanes[1]) ? 0 : 1;
   const gate = st.obelisks.find((o) => o.owner === owner && o.wing === wing);
-  if (!gate || gate.hp > 0) return false;
-
   if (Math.abs(u.x - lanes[wing]) > FORT_ARCH_HALF_W + 0.55) return false;
   const depth = owner === 0
     ? (u.y - FORT_WALL_FRONT[0]) / (FORT_SPAWN_Y[0] - FORT_WALL_FRONT[0])
     : (FORT_WALL_FRONT[1] - u.y) / (FORT_WALL_FRONT[1] - FORT_SPAWN_Y[1]);
+  if (!gate) return false;
+  // A warrior at a standing arch's field mouth is already visible to nearby
+  // defenders. Deep tunnel occupants remain concealed by the gatehouse.
+  if (gate.hp > 0) return depth <= 0.18;
   // depth=1 is the rear spawn apron; depth=0 is the field-side lip. A unit
   // becomes fightable only after it has crossed the mound and reached the
   // battlefield edge.
@@ -521,6 +527,30 @@ function visibleEnemies(st: GameState, u: RuntimeUnit): UnitState[] {
   });
 }
 
+/** Nearest enemy actively pressuring this owner's fortress. This is used by
+ *  fresh defenders before generic lane-push goals, so a known home threat can
+ *  never be ignored in favour of marching toward the central battlefield. */
+function nearestHomeThreat(
+  st: GameState,
+  owner: PlayerId,
+): { enemy: UnitState; gate: ObeliskState; d2: number } | null {
+  let best: { enemy: UnitState; gate: ObeliskState; d2: number } | null = null;
+  const gates = st.obelisks.filter((o) => o.owner === owner);
+  for (const enemy of st.units) {
+    if (enemy.hp <= 0 || enemy.owner === owner) continue;
+    for (const gate of gates) {
+      const d2 = dist2(enemy.x, enemy.y, gate.x, gate.y);
+      if (d2 > 2.8 * 2.8 || (best && d2 >= best.d2)) continue;
+      best = { enemy, gate, d2 };
+    }
+  }
+  return best;
+}
+
+function onHomeSide(u: UnitState): boolean {
+  return u.owner === 0 ? u.y >= RIVER_BANDS[0].y0 : u.y <= RIVER_BANDS[1].y1;
+}
+
 function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
   const enemies = visibleEnemies(st, u).filter((e) => isCombatVisible(st, e));
   if (enemies.length === 0) return null;
@@ -531,6 +561,12 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
       const cs = speciesDef(cur.species).stats!;
       if (!(cs.flying && !u.stats.canHitAir && !u.stats.flying)) return cur;
     }
+  }
+  // Home-side defenders deal with warriors at either friendly gate before
+  // resuming their central push.
+  if (st.phase === 'basalt' && onHomeSide(u)) {
+    const threat = nearestHomeThreat(st, u.owner);
+    if (threat && enemies.some((e) => e.id === threat.enemy.id)) return threat.enemy;
   }
   // Eagle hunts the weakest visible heart. Everyone else hunts the NEAREST
   // visible enemy anywhere on the field.
@@ -913,7 +949,13 @@ function steerStep(
   // Route via corridors when the straight line to the goal is blocked ahead.
   let aimX = goalX;
   let aimY = goalY;
-  if (!u.stats.flying) {
+  const flyTunnel = u.stats.flying ? flyerTunnelLane(u.x, u.y) : null;
+  if (flyTunnel) {
+    // Flyers leave and enter a fortress along the arch centreline. Their
+    // target may be far off-axis, but lateral steering begins only after the
+    // whole body has cleared the tunnel mouth.
+    aimX = flyTunnel.laneX;
+  } else if (!u.stats.flying) {
     const d = Math.max(0.001, dist(u.x, u.y, goalX, goalY));
     const probe = Math.min(d, 1.4);
     const lx = u.x + ((goalX - u.x) / d) * probe;
@@ -969,6 +1011,19 @@ function steerStep(
   return false;
 }
 
+/** Extended tunnel zone for flyers. The 0.55-unit field-side clearance keeps
+ *  the full swarm sprite inside the opening until its rear edge clears stone. */
+function flyerTunnelLane(x: number, y: number): { owner: PlayerId; laneX: number } | null {
+  let owner: PlayerId | null = null;
+  if (y > FORT_WALL_FRONT[0] - 0.55) owner = 0;
+  else if (y < FORT_WALL_FRONT[1] + 0.55) owner = 1;
+  if (owner === null) return null;
+  const lanes = FORT_LANES[owner];
+  const laneX = Math.abs(x - lanes[0]) < Math.abs(x - lanes[1]) ? lanes[0] : lanes[1];
+  if (Math.abs(x - laneX) > FORT_ARCH_HALF_W + 0.9) return null;
+  return { owner, laneX };
+}
+
 /** Lane discipline: while a ground unit is inside a lava-river band or a
  *  fortress arch corridor, clamp its sideways position to the corridor's
  *  centre ± (corridor half-width − the unit's OWN radius). A T-Rex is nearly
@@ -979,7 +1034,11 @@ function laneDiscipline(st: GameState): void {
   for (const raw of st.units) {
     if (raw.hp <= 0) continue;
     const stats = speciesDef(raw.species).stats!;
-    if (stats.flying) continue;
+    if (stats.flying) {
+      const tunnel = flyerTunnelLane(raw.x, raw.y);
+      if (tunnel) raw.x = tunnel.laneX;
+      continue;
+    }
     let lanes: readonly [number, number] | null = null;
     let halfW = 0;
     if (raw.y > FORT_WALL_FRONT[0]) {
@@ -1102,7 +1161,19 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
 
   let goal: Vec2;
   if (target) {
-    goal = { x: target.x, y: target.y };
+    // A defender still behind its own wall must switch lanes on the safe rear
+    // apron, then pass through the threatened tunnel. A direct diagonal goal
+    // would route it out over the razed bridge and back across the battlefield.
+    const behindOwnWall = u.owner === 0
+      ? u.y > FORT_WALL_FRONT[0] + 0.05
+      : u.y < FORT_WALL_FRONT[1] - 0.05;
+    const lanes = FORT_LANES[u.owner];
+    const targetLane = Math.abs(target.x - lanes[0]) < Math.abs(target.x - lanes[1])
+      ? lanes[0]
+      : lanes[1];
+    goal = behindOwnWall && Math.abs(u.x - targetLane) > FORT_ARCH_HALF_W * 0.5
+      ? { x: targetLane, y: FORT_SPAWN_Y[u.owner] }
+      : { x: target.x, y: target.y };
   } else if (u.waypoint && dist2(u.x, u.y, u.waypoint.x, u.waypoint.y) > 0.16) {
     goal = u.waypoint;
   } else {
