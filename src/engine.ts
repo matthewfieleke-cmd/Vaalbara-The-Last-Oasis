@@ -384,16 +384,11 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
       if (ownRazed) {
         // Own gate down: materialise on the rear apron (NOT on the field) so
         // the warrior marches a couple steps, then scrambles over the rubble
-        // pile before entering the battlefield.
+        // pile before entering the battlefield. It stays IN ITS LANE for the
+        // whole crossing — threats at the other gate are engaged only after
+        // it has climbed over the mound, from the battlefield side.
         sy = FORT_SPAWN_Y[input.player];
-        const threat = nearestHomeThreat(st, input.player);
-        wp = {
-          // If the other gate is under attack, cross the safe rear apron
-          // first and emerge through that lane. Never march onto the main
-          // bridge only to double back toward a threat we already know about.
-          x: threat?.gate.x ?? pad.x + (WORLD_W / 2 - pad.x) * 0.42,
-          y: threat ? FORT_SPAWN_Y[input.player] : input.player === 0 ? 10.85 : 4.15,
-        };
+        wp = { x: pad.x, y: input.player === 0 ? 10.85 : 4.15 };
       } else {
         sy = FORT_SPAWN_Y[input.player];
         // March to the CENTRAL plateau (pulled toward mid-field from the
@@ -950,20 +945,22 @@ function steerStep(
   let aimX = goalX;
   let aimY = goalY;
   const flyTunnel = u.stats.flying ? flyerTunnelLane(u.x, u.y) : null;
-  const ownRearTraverse = !u.stats.flying && st.phase === 'basalt' && (
-    (u.owner === 0
-      && u.y >= FORT_SPAWN_Y[0] - 0.38
-      && goalY >= FORT_SPAWN_Y[0] - 0.38)
-    || (u.owner === 1
-      && u.y <= FORT_SPAWN_Y[1] + 0.38
-      && goalY <= FORT_SPAWN_Y[1] + 0.38)
-  );
   if (flyTunnel) {
     // Flyers leave and enter a fortress along the arch centreline. Their
     // target may be far off-axis, but lateral steering begins only after the
     // whole body has cleared the tunnel mouth.
     aimX = flyTunnel.laneX;
-  } else if (!u.stats.flying && !ownRearTraverse) {
+    // Unless the goal itself sits inside THIS tunnel lane, keep flying
+    // toward the field-side exit. An off-lane goal at tunnel height would
+    // otherwise cancel against the centreline clamp and freeze the flyer.
+    const goalInLane = Math.abs(goalX - flyTunnel.laneX) <= FORT_ARCH_HALF_W + 0.9;
+    const goalInZone = flyTunnel.owner === 0
+      ? goalY > FORT_WALL_FRONT[0] - 0.55
+      : goalY < FORT_WALL_FRONT[1] + 0.55;
+    if (!(goalInLane && goalInZone)) {
+      aimY = flyTunnel.owner === 0 ? FORT_WALL_FRONT[0] - 1.0 : FORT_WALL_FRONT[1] + 1.0;
+    }
+  } else if (!u.stats.flying) {
     const d = Math.max(0.001, dist(u.x, u.y, goalX, goalY));
     const probe = Math.min(d, 1.4);
     const lx = u.x + ((goalX - u.x) / d) * probe;
@@ -986,18 +983,7 @@ function steerStep(
     const nx = u.x + mx;
     const ny = u.y + my;
     if (!inWorld(nx, ny)) return false;
-    if (!u.stats.flying && !groundOpen(st, nx, ny)) {
-      // The painted rear apron spans behind both tunnel mouths, but the
-      // fortress nav mask intentionally blocks the facade as one silhouette.
-      // Allow only a unit defending its OWN fortress to traverse that narrow
-      // rear strip laterally; all wall, river, and battlefield collision
-      // remains authoritative everywhere else.
-      const ownRearApron = st.phase === 'basalt' && (
-        (u.owner === 0 && u.y >= FORT_SPAWN_Y[0] - 0.38 && ny >= FORT_SPAWN_Y[0] - 0.38)
-        || (u.owner === 1 && u.y <= FORT_SPAWN_Y[1] + 0.38 && ny <= FORT_SPAWN_Y[1] + 0.38)
-      );
-      if (!ownRearApron) return false;
-    }
+    if (!u.stats.flying && !groundOpen(st, nx, ny)) return false;
     u.x = nx;
     u.y = ny;
     return true;
@@ -1058,10 +1044,6 @@ function laneDiscipline(st: GameState): void {
       if (tunnel) raw.x = tunnel.laneX;
       continue;
     }
-    const ownRearApron =
-      (raw.owner === 0 && raw.y >= FORT_SPAWN_Y[0] - 0.38)
-      || (raw.owner === 1 && raw.y <= FORT_SPAWN_Y[1] + 0.38);
-    if (ownRearApron) continue;
     let lanes: readonly [number, number] | null = null;
     let halfW = 0;
     if (raw.y > FORT_WALL_FRONT[0]) {
@@ -1184,19 +1166,24 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
 
   let goal: Vec2;
   if (target) {
-    // A defender still behind its own wall must switch lanes on the safe rear
-    // apron, then pass through the threatened tunnel. A direct diagonal goal
-    // would route it out over the razed bridge and back across the battlefield.
+    // Lane discipline: a warrior still behind its own wall FINISHES ITS OWN
+    // LANE first — through the tunnel or up over the rubble mound — and only
+    // then crosses toward enemies in other lanes from the battlefield side.
     const behindOwnWall = u.owner === 0
       ? u.y > FORT_WALL_FRONT[0] + 0.05
       : u.y < FORT_WALL_FRONT[1] - 0.05;
-    const lanes = FORT_LANES[u.owner];
-    const targetLane = Math.abs(target.x - lanes[0]) < Math.abs(target.x - lanes[1])
-      ? lanes[0]
-      : lanes[1];
-    goal = behindOwnWall && Math.abs(u.x - targetLane) > FORT_ARCH_HALF_W * 0.5
-      ? { x: targetLane, y: FORT_SPAWN_Y[u.owner] }
-      : { x: target.x, y: target.y };
+    if (behindOwnWall) {
+      const lanes = FORT_LANES[u.owner];
+      const ownLane = Math.abs(u.x - lanes[0]) < Math.abs(u.x - lanes[1])
+        ? lanes[0]
+        : lanes[1];
+      goal = {
+        x: ownLane,
+        y: u.owner === 0 ? FORT_WALL_FRONT[0] - 0.5 : FORT_WALL_FRONT[1] + 0.5,
+      };
+    } else {
+      goal = { x: target.x, y: target.y };
+    }
   } else if (u.waypoint && dist2(u.x, u.y, u.waypoint.x, u.waypoint.y) > 0.16) {
     goal = u.waypoint;
   } else {

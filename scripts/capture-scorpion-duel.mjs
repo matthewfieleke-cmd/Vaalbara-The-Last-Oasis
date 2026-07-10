@@ -45,20 +45,21 @@ for (let round = 0; round < 300; round++) {
   const special = page.locator('.duel-btn.special.ready');
   if ((await special.count()) > 0 && !specialDone) {
     await special.click();
-    // Long wind-up (1.35s) + strike arc — sample wind-up, contact, recoil.
-    await page.waitForTimeout(900);
+    // 1.35s charge + 0.5s wind-up + 0.44s tail sweep: contact lands ~2.2s in.
+    await page.waitForTimeout(1600);
     await page.screenshot({ path: `${DIR}/02-venom-windup.png` });
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(550);
     await page.screenshot({ path: `${DIR}/03-venom-contact.png` });
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(400);
     await page.screenshot({ path: `${DIR}/04-venom-recoil.png` });
     specialDone = true;
   } else {
     await page.locator('.duel-btn.strike').click();
     if (normalShots < 2) {
-      await page.waitForTimeout(650);
+      // 0.5s wind-up + 0.44s sweep: mid-sweep ~0.72s, contact hold ~0.9s.
+      await page.waitForTimeout(720);
       await page.screenshot({ path: `${DIR}/05-strike-mid-${normalShots}.png` });
-      await page.waitForTimeout(350);
+      await page.waitForTimeout(180);
       await page.screenshot({ path: `${DIR}/06-strike-contact-${normalShots}.png` });
       normalShots++;
     }
