@@ -1,6 +1,6 @@
 /* Build scorpion-duel-attack.png — 6-frame forward tail-strike strip for Duels.
- * Body style from intro parade; each panel flipped so the scorpion faces
- * RIGHT (duel convention) with the tail arcing forward toward +X.
+ * The intro source already faces RIGHT (duel side-0 convention): keep the
+ * body facing the opponent while its tail arcs forward from behind.
  *
  *   node scripts/gen-scorpion-duel-attack.mjs
  */
@@ -18,13 +18,17 @@ async function loadRaw(path) {
   return { data, w: info.width, h: info.height };
 }
 
-function slicePanel(data, w, h, idx, total) {
-  const pw = Math.floor(w / total);
-  const x0 = idx * pw;
-  const out = Buffer.alloc(pw * h * 4);
-  for (let y = 0; y < h; y++) {
+function slicePanel(data, w, h, idx) {
+  const cols = 4;
+  const rows = 2;
+  const pw = Math.floor(w / cols);
+  const ph = Math.floor(h / rows);
+  const x0 = (idx % cols) * pw;
+  const y0 = Math.floor(idx / cols) * ph;
+  const out = Buffer.alloc(pw * ph * 4);
+  for (let y = 0; y < ph; y++) {
     for (let x = 0; x < pw; x++) {
-      const si = (y * w + x0 + x) * 4;
+      const si = ((y0 + y) * w + x0 + x) * 4;
       const di = (y * pw + x) * 4;
       out[di] = data[si];
       out[di + 1] = data[si + 1];
@@ -32,11 +36,7 @@ function slicePanel(data, w, h, idx, total) {
       out[di + 3] = data[si + 3];
     }
   }
-  return { data: out, w: pw, h };
-}
-
-async function flipH(buf, w, h) {
-  return sharp(buf, { raw: { width: w, height: h, channels: 4 } }).flop().png().toBuffer();
+  return { data: out, w: pw, h: ph };
 }
 
 async function main() {
@@ -44,10 +44,10 @@ async function main() {
   const panels = [];
   for (let i = 0; i < PANELS; i++) {
     const idx = FRAME_IDX[i] ?? i;
-    const { data, w, h } = slicePanel(intro.data, intro.w, intro.h, idx, 8);
-    const flipped = await flipH(data, w, h);
-    const meta = await sharp(flipped).metadata();
-    panels.push({ buf: flipped, w: meta.width, h: meta.height });
+    const { data, w, h } = slicePanel(intro.data, intro.w, intro.h, idx);
+    const panel = await sharp(data, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+    const meta = await sharp(panel).metadata();
+    panels.push({ buf: panel, w: meta.width, h: meta.height });
   }
 
   const maxH = Math.max(...panels.map((p) => p.h));

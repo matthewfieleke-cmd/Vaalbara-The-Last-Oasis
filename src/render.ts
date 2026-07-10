@@ -1895,7 +1895,14 @@ export class Renderer {
           const ownExit = razedLane.owner === this.localSeat && u.owner === this.localSeat;
           causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit);
           causewayHoverMul = flying ? 0.42 : 1;
-          const snap = clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
+          // A locally deployed warrior starts at depth=1 on the rear apron.
+          // Keep its real world position there so it appears at the bottom of
+          // the screen, marches a couple steps, then joins the painted rubble
+          // only as it reaches the mound. The old depth mapping snapped
+          // depth=1 straight to the field-side causeway.
+          const snap = ownExit
+            ? clamp((crest + 0.28 - razedLane.depth) / 0.28, 0, 1)
+            : clamp((razedLane.depth - crest * 0.55) / Math.max(0.08, 1 - crest * 0.55), 0, 1);
           const snapEase = snap * snap * (3 - 2 * snap);
           p = {
             x: lerp(p.x, road.x, snapEase),
