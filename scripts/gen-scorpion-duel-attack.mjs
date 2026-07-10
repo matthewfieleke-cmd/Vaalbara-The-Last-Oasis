@@ -105,9 +105,57 @@ async function main() {
     }
   }
   // The polygon cut leaves a hair-thin anti-aliased fringe of the tail's
-  // silhouette on the body. Those slivers are disconnected from the body
-  // once the tail is lifted out, so keep only the LARGEST connected non-paper
-  // component (the body with legs and claws) and wash everything else white.
+  // silhouette on the body (pale blend pixels hugging the cut line). Erode
+  // it: any light pixel bordering the cleared/paper region is washed white,
+  // repeated a few passes so the whole halo lifts while dark body ink stays.
+  {
+    // Only the band within a few pixels of the cut may erode — the body's
+    // own anti-aliased outline (crystal claws especially) must stay intact.
+    const nearTail = new Uint8Array(w * h);
+    const R = 4;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!insidePoly(tailPoly, x, y)) continue;
+        for (let dy = -R; dy <= R; dy++) {
+          for (let dx = -R; dx <= R; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx >= 0 && ny >= 0 && nx < w && ny < h) nearTail[ny * w + nx] = 1;
+          }
+        }
+      }
+    }
+    const isBg = (i) => {
+      const mx = Math.max(body[i], body[i + 1], body[i + 2]);
+      const mn = Math.min(body[i], body[i + 1], body[i + 2]);
+      return mx > 190 && mx - mn < 34;
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      const clear = [];
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          if (!nearTail[y * w + x]) continue;
+          const i = (y * w + x) * 4;
+          if (isBg(i)) continue;
+          if (Math.max(body[i], body[i + 1], body[i + 2]) <= 95) continue;
+          let bg = 0;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            if (isBg(((y + dy) * w + x + dx) * 4)) bg++;
+          }
+          if (bg >= 1) clear.push(i);
+        }
+      }
+      for (const i of clear) {
+        body[i] = 255;
+        body[i + 1] = 255;
+        body[i + 2] = 255;
+        body[i + 3] = 255;
+      }
+    }
+  }
+  // Any fringe still disconnected from the body once the tail is lifted out
+  // is removed by keeping only the LARGEST connected non-paper component
+  // (the body with legs and claws) and washing everything else white.
   {
     const label = new Int32Array(w * h).fill(-1);
     const sizes = [];
