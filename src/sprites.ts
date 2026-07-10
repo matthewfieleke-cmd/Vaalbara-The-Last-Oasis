@@ -170,6 +170,13 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
   const data = cx.getImageData(0, 0, w, h);
   const px = data.data;
 
+  const isMagenta = (i: number): boolean => {
+    const r = px[i];
+    const g = px[i + 1];
+    const b = px[i + 2];
+    return r > 150 && b > 150 && g < r * 0.7 && g < b * 0.7;
+  };
+
   const bgLike = (i: number): boolean => {
     const r = px[i];
     const g = px[i + 1];
@@ -178,8 +185,7 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
     const mn = Math.min(r, g, b);
     // bright + low chroma, OR the magenta separator line
     const grey = mx > 196 && mx - mn < 26;
-    const magenta = r > 150 && b > 150 && g < r * 0.7 && g < b * 0.7;
-    return grey || magenta;
+    return grey || isMagenta(i);
   };
 
   // The propagation gate needs a per-image reference: animation sheets sit
@@ -214,8 +220,7 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
     const mx = Math.max(r, g, b);
     const mn = Math.min(r, g, b);
     const white = mn > pureFloor && mx - mn < 10;
-    const magenta = r > 150 && b > 150 && g < r * 0.7 && g < b * 0.7;
-    return white || magenta;
+    return white || isMagenta(i);
   };
 
   const bg = new Uint8Array(w * h);
@@ -290,7 +295,10 @@ function keyBackground(cv: HTMLCanvasElement, opts?: { skipPockets?: boolean }):
     if (!grew) break;
   }
   for (let i = 0; i < w * h; i++) {
-    if (reach[i] === 1) px[i * 4 + 3] = 0;
+    // Separator magenta is also our explicit authoring marker for enclosed
+    // holes (wolf belly, Bighorn horn cleft). It is always background even
+    // when no flood-fill route connects it to the panel border.
+    if (reach[i] === 1 || isMagenta(i * 4)) px[i * 4 + 3] = 0;
   }
 
   // ENCLOSED PAPER POCKETS — legs crossing under a belly can seal a pocket

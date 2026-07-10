@@ -108,8 +108,8 @@ export const OASIS_CARDS: CardDef[] = [
     hue: 160,
   },
   {
-    id: 'beetles', name: 'Bombardier Beetles', title: 'Chemical Artillery', cost: 3, kind: 'unit', species: 'beetles',
-    stats: U({ hp: 140, dmg: 25, speed: 0.14, atkCd: 8, range: 3.2, ranged: true, canHitAir: true, radius: 0.36 }),
+    id: 'beetles', name: 'Bombardier Beetles', title: 'Chemical Artillery', cost: 4, kind: 'unit', species: 'beetles',
+    stats: U({ hp: 140, dmg: 20, speed: 0.14, atkCd: 8, range: 3.2, ranged: true, canHitAir: true, radius: 0.36 }),
     blurb: 'Anti-air artillery. Fires a visible arc of boiling acid that bursts into a caustic, slowing pool.',
     hue: 130,
   },

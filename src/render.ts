@@ -1932,7 +1932,7 @@ export class Renderer {
             causewayScale = this.causewayPerspectiveScale(tunnel.depth, false, 0);
             causewayHoverMul = 0.4;
             const roadX = this.worldToScreen(tunnel.laneX, 0).x;
-            p = { x: lerp(p.x, roadX, clamp(tunnel.depth * 1.4, 0, 1)), y: p.y };
+            p = { x: roadX, y: p.y };
           }
           ctx.save();
           ctx.beginPath();
@@ -1949,7 +1949,7 @@ export class Renderer {
             hover = -Math.min(maxRise, this.unit * 0.42) - Math.sin(this.time * 2.2 + u.id) * 2;
             causewayHoverMul = 0.4;
             const roadX = this.worldToScreen(tunnel.laneX, 0).x;
-            p = { x: lerp(p.x, roadX, clamp(tunnel.depth * 1.4, 0, 1)), y: p.y };
+            p = { x: roadX, y: p.y };
           }
           if (p.y <= mouthBase + this.unit * 0.05) {
             ctx.save();
