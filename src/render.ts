@@ -952,9 +952,13 @@ export class Renderer {
 
   /** Depth-based scale on a razed lane: 40% at spawn → 100% at the wall,
    *  stepped 40-50-60-70-80-90-100 with smooth ramps between each band. */
-  private causewayPerspectiveScale(depth: number, ownExitNoShrink: boolean): number {
+  private causewayPerspectiveScale(depth: number, ownExitNoShrink: boolean, crestDepth: number): number {
     if (ownExitNoShrink) return 1;
-    const d = clamp(depth, 0, 1) * 6;
+    // depth=1 is the distant fortress spawn; depth falls as the warrior
+    // approaches us. Grow from 40% in the distance to full size exactly at
+    // the rubble crest, then hold full size over the mound.
+    const progress = clamp((1 - depth) / Math.max(0.08, 1 - crestDepth), 0, 1);
+    const d = progress * 6;
     const step = Math.min(5, Math.floor(d));
     const t = d - step;
     const scales = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
@@ -1893,7 +1897,7 @@ export class Renderer {
         if (lay) {
           const road = this.causewayAt(lay, razedLane.laneX, razedLane.depth);
           const ownExit = razedLane.owner === this.localSeat && u.owner === this.localSeat;
-          causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit);
+          causewayScale = this.causewayPerspectiveScale(razedLane.depth, ownExit, crest);
           causewayHoverMul = flying ? 0.42 : 1;
           // A locally deployed warrior starts at depth=1 on the rear apron.
           // Keep its real world position there so it appears at the bottom of
