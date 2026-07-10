@@ -65,6 +65,15 @@ assert(
   `defender incorrectly entered the main bridge before changing lanes (y=${defender.y})`,
 );
 assert.equal(defender.targetId, invader.id);
+for (let i = 0; i < 22; i++) advanceTick(defense, []);
+assert(
+  Math.abs(defender.x - FORT_LANES[0][1]) < 0.35,
+  `defender failed to enter through the threatened gate lane (x=${defender.x})`,
+);
+assert(
+  defender.y > 11.5,
+  `defender detoured to the central battle plane (y=${defender.y})`,
+);
 
 // A flyer with an off-axis battlefield waypoint remains centered until its
 // complete body clears the intact tunnel mouth.
