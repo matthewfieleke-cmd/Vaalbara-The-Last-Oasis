@@ -43,18 +43,18 @@ async function main() {
   const source = slicePanel(intro.data, intro.w, intro.h, 0);
   const { data, w, h } = source;
 
-  // Remove only the distal tail. The proximal root remains painted into the
-  // body; actual armour/stinger crops are then articulated from that hinge.
-  const tailPoly = [
-    [18, 214], [18, 112], [42, 88], [92, 92], [148, 108],
-    [207, 138], [214, 241], [174, 255], [128, 214], [75, 204],
-    [48, 221],
+  // Keep the entire curled tail attached to the body and remove only its
+  // original stinger. The strike extends from the final attached armour
+  // plate, so there is never a floating tail section or a broken root.
+  const stingerPoly = [
+    [126, 132], [181, 134], [211, 163], [215, 234],
+    [184, 252], [142, 226], [126, 184],
   ];
   const inside = (x, y) => {
     let hit = false;
-    for (let i = 0, j = tailPoly.length - 1; i < tailPoly.length; j = i++) {
-      const [xi, yi] = tailPoly[i];
-      const [xj, yj] = tailPoly[j];
+    for (let i = 0, j = stingerPoly.length - 1; i < stingerPoly.length; j = i++) {
+      const [xi, yi] = stingerPoly[i];
+      const [xj, yj] = stingerPoly[j];
       if (((yi > y) !== (yj > y))
         && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
     }
@@ -65,6 +65,9 @@ async function main() {
     const mn = Math.min(data[i], data[i + 1], data[i + 2]);
     return mx > 190 && mx - mn < 34;
   };
+  const idlePng = await sharp(data, {
+    raw: { width: w, height: h, channels: 4 },
+  }).png().toBuffer();
   const body = Buffer.from(data);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -78,20 +81,10 @@ async function main() {
     }
   }
   const bodyPng = await sharp(body, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+  const idleUri = `data:image/png;base64,${idlePng.toString('base64')}`;
   const bodyUri = `data:image/png;base64,${bodyPng.toString('base64')}`;
 
-  const defs = [
-    { x: 27, y: 120, w: 55, h: 85, tx: 76, ty: 178, rot: -18 },
-    { x: 45, y: 94, w: 75, h: 65, tx: 105, ty: 155, rot: -10 },
-    { x: 85, y: 94, w: 72, h: 62, tx: 138, ty: 140, rot: -4 },
-    { x: 85, y: 94, w: 72, h: 62, tx: 172, ty: 132, rot: 2 },
-    { x: 85, y: 94, w: 72, h: 62, tx: 207, ty: 129, rot: 7 },
-    { x: 85, y: 94, w: 72, h: 62, tx: 242, ty: 132, rot: 12 },
-    { x: 124, y: 111, w: 70, h: 68, tx: 275, ty: 140, rot: 20 },
-    { x: 130, y: 140, w: 88, h: 110, tx: 320, ty: 157, rot: -56 },
-  ];
-  const pieces = [];
-  for (const def of defs) {
+  const cropPiece = async (def) => {
     const buf = Buffer.alloc(def.w * def.h * 4);
     for (let y = 0; y < def.h; y++) {
       for (let x = 0; x < def.w; x++) {
@@ -108,30 +101,47 @@ async function main() {
     const png = await sharp(buf, {
       raw: { width: def.w, height: def.h, channels: 4 },
     }).png().toBuffer();
-    pieces.push({ ...def, uri: `data:image/png;base64,${png.toString('base64')}` });
-  }
+    return { ...def, uri: `data:image/png;base64,${png.toString('base64')}` };
+  };
+  // Both pieces are directly sampled from the source Scorpion: one armour
+  // plate for the articulated chain and its original crystal stinger.
+  const armour = await cropPiece({ x: 80, y: 96, w: 46, h: 58 });
+  const stinger = await cropPiece({ x: 126, y: 132, w: 92, h: 122 });
+  const hinge = { x: 145, y: 139 };
+  const chain = [
+    { x: 148, y: 140, rot: -8 },
+    { x: 180, y: 139, rot: -3 },
+    { x: 212, y: 141, rot: 2 },
+    { x: 244, y: 146, rot: 7 },
+    { x: 276, y: 153, rot: 12 },
+    { x: 308, y: 163, rot: 18 },
+  ];
 
-  // Coil → lift → extend → full contact → recoil.
-  const progress = [0, 0.16, 0.4, 0.72, 1, 0.28];
+  // Exactly one extension. The final panel is fully reset, preventing a
+  // partial second strike during recoil.
+  const progress = [0, 0.2, 0.48, 0.78, 1, 0];
   const canvasW = 560;
   const offsetX = 18;
   const panels = [];
   for (let i = 0; i < PANELS; i++) {
     const p = progress[i] * progress[i] * (3 - 2 * progress[i]);
-    const tailImages = pieces.map((piece) => {
-      const ox = offsetX + piece.x + piece.w / 2;
-      const oy = piece.y + piece.h / 2;
-      const tx = ox + (piece.tx - ox) * p;
-      const ty = oy + (piece.ty - oy) * p;
-      const rot = piece.rot * p;
-      return `<g transform="translate(${tx} ${ty}) rotate(${rot}) translate(${-piece.w / 2} ${-piece.h / 2})">
-        <image href="${piece.uri}" width="${piece.w}" height="${piece.h}"/>
+    const chainImages = chain.map((target) => {
+      const tx = offsetX + hinge.x + (target.x - hinge.x) * p;
+      const ty = hinge.y + (target.y - hinge.y) * p;
+      return `<g transform="translate(${tx} ${ty}) rotate(${target.rot * p}) translate(${-armour.w / 2} ${-armour.h / 2})">
+        <image href="${armour.uri}" width="${armour.w}" height="${armour.h}"/>
       </g>`;
     }).join('');
+    const stingerX = offsetX + hinge.x + (350 - hinge.x) * p;
+    const stingerY = hinge.y + (178 - hinge.y) * p;
+    const tailImages = p === 0 ? '' : `${chainImages}
+      <g transform="translate(${stingerX} ${stingerY}) rotate(${-58 * p}) translate(${-stinger.w / 2} ${-stinger.h / 2})">
+        <image href="${stinger.uri}" width="${stinger.w}" height="${stinger.h}"/>
+      </g>`;
     const svg = Buffer.from(`
       <svg width="${canvasW}" height="${h}" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="white"/>
-        <image href="${bodyUri}" x="${offsetX}" y="0" width="${w}" height="${h}"/>
+        <image href="${p === 0 ? idleUri : bodyUri}" x="${offsetX}" y="0" width="${w}" height="${h}"/>
         ${tailImages}
       </svg>`);
     const panel = await sharp(svg).png().toBuffer();
