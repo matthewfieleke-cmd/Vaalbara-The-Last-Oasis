@@ -292,8 +292,15 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           };
           // Duels-style non-dipping crossfade: base frame fully opaque, next
           // frame fading in OVER it — coverage never drops, so no flicker.
+          // Bighorn: narrow blend window so overlapping forelegs never double.
+          const blendStart = hero.species === 'bighorn' ? 0.88 : 0;
+          const blendMix = hero.species === 'bighorn' && mix < blendStart
+            ? 0
+            : hero.species === 'bighorn'
+              ? ((mix - blendStart) / (1 - blendStart)) ** 2 * (3 - 2 * ((mix - blendStart) / (1 - blendStart)))
+              : mix;
           drawHero(frames[i0], 1);
-          if (mix > 0.02) drawHero(frames[(i0 + 1) % n], mix);
+          if (blendMix > 0.02) drawHero(frames[(i0 + 1) % n], blendMix);
         } else {
           ctx.translate(cx, cy);
           drawSpecies(ctx, hero.species, W * 0.16, t);

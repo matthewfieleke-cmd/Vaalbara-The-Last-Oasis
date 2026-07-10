@@ -360,10 +360,11 @@ export function GameScreen({
     setSelectedCard((c) => {
       const next = c === card ? null : card;
       if (rendererRef.current) {
-        rendererRef.current.telegraph.active = next === LAVA_RAIN_CARD;
-        rendererRef.current.telegraph.kind = 'lavarain';
+        // Telegraph only appears once the finger moves — never at (0,0) on select.
+        rendererRef.current.telegraph.active = false;
+        rendererRef.current.telegraph.kind = next === LAVA_RAIN_CARD ? 'lavarain' : 'spell';
       }
-      if (next === LAVA_RAIN_CARD) showToast('Tap anywhere in the arena — sky falls in 1.2 s');
+      if (next === LAVA_RAIN_CARD) showToast('Drag over the arena — sky falls where you release');
       return next;
     });
     playUi('tap');
@@ -502,7 +503,7 @@ export function GameScreen({
   );
 }
 
-/** Procedural art for the Lava Rain spell card. */
+/** Procedural art for the Lava Rain spell card — volcanic desolation, brutal. */
 function LavaRainArt({ hue }: { hue: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -522,78 +523,91 @@ function LavaRainArt({ hue }: { hue: number }) {
         canvas.width = W;
         canvas.height = H;
       }
-      // Ash sky deepening toward the horizon.
+      // Ash-choked sky — near-black, no soft gradients.
       const sky = ctx.createLinearGradient(0, 0, 0, H);
-      sky.addColorStop(0, `hsl(${hue - 8} 42% 14%)`);
-      sky.addColorStop(0.45, `hsl(${hue} 55% 10%)`);
-      sky.addColorStop(1, `hsl(${hue + 6} 48% 5%)`);
+      sky.addColorStop(0, `hsl(${hue - 12} 18% 4%)`);
+      sky.addColorStop(0.55, `hsl(${hue - 6} 28% 7%)`);
+      sky.addColorStop(1, `hsl(${hue} 35% 3%)`);
       ctx.fillStyle = sky;
       ctx.fillRect(0, 0, W, H);
-      // Distant caldera glow on the horizon.
-      const pulse = 0.5 + Math.sin(t * 2.4) * 0.22;
-      const caldera = ctx.createRadialGradient(W * 0.5, H * 0.78, 2, W * 0.5, H * 0.82, W * 0.9);
-      caldera.addColorStop(0, `hsla(${hue + 12} 95% 48% / ${0.35 * pulse})`);
-      caldera.addColorStop(0.55, `hsla(${hue} 80% 28% / ${0.18 * pulse})`);
-      caldera.addColorStop(1, 'hsla(0 0% 0% / 0)');
-      ctx.fillStyle = caldera;
-      ctx.fillRect(0, 0, W, H);
-      // Molten impact rings (telegraph shadow on the ground).
-      const cx = W * 0.5;
-      const cy = H * 0.58;
-      for (let ring = 0; ring < 3; ring++) {
-        const phase = (t * 0.55 + ring * 0.33) % 1;
-        const r = W * (0.08 + phase * 0.34);
-        ctx.strokeStyle = `hsla(${hue + 18} 100% 58% / ${(1 - phase) * 0.42})`;
-        ctx.lineWidth = Math.max(1, W * 0.012 * (1 - phase * 0.6));
+      // Scorched basalt floor — jagged horizon, not a circle.
+      ctx.fillStyle = `hsl(${hue - 18} 22% 8%)`;
+      ctx.beginPath();
+      ctx.moveTo(0, H * 0.72);
+      for (let x = 0; x <= W; x += W / 8) {
+        const jag = Math.sin(x * 0.04 + t * 0.3) * H * 0.012 + Math.sin(x * 0.11) * H * 0.006;
+        ctx.lineTo(x, H * 0.68 + jag);
+      }
+      ctx.lineTo(W, H);
+      ctx.lineTo(0, H);
+      ctx.closePath();
+      ctx.fill();
+      // Distant caldera glare — thin, harsh, not a soft orb.
+      const pulse = 0.45 + Math.sin(t * 1.8) * 0.18;
+      ctx.fillStyle = `hsla(${hue + 8} 90% 42% / ${0.22 * pulse})`;
+      ctx.fillRect(0, H * 0.62, W, H * 0.04);
+      // Lava veins crawling across the ground.
+      for (let v = 0; v < 4; v++) {
+        const vy = H * (0.74 + v * 0.05);
+        ctx.strokeStyle = `hsla(${hue + 14} 95% 48% / ${0.35 + pulse * 0.2})`;
+        ctx.lineWidth = Math.max(1, W * 0.008);
         ctx.beginPath();
-        ctx.ellipse(cx, cy + H * 0.04, r, r * 0.38, 0, 0, Math.PI * 2);
+        let px = 0;
+        ctx.moveTo(0, vy);
+        while (px < W) {
+          px += W * (0.06 + (v % 3) * 0.02);
+          const py = vy + Math.sin(px * 0.02 + t * 1.2 + v) * H * 0.018;
+          ctx.lineTo(px, py);
+        }
         ctx.stroke();
       }
-      // Falling ember trails — staggered streaks arcing toward the strike zone.
-      for (let i = 0; i < 7; i++) {
-        const seed = i * 1.73;
-        const fall = ((t * 0.9 + seed) % 1);
-        const tx = cx + Math.sin(seed * 4.1 + t * 0.7) * W * 0.28;
-        const ty = H * (0.08 + fall * 0.52);
-        const trail = ctx.createLinearGradient(tx, ty - H * 0.12, tx, ty);
-        trail.addColorStop(0, `hsla(${hue + 22} 100% 72% / 0)`);
-        trail.addColorStop(0.35, `hsla(${hue + 16} 100% 62% / ${0.55 * (1 - fall)})`);
-        trail.addColorStop(1, `hsla(${hue + 8} 95% 48% / ${0.85 * (1 - fall)})`);
-        ctx.strokeStyle = trail;
-        ctx.lineWidth = Math.max(1.2, W * 0.014);
-        ctx.lineCap = 'round';
+      // Falling debris — angular shards, not round embers.
+      for (let i = 0; i < 9; i++) {
+        const seed = i * 2.41;
+        const fall = ((t * 0.75 + seed) % 1);
+        const tx = W * (0.12 + (seed % 5) * 0.16);
+        const ty = H * (0.06 + fall * 0.58);
+        const len = W * (0.035 + (i % 3) * 0.012);
+        const ang = 0.6 + seed * 0.3 + t * 0.4;
+        ctx.strokeStyle = `hsla(${hue + 10} 85% 55% / ${0.75 * (1 - fall * 0.3)})`;
+        ctx.lineWidth = Math.max(1.2, W * 0.01);
+        ctx.lineCap = 'butt';
         ctx.beginPath();
-        ctx.moveTo(tx, ty - H * 0.14 * (0.6 + (i % 3) * 0.15));
-        ctx.lineTo(tx + Math.sin(seed + t) * W * 0.02, ty);
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx + Math.cos(ang) * len, ty + Math.sin(ang) * len * 1.6);
         ctx.stroke();
-        ctx.fillStyle = `hsla(${hue + 20} 100% 68% / ${0.7 * (1 - fall)})`;
+      }
+      // Central impact column — vertical heat shimmer, not a pin or bubble.
+      const shimmer = Math.sin(t * 4.2) * W * 0.006;
+      const colX = W * 0.5 + shimmer;
+      const colGrad = ctx.createLinearGradient(colX, H * 0.2, colX, H * 0.78);
+      colGrad.addColorStop(0, `hsla(${hue + 20} 100% 70% / 0)`);
+      colGrad.addColorStop(0.35, `hsla(${hue + 16} 100% 58% / ${0.55 * pulse})`);
+      colGrad.addColorStop(0.7, `hsla(${hue + 6} 90% 38% / ${0.35 * pulse})`);
+      colGrad.addColorStop(1, `hsla(${hue} 70% 18% / 0)`);
+      ctx.fillStyle = colGrad;
+      ctx.fillRect(colX - W * 0.06, H * 0.18, W * 0.12, H * 0.62);
+      // Fractured crust chunks at the strike zone.
+      for (let c = 0; c < 5; c++) {
+        const cx = W * 0.5 + Math.sin(c * 2.1 + t * 0.5) * W * 0.1;
+        const cy = H * 0.62 + c * H * 0.025;
+        ctx.fillStyle = `hsl(${hue - 10} 30% ${12 + c * 2}%)`;
         ctx.beginPath();
-        ctx.arc(tx, ty, W * 0.018, 0, Math.PI * 2);
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + W * 0.04, cy - H * 0.02);
+        ctx.lineTo(cx + W * 0.03, cy + H * 0.015);
+        ctx.closePath();
         ctx.fill();
       }
-      // Central molten bolide — layered glow, no emoji.
-      const bob = Math.sin(t * 3.1) * H * 0.008;
-      const bx = cx + Math.sin(t * 0.85) * W * 0.04;
-      const by = H * 0.34 + bob;
-      const core = ctx.createRadialGradient(bx, by, 1, bx, by, W * 0.28);
-      core.addColorStop(0, `hsla(${hue + 28} 100% 78% / ${0.95 * pulse})`);
-      core.addColorStop(0.35, `hsla(${hue + 14} 100% 55% / 0.75)`);
-      core.addColorStop(0.7, `hsla(${hue} 90% 35% / 0.35)`);
-      core.addColorStop(1, 'hsla(0 0% 0% / 0)');
-      ctx.fillStyle = core;
-      ctx.beginPath();
-      ctx.arc(bx, by, W * 0.28, 0, Math.PI * 2);
-      ctx.fill();
-      // Cracked shell silhouette.
-      ctx.strokeStyle = `hsla(${hue + 32} 100% 82% / ${0.55 + pulse * 0.25})`;
-      ctx.lineWidth = Math.max(1.4, W * 0.016);
-      ctx.beginPath();
-      ctx.arc(bx, by, W * 0.09, 0.2, Math.PI * 2 - 0.35);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(bx - W * 0.04, by + W * 0.02);
-      ctx.lineTo(bx + W * 0.05, by - W * 0.03);
-      ctx.stroke();
+      // Smoke plume — layered rects, gritty not fluffy.
+      for (let s = 0; s < 6; s++) {
+        const sx = W * 0.5 + Math.sin(t * 0.6 + s * 1.7) * W * 0.08;
+        const sy = H * (0.28 - s * 0.04) - Math.sin(t * 0.9 + s) * H * 0.02;
+        const sw = W * (0.14 + s * 0.02);
+        const sh = H * 0.035;
+        ctx.fillStyle = `hsla(${hue - 20} 12% 12% / ${0.18 - s * 0.02})`;
+        ctx.fillRect(sx - sw / 2, sy, sw, sh);
+      }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);

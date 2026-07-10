@@ -371,14 +371,31 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
       const pad = pads.reduce((best, cur) =>
         Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
       sx = pad.x;
-      sy = FORT_SPAWN_Y[input.player];
-      // March to the CENTRAL plateau (pulled toward mid-field from the
-      // gate lane): both armies converge there and clash before anyone
-      // pushes on down a lane toward the enemy walls.
-      wp = {
-        x: pad.x + (WORLD_W / 2 - pad.x) * 0.5,
-        y: input.player === 0 ? 7.6 : 7.4,
-      };
+      const lanes = FORT_LANES[input.player];
+      const wing: 0 | 1 = Math.abs(pad.x - lanes[0]) < Math.abs(pad.x - lanes[1]) ? 0 : 1;
+      const ownGate = st.obelisks.find((o) => o.owner === input.player && o.wing === wing);
+      const ownRazed = !!ownGate && ownGate.hp <= 0;
+      if (ownRazed) {
+        // Own gate down: materialise just behind the rubble lip and scramble
+        // over the crest onto the causeway — not through the far tunnel.
+        const inset = 0.36;
+        sy = input.player === 0
+          ? FORT_WALL_FRONT[0] + inset
+          : FORT_WALL_FRONT[1] - inset;
+        wp = {
+          x: pad.x + (WORLD_W / 2 - pad.x) * 0.42,
+          y: input.player === 0 ? 10.85 : 4.15,
+        };
+      } else {
+        sy = FORT_SPAWN_Y[input.player];
+        // March to the CENTRAL plateau (pulled toward mid-field from the
+        // gate lane): both armies converge there and clash before anyone
+        // pushes on down a lane toward the enemy walls.
+        wp = {
+          x: pad.x + (WORLD_W / 2 - pad.x) * 0.5,
+          y: input.player === 0 ? 7.6 : 7.4,
+        };
+      }
     } else {
       // Oasis: free vector spawning along your own baseline; the drag
       // vector becomes an entry trajectory the unit sprints down.
@@ -516,11 +533,16 @@ function pickTarget(st: GameState, u: RuntimeUnit): UnitState | null {
   let best: UnitState | null = null;
   let bestD = Infinity;
   const aggroBase2 = AGGRO_RANGE * AGGRO_RANGE;
+  // Ground anti-air artillery (bombardier beetles) may acquire flyers anywhere
+  // inside their full weapon range — not capped at the melee aggro bubble.
+  const flyerCap2 = u.stats.canHitAir && u.stats.ranged
+    ? (attackReach(u) + 1.4) ** 2
+    : aggroBase2;
   for (const e of enemies) {
     const eFly = speciesDef(e.species).stats!.flying;
     if (eFly && !u.stats.canHitAir && !u.stats.flying) continue;
     const d = dist2(u.x, u.y, e.x, e.y) + (e.id % 7) * 1e-4;
-    if (eFly && !u.stats.flying && d > aggroBase2) continue;
+    if (eFly && !u.stats.flying && d > flyerCap2) continue;
     if (d < bestD) {
       bestD = d;
       best = e;
@@ -585,6 +607,7 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
       vy: ((target.y - u.y) / d) * speed,
       dmg: effDmg(u, st),
       ticksLeft: Math.max(1, Math.ceil(d / speed)),
+      targetId: target.id,
     });
     u.traveled = 0;
     u.targetId = target.id;
@@ -722,6 +745,26 @@ function trexStomp(st: GameState, ev: GameEvent[], u: RuntimeUnit): void {
 
 function tickProjectiles(st: GameState, ev: GameEvent[]): void {
   for (const pr of st.projectiles) {
+    if (pr.targetId != null) {
+      const tgt = st.units.find((u) => u.id === pr.targetId && u.hp > 0);
+      if (tgt) {
+        const dx = tgt.x - pr.x;
+        const dy = tgt.y - pr.y;
+        const d = Math.max(0.001, Math.hypot(dx, dy));
+        const speed = Math.hypot(pr.vx, pr.vy) || MECHANICS.acidJetSpeed;
+        const steer = 0.88;
+        const nx = dx / d;
+        const ny = dy / d;
+        pr.vx = pr.vx * (1 - steer) + nx * speed * steer;
+        pr.vy = pr.vy * (1 - steer) + ny * speed * steer;
+        pr.ticksLeft = Math.max(pr.ticksLeft, Math.ceil(d / speed) + 1);
+        if (d < 0.35) {
+          dealDamage(st, ev, null, tgt, pr.dmg, 'ranged');
+          st.players[pr.owner].damageDealt += pr.dmg;
+          pr.ticksLeft = 0;
+        }
+      }
+    }
     pr.px = pr.x;
     pr.py = pr.y;
     pr.x += pr.vx;
