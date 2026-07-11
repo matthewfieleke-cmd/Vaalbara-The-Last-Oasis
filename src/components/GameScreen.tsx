@@ -98,8 +98,8 @@ export function GameScreen({
         (window as unknown as { __vbState?: typeof state }).__vbState = state;
         handleGameEvents(events);
         routeEvents(events, state);
-        // Soundtrack: corps-style act floors from the Phase 1 clock; army
-        // tints color beds. Early double-raze hands off to the transition riser.
+        // Soundtrack: corps acts from the Phase 1 clock (front ensemble →
+        // full corps → finale); army tints color beds only.
         const elapsed = basaltElapsedSec(state);
         music.setBattlePulse({
           phase: state.phase,
