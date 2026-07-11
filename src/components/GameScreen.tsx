@@ -98,10 +98,8 @@ export function GameScreen({
         (window as unknown as { __vbState?: typeof state }).__vbState = state;
         handleGameEvents(events);
         routeEvents(events, state);
-        // Soundtrack + warrior drumline: act floors from the Phase 1 clock,
-        // army density on top, bee buzz while a swarm lives, species presence
-        // beds from minute 4. Early double-raze hands off to the existing
-        // transition riser (climax crest skipped).
+        // Soundtrack: corps-style act floors from the Phase 1 clock; army
+        // tints color beds. Early double-raze hands off to the transition riser.
         const elapsed = basaltElapsedSec(state);
         music.setBattlePulse({
           phase: state.phase,
