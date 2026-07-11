@@ -3,17 +3,16 @@
  * A fully procedural Web Audio synthesizer. Zero audio files.
  *
  *  - Soundtrack: generative layers on a 100 BPM musical clock.
- *    Phase 1 (Basalt Fields) — 2–2–1 corps / Zimmer book:
- *      Act 1 (0:00–2:00): front ensemble — 8th ostinato, hats, shimmer, theme
- *      Act 2 (2:00–4:00): full corps — 16ths, octave strings, low brass, choir air
- *      Act 3 (4:00–5:00): additive apex (Time / Babylon craft) — sustained rich
- *                       chords, melody through them, ≤3 braams; triumph → awe
- *    Clock owns the arc; warriors are battery + depth color (presence beds).
- *    Early double-raze skips the last crest into the transition riser.
- *    Cinematic intro: pre-corps intensity-gated bed (not the battle finale).
- *    Phase 2 (Oasis): D-dorian score, crossfaded over the march.
- *  - Warriors: battle DRUMLINE on the shared grid (ticks = 8ths @ 100 BPM);
- *    species also thicken the Act 3 tapestry as non-percussive color.
+ *    Phase 1 (Basalt Fields) — five-minute ADDITIVE ladder (hard cuts):
+ *      Min 1: front ensemble without hats
+ *      Min 2: + hats (full front ensemble)
+ *      Min 3: + 16ths, octave strings, low brass, choir air (full corps)
+ *      Min 4: + wider strings, reinforced brass, rich chord bed (sus/add2/m7)
+ *      Min 5: + max string/brass/choir mass + warrior SFX/presence lift
+ *    Each minute KEEPS prior layers and only adds — never thins the pulse.
+ *    Early double-raze skips the last crest into the transition riser → Oasis.
+ *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
+ *  - Warriors: battery on the shared grid + presence beds as depth builders.
  * ========================================================================== */
 
 import type { GameEvent, SpeciesId } from './types';
@@ -680,7 +679,7 @@ class MusicDirector {
   private beePresence = false;
   /** Species currently alive — drives soft in-key presence beds. */
   private presenceSpecies = new Set<SpeciesId>();
-  /** 0 = Act1 front ensemble (0–2:00), 1 = Act2 full corps (2–4:00), 2 = Act3 apex. */
+  /** 0..4 = Phase 1 minute index (hard-cut additive ladder). */
   private actTier = 0;
   /** Music-bus volume multiplier (ensemble weight across acts). */
   private volumeMul = 1.08;
@@ -837,18 +836,18 @@ class MusicDirector {
       this.braam(146.8, 1.6, 0.48);
       this.allowClimax = true;
       this.basaltElapsed = 0;
-      this.intensityTarget = 0.52;
-      this.volumeTarget = 1.08; // front-ensemble open — finales earn the crest
+      this.intensityTarget = 0.5;
+      this.volumeTarget = 1.06;
       this.actTier = 0;
-      this.rideSfxBus(0.92);
-      this.rideReverb(0.45);
+      this.rideSfxBus(0.9);
+      this.rideReverb(0.42);
     }
   }
 
   /**
-   * Drive Basalt act intensity from the Phase 1 clock; army only tints.
-   * 2–2–1 book: Act1 0–2:00, Act2 2–4:00, Act3 4–5:00 (additive apex).
-   * Army density adds a small color bump — audio only, no sim change.
+   * Drive Basalt from the Phase 1 clock; army only tints.
+   * Five hard-cut minutes: each keeps prior layers and adds one more.
+   * Audio only — no sim change. Transition/Oasis still settle the buses.
    */
   setBattlePulse(opts: {
     phase: MusicMode;
@@ -865,10 +864,12 @@ class MusicDirector {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, floor + army * 0.14);
       this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
-      // 2–2–1
-      this.actTier = opts.basaltElapsedSec < 120 ? 0 : opts.basaltElapsedSec < 240 ? 1 : 2;
-      this.rideSfxBus(this.actTier === 0 ? 0.92 : this.actTier === 1 ? 1.0 : 1.04);
-      this.rideReverb(this.actTier >= 2 ? 0.56 : 0.45);
+      // Hard minute tiers: 0–1 / 1–2 / 2–3 / 3–4 / 4–5
+      this.actTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
+      const sfxByTier = [0.9, 0.94, 1.0, 1.04, 1.1];
+      const revByTier = [0.42, 0.45, 0.48, 0.54, 0.6];
+      this.rideSfxBus(sfxByTier[this.actTier] ?? 1.0);
+      this.rideReverb(revByTier[this.actTier] ?? 0.45);
     } else if (opts.phase === 'oasis') {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
@@ -910,37 +911,19 @@ class MusicDirector {
     return origin + Math.max(0, steps) * STEP;
   }
 
-  /** Act intensity floor — 2–2–1 smoothstep ramps. */
+  /** Hard intensity floors per minute — no arrangement crossfades. */
   private actFloor(elapsed: number): number {
-    const ease = (a: number, b: number, t: number) => {
-      const x = Math.max(0, Math.min(1, t));
-      const s = x * x * (3 - 2 * x);
-      return a + (b - a) * s;
-    };
-    // Act 1 — front ensemble (0–2:00)
-    if (elapsed < 120) return 0.52;
-    // Act 2 — full corps (2–4:00)
-    if (elapsed < 240) return ease(0.52, 0.78, (elapsed - 120) / 12);
-    // Act 3 — additive apex (4–5:00)
-    if (elapsed < 290) return ease(0.78, 0.9, (elapsed - 240) / 12);
-    if (!this.allowClimax) return 0.9;
-    return ease(0.9, 0.96, (elapsed - 290) / 5);
+    const m = Math.min(4, Math.floor(elapsed / 60));
+    return [0.5, 0.55, 0.72, 0.84, 0.94][m] ?? 0.5;
   }
 
-  /** Music-bus volume — bloom into Act 3 awe without crushing. */
+  /** Hard volume steps per minute — power only grows. */
   private actVolume(elapsed: number): number {
-    const ease = (a: number, b: number, t: number) => {
-      const x = Math.max(0, Math.min(1, t));
-      const s = x * x * (3 - 2 * x);
-      return a + (b - a) * s;
-    };
-    if (elapsed < 120) return 1.08;
-    if (elapsed < 132) return ease(1.08, 1.22, (elapsed - 120) / 12);
-    if (elapsed < 240) return 1.22;
-    if (elapsed < 252) return ease(1.22, 1.3, (elapsed - 240) / 12);
-    if (elapsed < 290) return 1.3;
-    if (!this.allowClimax) return 1.3;
-    return ease(1.3, 1.36, (elapsed - 290) / 5);
+    const m = Math.min(4, Math.floor(elapsed / 60));
+    const v = [1.06, 1.12, 1.22, 1.32, 1.4][m] ?? 1.06;
+    // Last 10 s crest if we weren't forced into early transition.
+    if (elapsed >= 290 && this.allowClimax) return Math.min(1.45, v + 0.04);
+    return v;
   }
 
   /** Ease intensity + volume toward targets each scheduler slice. */
@@ -977,7 +960,7 @@ class MusicDirector {
     // Presence rides from Act 0 (front ensemble) onward — color under the book.
     if (!this.bus) return;
     if (this.mode !== 'basalt' && this.mode !== 'intro') return;
-    const thick = this.actTier >= 2 ? 1.5 : this.actTier >= 1 ? 1.35 : 1;
+    const thick = this.actTier >= 4 ? 1.65 : this.actTier >= 3 ? 1.45 : this.actTier >= 2 ? 1.25 : 1;
     const g = (0.016 + this.intensity * 0.012) * thick;
 
     type Role = 'titan' | 'command' | 'swarm' | 'air' | 'siege' | 'skirmish';
@@ -1008,7 +991,7 @@ class MusicDirector {
         // Low D–A open fifth under the taiko.
         voice({ type: 'sine', freq: 73.4, dur: 1.8, gain: g * 0.9, attack: 0.2, bus: this.bus, when: t, pan: -0.15 });
         voice({ type: 'triangle', freq: 110, dur: 1.8, gain: g * 0.55, attack: 0.25, bus: this.bus, when: t, pan: 0.15 });
-        if (this.actTier >= 1 && bar % 2 === 0) {
+        if (this.actTier >= 2 && bar % 2 === 0) {
           voice({ type: 'sawtooth', freq: 146.8, dur: 0.9, gain: g * 0.22, filterFreq: 420, attack: 0.08, bus: this.bus, when: t });
         }
       } else if (role === 'command' && bar % 4 === 0 && s16 === 0) {
@@ -1024,7 +1007,7 @@ class MusicDirector {
       } else if (role === 'siege' && s16 === 0 && bar % 2 === 1) {
         voice({ type: 'sine', freq: 98, dur: 1.2, gain: g * 0.5, attack: 0.15, bus: this.bus, when: t, pan: 0.25 });
         voice({ type: 'triangle', freq: 146.8, dur: 1.0, gain: g * 0.28, attack: 0.18, bus: this.bus, when: t });
-      } else if (role === 'skirmish' && this.actTier >= 1 && bar % 4 === 2 && s16 === 0) {
+      } else if (role === 'skirmish' && this.actTier >= 2 && bar % 4 === 2 && s16 === 0) {
         voice({ type: 'triangle', freq: 220, dur: 0.35, gain: g * 0.4, attack: 0.03, bus: this.bus, when: t, pan: -0.25 });
         voice({ type: 'triangle', freq: 330, dur: 0.35, gain: g * 0.28, attack: 0.03, bus: this.bus, when: t, pan: 0.25 });
       }
@@ -1312,133 +1295,95 @@ class MusicDirector {
       }
 
       case 'basalt': {
-        // 2–2–1 battle book. Acts 1–2 keep the loved front-ensemble / full-corps
-        // language. Act 3 is an additive Time/Babylon apex: triumph → awe.
+        // Five-minute ADDITIVE ladder. Hard cuts at :00 of each minute.
+        // tier 0 = min1 (no hats) … tier 4 = min5 (max mass). Never thin prior layers.
         const cell = MusicDirector.OSTINATO[bar % 4];
-        const corps = this.actTier;
-        const apexT = Math.max(0, this.basaltElapsed - 240); // 0..60 inside Act 3
-        // Additive layers inside the final minute (new voice every ~12s).
-        const apexLayer = apexT < 12 ? 0 : apexT < 24 ? 1 : apexT < 36 ? 2 : apexT < 48 ? 3 : 4;
-        const filterOpen = corps === 0 ? 1400 : corps === 1 ? 1900 : 1600;
+        const tier = this.actTier; // 0..4
+        const filterOpen = tier <= 1 ? 1400 : tier === 2 ? 1900 : tier === 3 ? 2100 : 2400;
 
-        if (corps < 2) {
-          // ——— Acts 1 & 2 (verse / lift) — unchanged language ———
-          const gate = corps >= 1 ? 1 : (s16 % 2 === 0 ? 1 : 0);
-          if (gate) {
-            const accent = s16 % 4 === 0 ? 1.25 : 0.85;
-            const strVel = accent * (0.62 + inten * 0.4) * (corps === 0 ? 1 : 1.12);
-            this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
-            if (corps >= 1) {
-              this.stringNote(t, cell[s16] * 2, strVel * 0.55, 0.12, filterOpen * 1.1);
-            }
+        // Ostinato: 8ths in min1–2, full 16ths from min3; octave from min3; wider from min4–5.
+        const gate = tier >= 2 ? 1 : (s16 % 2 === 0 ? 1 : 0);
+        if (gate) {
+          const accent = s16 % 4 === 0 ? 1.25 : 0.85;
+          const strVel = accent * (0.62 + inten * 0.4) * (tier <= 1 ? 1 : tier === 2 ? 1.12 : tier === 3 ? 1.2 : 1.28);
+          this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
+          if (tier >= 2) {
+            this.stringNote(t, cell[s16] * 2, strVel * (tier >= 3 ? 0.7 : 0.55), 0.12, filterOpen * 1.1);
           }
-          if (s16 === 0) {
-            voice({
-              type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
-              gain: 0.26, filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
-            });
-            this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.085 + inten * 0.03);
-            if (corps >= 1) {
-              this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, 0.055 + inten * 0.045);
-            }
+          if (tier >= 3 && s16 % 2 === 0) {
+            this.stringNote(t, cell[s16] * 2, strVel * 0.35, 0.11, 2600);
           }
-          if (corps === 1 && s16 === 0 && bar % 2 === 0) {
-            const root = MusicDirector.OSTINATO[bar % 4][0];
-            this.padChord(t, [root, root * 1.5, root * 2], 2.5, 0.022 + inten * 0.018);
+          if (tier >= 4 && s16 % 4 === 0) {
+            this.stringNote(t, cell[s16] * 4, strVel * 0.28, 0.1, 3000);
           }
-          if (s16 === 4) {
-            this.shimmer(t, bar % 4 === 1 ? 466.2 : 587.3, 2.0, 0.014 + inten * 0.014);
-          }
-          if (s16 === 0) this.taiko(t, true, 0.82 + inten * 0.2);
-          if (s16 === 10) this.taiko(t, false, 0.85);
-          if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
-          if (corps >= 1 && s16 % 4 === 2) this.taiko(t, false, 0.4);
-          if (s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
-          if (corps === 0 && bar % 8 === 4 && s16 === 0) this.playTheme(t, 1, 0.075 + inten * 0.04);
-          if (corps === 1 && bar % 4 === 2 && s16 === 0) this.playTheme(t, 1, 0.1 + inten * 0.055);
-          if (step > 0) {
-            if (corps === 1 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.22, 0);
-            else if (corps === 0 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
-          }
-          if (step % 64 === 48) {
-            voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.028 + inten * 0.01, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
-            voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.024 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
-          }
-        } else {
-          // ——— Act 3 apex: additive tapestry, triumph → awe, ≤3 braams ———
-          // Soft ostinato pulse under held chords (Time seed), not denser hits.
-          if (s16 % 4 === 0) {
-            const accent = s16 === 0 ? 1.1 : 0.7;
-            this.stringNote(t, cell[s16], accent * (0.45 + inten * 0.25), 0.16, filterOpen);
-            if (apexLayer >= 3) {
-              this.stringNote(t, cell[s16] * 2, accent * 0.28, 0.14, 2000);
-            }
-          }
+        }
 
-          // Rotating rich chord bed (add2 / sus4→3 / maj7 / m7).
-          if (s16 === 0) {
-            const chord = MusicDirector.APEX_CHORDS[bar % MusicDirector.APEX_CHORDS.length];
-            const bedGain = (0.02 + inten * 0.018) * (1 + apexLayer * 0.12);
-            this.richChordBed(t, chord, 2.5, bedGain);
-            // Sub pulse — heartbeat, not blare.
-            voice({
-              type: 'sine', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
-              gain: 0.2 + apexLayer * 0.02, attack: 0.04, bus: this.bus, when: t,
-            });
-            if (apexLayer >= 1) {
-              this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.07 + inten * 0.03);
-            }
-            // 4–3 suspension gesture when landing on the Asus→A pair.
-            if (bar % 6 === 1 && apexLayer >= 1) {
-              voice({ type: 'triangle', freq: 146.8, dur: 1.1, gain: 0.04, attack: 0.05, bus: this.bus, when: t, pan: -0.2 });
-              voice({ type: 'triangle', freq: 138.6, dur: 1.2, gain: 0.035, attack: 0.08, bus: this.bus, when: t + 1.05, pan: 0.15 });
-            }
+        if (s16 === 0) {
+          voice({
+            type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
+            gain: 0.24 + Math.min(0.06, tier * 0.012), filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
+          });
+          this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.08 + inten * 0.03 + tier * 0.004);
+          if (tier >= 2) {
+            this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, 0.055 + inten * 0.045);
           }
+          if (tier >= 3) {
+            this.lowBrass(t, MusicDirector.CELLO[bar % 4] * 0.5, 2.2, 0.035 + inten * 0.03);
+          }
+          if (tier >= 4) {
+            this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, 0.04 + inten * 0.025);
+          }
+        }
 
-          // Layer 0+: soft choir air; Layer 4: full SATB awe hold.
-          if (s16 === 0 && apexLayer >= 0 && apexLayer < 4 && bar % 2 === 0) {
-            this.choirSustain(t, 2.4, 0.018 + inten * 0.012);
+        if (tier === 2 && s16 === 0 && bar % 2 === 0) {
+          const root = MusicDirector.OSTINATO[bar % 4][0];
+          this.padChord(t, [root, root * 1.5, root * 2], 2.5, 0.022 + inten * 0.018);
+        }
+        if (tier >= 3 && s16 === 0) {
+          const chord = MusicDirector.APEX_CHORDS[bar % MusicDirector.APEX_CHORDS.length];
+          this.richChordBed(t, chord, 2.5, (0.018 + inten * 0.014) * (tier >= 4 ? 1.35 : 1));
+          if (bar % 6 === 1) {
+            voice({ type: 'triangle', freq: 146.8, dur: 1.05, gain: 0.035, attack: 0.05, bus: this.bus, when: t, pan: -0.2 });
+            voice({ type: 'triangle', freq: 138.6, dur: 1.15, gain: 0.03, attack: 0.08, bus: this.bus, when: t + 1.0, pan: 0.15 });
           }
-          if (s16 === 0 && apexLayer >= 4) {
-            this.choirSustain(t, 2.6, 0.034 + inten * 0.02);
-            this.shimmer(t, 880, 2.4, 0.02 + inten * 0.012);
-          }
+        }
+        if (tier >= 4 && s16 === 0) {
+          this.choirSustain(t, 2.5, 0.03 + inten * 0.018);
+        }
 
-          // Shimmer widens in lift layers.
-          if (s16 === 4 && apexLayer >= 1) {
-            this.shimmer(t, bar % 2 === 0 ? 587.3 : 698.5, 2.0, 0.014 + apexLayer * 0.004);
-          }
+        if (s16 === 4) {
+          this.shimmer(t, bar % 4 === 1 ? 466.2 : (tier >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + tier * 0.002);
+        }
 
-          // Battery stays in pocket for warrior hits — light answers only.
-          if (s16 === 0) this.taiko(t, true, 0.72 + inten * 0.15);
-          if (s16 === 10) this.taiko(t, false, 0.7);
-          if (apexLayer >= 2 && s16 === 13) this.taiko(t, false, 0.5);
-          if (s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 0.7 : 0.4);
+        if (s16 === 0) this.taiko(t, true, 0.8 + inten * 0.2 + tier * 0.02);
+        if (s16 === 10) this.taiko(t, false, 0.85);
+        if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
+        if (tier >= 2 && s16 % 4 === 2) this.taiko(t, false, 0.4);
+        if (tier >= 4 && (s16 === 4 || s16 === 12)) this.taiko(t, false, 0.48);
 
-          // TRIUMPH: horn theme as long melodic spine (layer 2+).
-          if (apexLayer >= 2 && bar % 4 === 0 && s16 === 0) {
-            this.playTheme(t, 1, 0.11 + inten * 0.05);
-            if (apexLayer >= 3) this.playTheme(t, 2, 0.045 + inten * 0.025);
-          }
+        // Hats from min2 only (min1 = one layer removed).
+        if (tier >= 1 && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
 
-          // ≤3 braams total in the minute — cadential, not a loop.
-          // 1) triumph entry ~24s  2) awe bloom ~50s  3) optional crest ~55s
-          if (s16 === 0) {
-            if (apexT >= 24 && apexT < 24.55) {
-              this.braamAt(t, 73.4, 1.7, 0.42 + inten * 0.15, 0);
-            } else if (apexT >= 49.5 && apexT < 50.1) {
-              this.braamAt(t, 65.4, 1.9, 0.48 + inten * 0.16, 0);
-              this.taiko(t, true, 1.05);
-            } else if (this.allowClimax && apexT >= 54.5 && apexT < 55.1) {
-              this.braamAt(t, 73.4, 1.5, 0.36 + inten * 0.12, 0);
-            }
-          }
+        if (tier <= 1 && bar % 8 === 4 && s16 === 0) this.playTheme(t, 1, 0.07 + inten * 0.04);
+        if (tier === 2 && bar % 4 === 2 && s16 === 0) this.playTheme(t, 1, 0.1 + inten * 0.05);
+        if (tier === 3 && bar % 4 === 0 && s16 === 0) this.playTheme(t, 1, 0.11 + inten * 0.05);
+        if (tier >= 4 && bar % 4 === 0 && s16 === 0) {
+          this.playTheme(t, 1, 0.12 + inten * 0.055);
+          this.playTheme(t, 2, 0.05 + inten * 0.025);
+        }
 
-          // Awe: high tension drone opens into vastness late.
-          if (apexLayer >= 3 && step % 64 === 48) {
-            voice({ type: 'triangle', freq: 587.3, dur: 2.4, gain: 0.03 + inten * 0.012, attack: 0.9, bus: this.bus, when: t, pan: 0.35 });
-            voice({ type: 'triangle', freq: 698.5, dur: 2.4, gain: 0.026 + inten * 0.01, attack: 1.0, bus: this.bus, when: t, pan: -0.35 });
+        if (step > 0 && s16 === 0) {
+          if (tier <= 1 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
+          else if (tier === 2 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.38 + inten * 0.18, 0);
+          else if (tier === 3 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.18, 0);
+          else if (tier >= 4 && (step % 64 === 0 || (this.allowClimax && this.basaltElapsed >= 290 && this.basaltElapsed < 290.6))) {
+            this.braamAt(t, 73.4, 1.75, 0.44 + inten * 0.18, 0);
           }
+        }
+
+        if (step % 64 === 48) {
+          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.026 + inten * 0.01 + tier * 0.002, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+          voice({ type: 'triangle', freq: tier >= 4 ? 698.5 : 622.3, dur: 2.2, gain: 0.022 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
         }
         break;
       }
