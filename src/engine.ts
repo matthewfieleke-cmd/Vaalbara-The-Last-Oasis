@@ -276,6 +276,9 @@ function dealDamage(
   attacker: RuntimeUnit | null, victim: UnitState, amount: number,
   kind: 'melee' | 'ranged' | 'burn' | 'vent' | 'lava' | 'reflect' | 'stomp',
 ): void {
+  // HP is discrete — round at the boundary so multipliers (charge, bless,
+  // splash) never leak fractional chips into state or floating combat text.
+  amount = Math.round(amount);
   if (victim.hp <= 0 || amount <= 0) return;
   const vStats = speciesDef(victim.species).stats!;
   victim.hp -= amount;
@@ -720,9 +723,9 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
   let dmg = effDmg(u, st);
   let crit = false;
 
-  // Bighorn charge: 3x + knockback after a long unbroken gallop.
+  // Bighorn charge: heavy mult + knockback after a long unbroken gallop.
   if (u.species === 'bighorn' && u.traveled >= MECHANICS.bighornChargeDist && !u.struckTargets.includes(target.id)) {
-    dmg *= MECHANICS.bighornChargeMult;
+    dmg = Math.round(dmg * MECHANICS.bighornChargeMult);
     crit = true;
     ev.push({ type: 'charge', unitId: u.id, x: u.x, y: u.y });
     if (!tStats.colossal) {
@@ -787,6 +790,7 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
 /* ------------------------------------------------------------------------ */
 
 function dealObeliskDamage(st: GameState, ev: GameEvent[], attacker: PlayerId, ob: ObeliskState, amount: number): void {
+  amount = Math.round(amount);
   if (ob.hp <= 0 || amount <= 0) return;
   // Mild last-stand DR while the sister wing is already down. The big
   // fortification is the HP surge applied when the first wing falls (below).

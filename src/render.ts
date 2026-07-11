@@ -359,12 +359,13 @@ export class Renderer {
           if (e.amount >= 22) this.burst(p.x, p.y - this.unit * 0.25, 1, 'shockwave', 40, 0.5);
           if (e.amount >= 30) this.hitStop = Math.max(this.hitStop, 0.05);
         }
-        const big = e.amount >= 26;
+        const shown = Math.round(e.amount);
+        const big = shown >= 26;
         this.floats.push({
           x: p.x + (Math.random() - 0.5) * 14, y: p.y - this.unit * 0.5,
-          text: `-${e.amount}`, life: 0, maxLife: big ? 1.05 : 0.9,
+          text: `-${shown}`, life: 0, maxLife: big ? 1.05 : 0.9,
           color: e.kind === 'burn' ? '#ff9d45' : e.kind === 'reflect' ? '#6dffc9' : big ? '#ffd24a' : '#ffffff',
-          size: clamp(10 + e.amount * 0.16, 10, 24),
+          size: clamp(10 + shown * 0.16, 10, 24),
         });
         break;
       }
@@ -391,7 +392,7 @@ export class Renderer {
       case 'heal': {
         const p = this.worldToScreen(e.x, e.y);
         this.burst(p.x, p.y, 12, 'mote', 140, 1.6);
-        this.floats.push({ x: p.x, y: p.y - this.unit * 0.6, text: `+${e.amount}`, life: 0, maxLife: 1, color: '#7dffa8', size: 13 });
+        this.floats.push({ x: p.x, y: p.y - this.unit * 0.6, text: `+${Math.round(e.amount)}`, life: 0, maxLife: 1, color: '#7dffa8', size: 13 });
         break;
       }
       case 'roar': {
@@ -441,13 +442,14 @@ export class Renderer {
         const wing = Math.abs(e.x - lanes[0]) < Math.abs(e.x - lanes[1]) ? 0 : 1;
         this.obeliskFlash.set(e.owner * 2 + wing, 0.24);
         const mid = this.ox + (WORLD_W / 2) * this.unit;
+        const shown = Math.round(e.amount);
         this.floats.push({
           // Spawn beside the arch (toward mid-field), low on the wall face,
           // so the rising number never drifts across the gatehouse HP bar.
           x: p.x + this.unit * (p.x < mid ? 1.15 : -1.15), y: p.y - this.unit * 0.4,
-          text: `-${e.amount}`, life: 0, maxLife: 0.9,
+          text: `-${shown}`, life: 0, maxLife: 0.9,
           color: mine ? '#ff8f6d' : '#ffe08a',
-          size: clamp(11 + e.amount * 0.1, 11, 19),
+          size: clamp(11 + shown * 0.1, 11, 19),
         });
         if (mine) this.shake = Math.max(this.shake, 2.5);
         break;
