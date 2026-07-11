@@ -682,8 +682,10 @@ class MusicDirector {
   /** 0..4 = Phase 1 minute index (hard-cut additive ladder). */
   private actTier = 0;
   /** Music-bus volume multiplier (ensemble weight across acts). */
-  private volumeMul = 1.08;
-  private volumeTarget = 1.08;
+  private volumeMul = 1.06;
+  private volumeTarget = 1.06;
+  /** Last applied minute tier — used to snap volume at hard minute cuts. */
+  private lastVolumeTier = -1;
   /** Grid origin aligned when music starts (SFX + tick phase-lock share this). */
   private gridOrigin = 0;
   /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
@@ -838,7 +840,9 @@ class MusicDirector {
       this.basaltElapsed = 0;
       this.intensityTarget = 0.5;
       this.volumeTarget = 1.06;
+      this.volumeMul = 1.06;
       this.actTier = 0;
+      this.lastVolumeTier = 0;
       this.rideSfxBus(0.9);
       this.rideReverb(0.42);
     }
@@ -865,7 +869,17 @@ class MusicDirector {
       this.intensityTarget = Math.min(1, floor + army * 0.14);
       this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
       // Hard minute tiers: 0–1 / 1–2 / 2–3 / 3–4 / 4–5
-      this.actTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
+      const nextTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
+      // Snap bus gain at the minute mark so each new layer also bumps volume.
+      if (nextTier !== this.lastVolumeTier) {
+        this.lastVolumeTier = nextTier;
+        this.volumeMul = this.volumeTarget;
+        if (this.bus && core.ctx) {
+          const g = Math.min(1.45, Math.max(0.0001, this.volumeMul));
+          this.bus.gain.setTargetAtTime(g, core.ctx.currentTime, 0.04);
+        }
+      }
+      this.actTier = nextTier;
       const sfxByTier = [0.9, 0.94, 1.0, 1.04, 1.1];
       const revByTier = [0.42, 0.45, 0.48, 0.54, 0.6];
       this.rideSfxBus(sfxByTier[this.actTier] ?? 1.0);
@@ -875,11 +889,13 @@ class MusicDirector {
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
       this.volumeTarget = 1;
       this.actTier = 0;
+      this.lastVolumeTier = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (opts.phase === 'transition') {
       this.volumeTarget = 1;
       this.actTier = 0;
+      this.lastVolumeTier = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     }
@@ -917,11 +933,11 @@ class MusicDirector {
     return [0.5, 0.55, 0.72, 0.84, 0.94][m] ?? 0.5;
   }
 
-  /** Hard volume steps per minute — power only grows. */
+  /** Hard volume steps per minute — slight audible bump at each :00. */
   private actVolume(elapsed: number): number {
     const m = Math.min(4, Math.floor(elapsed / 60));
-    const v = [1.06, 1.12, 1.22, 1.32, 1.4][m] ?? 1.06;
-    // Last 10 s crest if we weren't forced into early transition.
+    // ~6–8% step each minute (1.06 → 1.14 → 1.22 → 1.30 → 1.38)
+    const v = [1.06, 1.14, 1.22, 1.3, 1.38][m] ?? 1.06;
     if (elapsed >= 290 && this.allowClimax) return Math.min(1.45, v + 0.04);
     return v;
   }
