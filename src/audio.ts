@@ -10,11 +10,14 @@
  *      Min 1: seed — soft theme, legato string bed, pulse, taiko heartbeat
  *      Min 2: + hats + cello answer phrase in the back half of each cycle
  *      Min 3: + 16ths, octave strings, low brass, horn takes the theme
- *      Min 4: + wider/brighter bed, reinforced brass, theme in octaves
- *      Min 5: + choir, driving 8th battery, high descant over the theme
- *    Minute boundaries are Babylon arrivals: the last bar BREATHES (texture
- *    thins, battery fill, cymbal swell) and the new minute lands with a
- *    unison hit + volume snap. Layers only add — never thin the pulse.
+ *      Min 4: + TSO crest I — rock kick/snare, distorted power-chord guitar
+ *             chugs, cycle crashes, theme in octaves
+ *      Min 5: + TSO crest II — gallop guitars + octave wall + ringing chord,
+ *             driving 8th battery, choir, high descant, 2-bar crashes
+ *    Minute boundaries are Babylon arrivals, ALL bar-quantized: the breath
+ *    bar (thin texture, snare fill, cymbal swell) starts on the downbeat
+ *    that contains the wall-clock flip, and the NEXT downbeat lands layers,
+ *    volume snap and braam together. Layers only add — never thin the pulse.
  *    Early double-raze skips the last crest into the transition riser → Oasis.
  *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
  *    A bus compressor glues the stacked layers so density reads as power.
@@ -696,21 +699,25 @@ class MusicDirector {
   private beePresence = false;
   /** Species currently alive — drives soft in-key presence beds. */
   private presenceSpecies = new Set<SpeciesId>();
-  /** 0..4 = Phase 1 minute index (hard-cut additive ladder). */
+  /** 0..4 = Phase 1 minute index from the wall clock (flips mid-bar). */
   private actTier = 0;
   /** Music-bus volume multiplier (ensemble weight across acts). */
   private volumeMul = 1.06;
   private volumeTarget = 1.06;
-  /** Last applied minute tier — used to snap volume at hard minute cuts. */
-  private lastVolumeTier = -1;
   /** Grid origin aligned when music starts (SFX + tick phase-lock share this). */
   private gridOrigin = 0;
   /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
   private allowClimax = true;
-  /** Set at each minute flip — playStep fires a unison arrival on the next beat. */
-  private pendingArrival = false;
-  /** Tier whose pre-flip cymbal swell was already scheduled (one per breath bar). */
-  private swellTier = -1;
+  /**
+   * Bar-quantized minute tier — the one the ARRANGEMENT plays. The wall-clock
+   * minute (actTier) flips mid-bar; layers, volume and the arrival braam all
+   * wait for the next bar downbeat so every flip lands on the musical grid.
+   */
+  private musicTier = 0;
+  /** True from the breath-bar downbeat until the arrival downbeat fires. */
+  private arrivalArmed = false;
+  /** Step index of the arrival downbeat (breath bar = the 16 steps before). */
+  private breathUntilStep = -1;
 
   /** AudioContext currentTime when a context exists (even if muted). */
   audioNow(): number | null {
@@ -856,8 +863,9 @@ class MusicDirector {
       this.intensityTarget = Math.max(this.intensity * 0.85, 0.45);
       this.volumeTarget = 1; // settle before Oasis — no lingering climax loudness
       this.actTier = 0;
-      this.pendingArrival = false;
-      this.swellTier = -1;
+      this.musicTier = 0;
+      this.arrivalArmed = false;
+      this.breathUntilStep = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (mode === 'oasis' && prev === 'transition') {
@@ -875,9 +883,9 @@ class MusicDirector {
       this.volumeTarget = 1.06;
       this.volumeMul = 1.06;
       this.actTier = 0;
-      this.lastVolumeTier = 0;
-      this.pendingArrival = false;
-      this.swellTier = -1;
+      this.musicTier = 0;
+      this.arrivalArmed = false;
+      this.breathUntilStep = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.42);
     }
@@ -899,43 +907,34 @@ class MusicDirector {
     this.presenceSpecies = new Set(opts.speciesAlive ?? []);
     if (opts.phase === 'basalt') {
       this.basaltElapsed = opts.basaltElapsedSec;
-      const floor = this.actFloor(opts.basaltElapsedSec);
+      // Wall-clock minute — the ARRANGEMENT follows musicTier, which playStep
+      // advances only on a bar downbeat (breath → arrival), so intensity,
+      // volume, layers and the braam all land together on the grid.
+      this.actTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
+      const mt = this.musicTier;
       const army = Math.min(1, opts.unitCount / 18);
-      this.intensityTarget = Math.min(1, floor + army * 0.14);
-      this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
-      // Hard minute tiers: 0–1 / 1–2 / 2–3 / 3–4 / 4–5
-      const nextTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
-      // Snap bus gain at the minute mark so each new layer also bumps volume,
-      // and arm the Babylon arrival — playStep lands the unison hit on the
-      // next beat so the release stays on the musical grid.
-      if (nextTier !== this.lastVolumeTier) {
-        if (nextTier > this.lastVolumeTier && this.lastVolumeTier >= 0) {
-          this.pendingArrival = true;
-        }
-        this.lastVolumeTier = nextTier;
-        this.volumeMul = this.volumeTarget;
-        if (this.bus && core.ctx) {
-          const g = Math.min(1.45, Math.max(0.0001, this.volumeMul));
-          this.bus.gain.setTargetAtTime(g, core.ctx.currentTime, 0.04);
-        }
-      }
-      this.actTier = nextTier;
-      const sfxByTier = [0.9, 0.94, 1.0, 1.04, 1.1];
+      this.intensityTarget = Math.min(1, this.actFloor(mt) + army * 0.14);
+      this.volumeTarget = this.actVolume(mt);
+      const sfxByTier = [0.9, 0.94, 1.0, 1.06, 1.14];
       const revByTier = [0.42, 0.45, 0.48, 0.54, 0.6];
-      this.rideSfxBus(sfxByTier[this.actTier] ?? 1.0);
-      this.rideReverb(revByTier[this.actTier] ?? 0.45);
+      this.rideSfxBus(sfxByTier[mt] ?? 1.0);
+      this.rideReverb(revByTier[mt] ?? 0.45);
     } else if (opts.phase === 'oasis') {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
       this.volumeTarget = 1;
       this.actTier = 0;
-      this.lastVolumeTier = -1;
+      this.musicTier = 0;
+      this.arrivalArmed = false;
+      this.breathUntilStep = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (opts.phase === 'transition') {
       this.volumeTarget = 1;
       this.actTier = 0;
-      this.lastVolumeTier = -1;
+      this.musicTier = 0;
+      this.arrivalArmed = false;
+      this.breathUntilStep = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     }
@@ -967,18 +966,16 @@ class MusicDirector {
     return origin + Math.max(0, steps) * STEP;
   }
 
-  /** Hard intensity floors per minute — no arrangement crossfades. */
-  private actFloor(elapsed: number): number {
-    const m = Math.min(4, Math.floor(elapsed / 60));
-    return [0.5, 0.55, 0.72, 0.84, 0.94][m] ?? 0.5;
+  /** Hard intensity floors per (bar-quantized) minute tier. */
+  private actFloor(tier: number): number {
+    return [0.5, 0.55, 0.72, 0.84, 0.94][tier] ?? 0.5;
   }
 
-  /** Hard volume steps per minute — slight audible bump at each :00. */
-  private actVolume(elapsed: number): number {
-    const m = Math.min(4, Math.floor(elapsed / 60));
-    // ~6–8% step each minute (1.06 → 1.14 → 1.22 → 1.30 → 1.38)
-    const v = [1.06, 1.14, 1.22, 1.3, 1.38][m] ?? 1.06;
-    if (elapsed >= 290 && this.allowClimax) return Math.min(1.45, v + 0.04);
+  /** Hard volume steps per minute tier — snapped at each arrival downbeat.
+   *  Minutes 4–5 climb harder (the TSO crest). */
+  private actVolume(tier: number): number {
+    const v = [1.06, 1.14, 1.22, 1.32, 1.42][tier] ?? 1.06;
+    if (this.basaltElapsed >= 290 && this.allowClimax) return Math.min(1.45, v + 0.03);
     return v;
   }
 
@@ -1016,7 +1013,7 @@ class MusicDirector {
     // Presence rides from Act 0 (front ensemble) onward — color under the book.
     if (!this.bus) return;
     if (this.mode !== 'basalt' && this.mode !== 'intro') return;
-    const thick = this.actTier >= 4 ? 1.65 : this.actTier >= 3 ? 1.45 : this.actTier >= 2 ? 1.25 : 1;
+    const thick = this.musicTier >= 4 ? 1.65 : this.musicTier >= 3 ? 1.45 : this.musicTier >= 2 ? 1.25 : 1;
     const g = (0.016 + this.intensity * 0.012) * thick;
 
     type Role = 'titan' | 'command' | 'swarm' | 'air' | 'siege' | 'skirmish';
@@ -1047,7 +1044,7 @@ class MusicDirector {
         // Low D–A open fifth under the taiko.
         voice({ type: 'sine', freq: 73.4, dur: 1.8, gain: g * 0.9, attack: 0.2, bus: this.bus, when: t, pan: -0.15 });
         voice({ type: 'triangle', freq: 110, dur: 1.8, gain: g * 0.55, attack: 0.25, bus: this.bus, when: t, pan: 0.15 });
-        if (this.actTier >= 2 && bar % 2 === 0) {
+        if (this.musicTier >= 2 && bar % 2 === 0) {
           voice({ type: 'sawtooth', freq: 146.8, dur: 0.9, gain: g * 0.22, filterFreq: 420, attack: 0.08, bus: this.bus, when: t });
         }
       } else if (role === 'command' && bar % 4 === 0 && s16 === 0) {
@@ -1063,7 +1060,7 @@ class MusicDirector {
       } else if (role === 'siege' && s16 === 0 && bar % 2 === 1) {
         voice({ type: 'sine', freq: 98, dur: 1.2, gain: g * 0.5, attack: 0.15, bus: this.bus, when: t, pan: 0.25 });
         voice({ type: 'triangle', freq: 146.8, dur: 1.0, gain: g * 0.28, attack: 0.18, bus: this.bus, when: t });
-      } else if (role === 'skirmish' && this.actTier >= 2 && bar % 4 === 2 && s16 === 0) {
+      } else if (role === 'skirmish' && this.musicTier >= 2 && bar % 4 === 2 && s16 === 0) {
         voice({ type: 'triangle', freq: 220, dur: 0.35, gain: g * 0.4, attack: 0.03, bus: this.bus, when: t, pan: -0.25 });
         voice({ type: 'triangle', freq: 330, dur: 0.35, gain: g * 0.28, attack: 0.03, bus: this.bus, when: t, pan: 0.25 });
       }
@@ -1298,7 +1295,75 @@ class MusicDirector {
     this.braamAt(t, 73.4, 1.6 + tier * 0.06, 0.34 + tier * 0.05 + inten * 0.12, 0);
     this.taiko(t, true, 1.15);
     this.taiko(t + MUSIC_16TH_SEC, false, 0.7);
-    noise({ dur: 0.5, gain: 0.11, filterFreq: 5200, filterType: 'highpass', bus: this.bus, when: t });
+    this.crash(t, 0.1 + tier * 0.012);
+  }
+
+  /** Shared soft-clip curve — real distortion for the guitar stack. */
+  private static guitarCurve: Float32Array<ArrayBuffer> | null = null;
+
+  /** Distorted power chord (root + fifth + octave saws through a tanh
+   *  waveshaper) — the TSO guitar wall for minutes 4–5. */
+  private powerChord(t: number, freq: number, dur: number, gain: number, pan = 0): void {
+    const ctx = core.ensure();
+    if (!ctx || !this.bus) return;
+    if (!MusicDirector.guitarCurve) {
+      const n = 1024;
+      const c = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const x = (i / (n - 1)) * 2 - 1;
+        c[i] = Math.tanh(2.6 * x);
+      }
+      MusicDirector.guitarCurve = c;
+    }
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = MusicDirector.guitarCurve;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 2600;
+    lp.Q.value = 0.8;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    shaper.connect(lp);
+    lp.connect(g);
+    if (typeof ctx.createStereoPanner === 'function') {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      g.connect(p);
+      p.connect(this.bus);
+    } else {
+      g.connect(this.bus);
+    }
+    for (const [f, cents] of [[freq, 0], [freq, 6], [freq * 1.5, -5], [freq * 2, 4]] as Array<[number, number]>) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = f * Math.pow(2, cents / 1200);
+      osc.connect(shaper);
+      osc.start(t);
+      osc.stop(t + dur + 0.05);
+    }
+  }
+
+  /** Tight rock kick under the taiko — the driving quarter pulse. */
+  private rockKick(t: number, vel = 1): void {
+    if (!this.bus) return;
+    voice({ type: 'sine', freq: 115, freqEnd: 42, dur: 0.16, gain: 0.34 * vel, bus: this.bus, when: t });
+    noise({ dur: 0.05, gain: 0.1 * vel, filterFreq: 2600, filterEnd: 300, bus: this.bus, when: t });
+  }
+
+  /** Rock snare — backbeats and the roll into each arrival. */
+  private snare(t: number, vel = 1): void {
+    if (!this.bus) return;
+    noise({ dur: 0.14, gain: 0.16 * vel, filterFreq: 1700, filterType: 'highpass', bus: this.bus, when: t });
+    voice({ type: 'triangle', freq: 190, freqEnd: 120, dur: 0.09, gain: 0.12 * vel, bus: this.bus, when: t });
+  }
+
+  /** Loud crash cymbal — arrivals and the minute 4–5 downbeats. */
+  private crash(t: number, gain = 0.09): void {
+    if (!this.bus) return;
+    noise({ dur: 1.1, gain, filterFreq: 4200, filterType: 'highpass', bus: this.bus, when: t });
+    noise({ dur: 0.5, gain: gain * 0.5, filterFreq: 2400, filterType: 'highpass', bus: this.bus, when: t });
   }
 
   private padChord(t: number, freqs: number[], dur: number, gain = 0.05): void {
@@ -1423,22 +1488,39 @@ class MusicDirector {
         // prior layer and adds one voice. Minute flips are Babylon arrivals:
         // breath bar (thin texture + battery fill + cymbal swell) → unison hit.
         const cell = MusicDirector.OSTINATO[bar % 4];
-        const tier = this.actTier; // 0..4
-        const filterOpen = tier <= 1 ? 1400 : tier === 2 ? 1900 : tier === 3 ? 2100 : 2400;
 
-        // --- Minute-boundary craft -------------------------------------
-        // Breath: the last ~bar before a flip. The ensemble inhales together.
-        const secToFlip = 60 - (this.basaltElapsed % 60);
-        const breath = tier < 4 && this.basaltElapsed > 5 && secToFlip <= 2.4;
-        if (breath && this.swellTier !== tier) {
-          this.swellTier = tier;
-          this.cymbalSwell(t, Math.max(0.8, secToFlip - 0.1), 0.05 + tier * 0.012);
+        // --- Minute-boundary craft, ALL on the bar grid ------------------
+        // At each bar downbeat: if the wall-clock minute flips inside this
+        // bar, this bar is the BREATH (thin texture + fill + swell) and the
+        // next downbeat is the ARRIVAL — layers, volume snap and braam land
+        // together, in time. If a flip was missed (tab hidden), catch up on
+        // the next downbeat without a breath.
+        if (s16 === 0) {
+          const ctxNow = core.ctx ? core.ctx.currentTime : t;
+          const elapsedAtT = this.basaltElapsed + Math.max(0, t - ctxNow);
+          const secToFlip = 60 - (elapsedAtT % 60);
+          if (this.arrivalArmed && step >= this.breathUntilStep) {
+            this.arrivalArmed = false;
+            this.musicTier = Math.min(4, this.musicTier + 1);
+            this.volumeMul = this.actVolume(this.musicTier);
+            if (this.bus) this.bus.gain.setTargetAtTime(Math.min(1.45, this.volumeMul), t, 0.04);
+            this.arrivalHit(t, this.musicTier, inten);
+            if (this.musicTier >= 3) this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
+          } else if (!this.arrivalArmed && this.musicTier < this.actTier) {
+            this.musicTier = this.actTier;
+            this.volumeMul = this.actVolume(this.musicTier);
+            if (this.bus) this.bus.gain.setTargetAtTime(Math.min(1.45, this.volumeMul), t, 0.04);
+            this.arrivalHit(t, this.musicTier, inten);
+          } else if (!this.arrivalArmed && this.musicTier < 4 && this.musicTier === this.actTier
+            && elapsedAtT > 5 && secToFlip <= 2.4) {
+            this.arrivalArmed = true;
+            this.breathUntilStep = step + 16;
+            this.cymbalSwell(t, 2.3, 0.05 + this.musicTier * 0.014);
+          }
         }
-        // Arrival: the new minute lands with a unison hit on the next beat.
-        if (this.pendingArrival && s16 % 4 === 0) {
-          this.pendingArrival = false;
-          this.arrivalHit(t, tier, inten);
-        }
+        const tier = this.musicTier; // 0..4 — bar-quantized minute
+        const breath = this.arrivalArmed && step < this.breathUntilStep;
+        const filterOpen = tier <= 1 ? 1400 : tier === 2 ? 1900 : tier === 3 ? 2100 : 2400;
 
         // --- Ostinato engine (suspense — never stops, thins only to breathe)
         // 8ths in min1–2, full 16ths from min3; octaves stack with the tiers.
@@ -1503,10 +1585,38 @@ class MusicDirector {
         if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
         if (tier >= 2 && s16 % 4 === 2) this.taiko(t, false, 0.4);
         // Min 5: the drumline goes full corps — a driving 8th-note pulse.
-        if (tier >= 4 && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3);
+        if (tier >= 4 && !breath && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3);
         // Breath-bar fill: denser each minute, crescendos into the downbeat.
         if (breath && s16 >= 8 && s16 % 2 === 0) this.taiko(t, false, 0.35 + (s16 - 8) * 0.05 + tier * 0.05);
         if (breath && tier >= 2 && (s16 === 13 || s16 === 15)) this.taiko(t, false, 0.55 + tier * 0.04);
+        // From min 4 the roll goes to the snares — a real drum fill.
+        if (breath && tier >= 3 && s16 >= 8) this.snare(t, 0.35 + (s16 - 8) * 0.09);
+
+        // --- TSO crest (minutes 4–5): rock kit + guitar wall + crashes ---
+        if (tier >= 3 && !breath) {
+          // Driving kick on the quarters, snare cracking the backbeats.
+          if (s16 % 4 === 0) this.rockKick(t, tier >= 4 ? 1 : 0.85);
+          if (s16 === 4 || s16 === 12) this.snare(t, tier >= 4 ? 1.1 : 0.9);
+          if (tier >= 4 && (s16 === 7 || s16 === 15)) this.snare(t, 0.35);
+          // Power-chord chugs on the 8ths, following the same chord loop.
+          if (s16 % 2 === 0) {
+            const root = MusicDirector.BED_CHORDS[bar % 4][0];
+            const accent = s16 % 8 === 0 ? 1.3 : 1;
+            this.powerChord(t, root, 0.13, 0.042 * accent, s16 % 4 === 0 ? -0.15 : 0.15);
+            if (tier >= 4) this.powerChord(t, root * 2, 0.11, 0.02 * accent, 0.3);
+          }
+          // Min 5 gallop pickup + a sustained chord ringing over each bar.
+          if (tier >= 4 && s16 % 4 === 3) {
+            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 0.1, 0.036, -0.25);
+          }
+          if (tier >= 4 && s16 === 0) {
+            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.1, 0.05, 0);
+          }
+          // Loud crashes: every cycle in min 4, every 2 bars in min 5.
+          if (s16 === 0 && (tier >= 4 ? bar % 2 === 0 : bar % 4 === 0)) {
+            this.crash(t, tier >= 4 ? 0.095 : 0.07);
+          }
+        }
 
         // Hats from min2 only; they drop out to breathe with everyone else.
         if (tier >= 1 && !breath && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
