@@ -148,8 +148,8 @@ button {
   position: absolute;
   left: 0;
   right: 0;
-  /* Story cards sit in the upper third so they clear mid-field rivers /
-     the pond and read cleanly on a phone without covering the stage. */
+  /* Opening / faction cards sit in the upper band so they clear mid-field
+     rivers and the pond. */
   top: max(4.5rem, calc(var(--safe-top, 0px) + 3.2rem));
   bottom: auto;
   display: flex;
@@ -161,9 +161,16 @@ button {
   pointer-events: none;
 }
 
-.cinematic.world-oasis .cine-text {
+.cinematic.world-oasis .cine-text:not(.on-stage) {
   /* Oasis title cards sit a touch higher — pond occupies the mid band. */
   top: max(4.2rem, calc(var(--safe-top, 0px) + 2.8rem));
+}
+
+/* Closing cards: same stage focus as the warriors (between rivers / in pond). */
+.cine-text.on-stage {
+  top: var(--cine-stage-text, 48%);
+  transform: translateY(-50%);
+  justify-content: center;
 }
 
 /* A soft full-width dark band behind the copy keeps it legible over any
@@ -177,6 +184,12 @@ button {
   bottom: -1.4rem;
   background: radial-gradient(ellipse 90% 100% at 50% 40%, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.4) 55%, transparent 100%);
   z-index: -1;
+}
+
+.cine-text.on-stage::before {
+  top: -1.6rem;
+  bottom: -1.6rem;
+  background: radial-gradient(ellipse 92% 110% at 50% 50%, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0.4) 55%, transparent 100%);
 }
 
 .cine-text h2 {
@@ -198,25 +211,22 @@ button {
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.95), 0 1px 14px rgba(0, 0, 0, 0.9);
 }
 
-/* Gentle breathe-in / breathe-out — pure opacity with a whisper of drift.
-   No letter-spacing or layout animation, so text never reconfigures. */
+/* Opacity-only fades — layout transforms (stage centering) must not fight
+   the animation. */
 @keyframes cine-fade-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes cine-fade-out {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(-6px); }
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 .cine-hero-label {
   position: absolute;
   left: 0;
   right: 0;
-  /* Locked to the painted stage via the canvas --cine-hero-ground. */
-  top: var(--cine-hero-ground, 62%);
-  transform: translateY(-50%);
   text-align: center;
   background: radial-gradient(ellipse 78% 140% at 50% 50%, rgba(0, 0, 0, 0.78), transparent 100%);
   padding: 0.55rem 1rem 0.7rem;
@@ -229,13 +239,16 @@ button {
   box-sizing: border-box;
 }
 
+/* Magma champion titles: same upper band as the opening story cards. */
 .cinematic.world-basalt.has-hero .cine-hero-label {
-  /* Magma nameplates sit above the warrior — keep letter-spacing readable. */
-  transform: translateY(-10%);
+  top: max(4.5rem, calc(var(--safe-top, 0px) + 3.2rem));
+  transform: none;
 }
 
+/* Oasis champion titles: below the warrior in the pond. */
 .cinematic.world-oasis.has-hero .cine-hero-label {
-  transform: translateY(0);
+  top: var(--cine-hero-ground, 62%);
+  transform: none;
 }
 
 .cine-hero-label .epithet {
