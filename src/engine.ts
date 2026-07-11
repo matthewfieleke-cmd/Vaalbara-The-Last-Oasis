@@ -1550,11 +1550,26 @@ export function advanceTick(st: GameState, inputs: PlayerInput[]): TickResult {
 
 /* ============================================================================
  * TickDriver — real-time pacing, async input queueing, rewind/replay.
+ *
+ * Battle pacing can phase-lock to the soundtrack's 8th-note grid (one tick =
+ * MUSIC_TICK_SEC = TICK_MS/1000) via an injected TickClock. Sim contents stay
+ * tick-authoritative; only wall-clock wake times move. Without a clock we
+ * fall back to a plain interval (tests / non-audio hosts).
  * ========================================================================== */
 
 export interface DriverCallbacks {
   onTick: (result: TickResult) => void;
   sendInput?: (input: PlayerInput) => void;
+}
+
+/** Optional audio/performance clock for phase-locking ticks to music. */
+export interface TickClock {
+  /** Current time in seconds (AudioContext.currentTime or performance). */
+  now: () => number;
+  /** Time corresponding to tick 0; tick k fires at origin + k * (TICK_MS/1000). */
+  phaseOrigin: number;
+  /** Snap a time down onto the shared 8th grid (used after long hitches). */
+  align?: (t: number) => number;
 }
 
 export class TickDriver {
@@ -1564,8 +1579,12 @@ export class TickDriver {
   private appliedInputs: PlayerInput[] = [];
   private seq = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private timeout: ReturnType<typeof setTimeout> | null = null;
   private cb: DriverCallbacks;
   private accumulatedEvents: GameEvent[] = [];
+  private clock: TickClock | null = null;
+  private running = false;
+  private onVis: (() => void) | null = null;
 
   constructor(seed: number, factions: [FactionId, FactionId], cb: DriverCallbacks, cfg?: PhaseConfig) {
     resetIds();
@@ -1640,14 +1659,76 @@ export class TickDriver {
     }
   }
 
-  start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.stepOnce(), TICK_MS);
+  /**
+   * Start real-time pacing. Pass a TickClock (from music.battleTickPhase) to
+   * phase-lock sim ticks onto the soundtrack's 8th-note grid. Omitting the
+   * clock keeps the classic setInterval fallback.
+   */
+  start(clock?: TickClock): void {
+    if (this.running) return;
+    this.running = true;
+    this.clock = clock ?? null;
+    if (this.clock) {
+      this.armNextTick();
+      this.onVis = () => this.reanchorIfStale();
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', this.onVis);
+      }
+    } else {
+      this.timer = setInterval(() => this.stepOnce(), TICK_MS);
+    }
   }
 
   stop(): void {
+    this.running = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.timeout) clearTimeout(this.timeout);
+    this.timeout = null;
+    if (this.onVis && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVis);
+    }
+    this.onVis = null;
+    this.clock = null;
+  }
+
+  /** Ideal wall time (sec) when tick `k` should fire. */
+  private deadlineFor(k: number): number {
+    const tickSec = TICK_MS / 1000;
+    return (this.clock?.phaseOrigin ?? 0) + k * tickSec;
+  }
+
+  private armNextTick(): void {
+    if (!this.running || !this.clock) return;
+    if (this.timeout) clearTimeout(this.timeout);
+    this.reanchorIfStale();
+    const now = this.clock.now();
+    const nextTick = this.state.tick + 1;
+    const due = this.deadlineFor(nextTick);
+    // Never dump a multi-tick burst: minimum delay keeps catch-up one-at-a-time.
+    const delayMs = Math.max(4, (due - now) * 1000);
+    this.timeout = setTimeout(() => {
+      this.timeout = null;
+      if (!this.running) return;
+      this.stepOnce();
+      this.armNextTick();
+    }, delayMs);
+  }
+
+  /**
+   * After a long hitch (background tab), redefine phaseOrigin so the current
+   * tick maps onto the latest grid line — no skipped/doubled sim ticks.
+   */
+  private reanchorIfStale(): void {
+    if (!this.clock) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    const tickSec = TICK_MS / 1000;
+    const now = this.clock.now();
+    const expected = this.deadlineFor(this.state.tick);
+    const lagSec = now - expected;
+    if (lagSec <= tickSec * 2) return;
+    const aligned = this.clock.align ? this.clock.align(now) : now;
+    this.clock.phaseOrigin = aligned - this.state.tick * tickSec;
   }
 }
 
