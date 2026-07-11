@@ -165,6 +165,9 @@ export interface UnitState {
   /** Renderer hint: what this unit did during the last sim tick. */
   action: 'idle' | 'move' | 'attack' | 'spawn';
   targetId: number | null;
+  /** Gate lane this warrior sortied from (0/1). Soft-cap and readability
+   *  count by home wing so midfield drift doesn't invent a sixth body in one corridor. */
+  homeWing: 0 | 1;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -466,8 +469,9 @@ export const CAPTURE_RATE = 1;
 /** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
  *  with its own HP. The Basalt Fields end only when a fortress loses both. */
 /** First-gate HP. The remaining wing hardens after its sister falls
- *  (see dealObeliskDamage) so clean sweeps stay rare. */
-export const OBELISK_HP = 1950;
+ *  (see dealObeliskDamage) so clean sweeps stay rare — especially once
+ *  staged army slots 7–8 add late siege pressure. */
+export const OBELISK_HP = 2050;
 
 /** On a razed lane, warriors become combat-visible once they've climbed
  *  onto the causeway / rubble pile (depth from the field-side wall lip). */

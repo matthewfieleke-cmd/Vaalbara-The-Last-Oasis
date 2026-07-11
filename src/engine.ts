@@ -190,26 +190,25 @@ export function laneGroundCount(st: GameState, owner: PlayerId, wing: 0 | 1): nu
   return st.units.reduce((n, u) => {
     if (u.hp <= 0 || u.owner !== owner) return n;
     if (speciesDef(u.species).stats!.flying) return n;
-    return n + (laneWingOf(owner, u.x) === wing ? 1 : 0);
+    return n + (u.homeWing === wing ? 1 : 0);
   }, 0);
 }
 
 /**
- * Pick a deploy gate: honour the player's tap when the lane has room;
- * otherwise snap to the emptier lane so armies don't pile into soup.
+ * Pick a deploy gate: honour the player's tap when the lane has room for
+ * `need` ground bodies; otherwise snap to the emptier corridor. Returns null
+ * when neither lane can fit the card without breaking the soft cap.
  * Flyers ignore the soft cap (they don't clog the bridge deck).
  */
 export function preferDeployLane(
-  st: GameState, owner: PlayerId, preferredWing: 0 | 1, flying: boolean,
-): 0 | 1 {
+  st: GameState, owner: PlayerId, preferredWing: 0 | 1, flying: boolean, need = 1,
+): 0 | 1 | null {
   if (flying) return preferredWing;
-  if (laneGroundCount(st, owner, preferredWing) < LANE_SOFT_CAP) return preferredWing;
   const other = (1 - preferredWing) as 0 | 1;
-  if (laneGroundCount(st, owner, other) < LANE_SOFT_CAP) return other;
-  // Both soft-full: still prefer the emptier corridor.
-  return laneGroundCount(st, owner, preferredWing) <= laneGroundCount(st, owner, other)
-    ? preferredWing
-    : other;
+  const room = (wing: 0 | 1) => laneGroundCount(st, owner, wing) + need <= LANE_SOFT_CAP;
+  if (room(preferredWing)) return preferredWing;
+  if (room(other)) return other;
+  return null;
 }
 
 function groundOpen(st: GameState, x: number, y: number): boolean {
@@ -311,7 +310,7 @@ function freshBuffs() {
 
 function spawnUnit(
   st: GameState, ev: GameEvent[], owner: PlayerId, species: UnitState['species'],
-  x: number, y: number, waypoint: Vec2 | null,
+  x: number, y: number, waypoint: Vec2 | null, homeWing: 0 | 1,
 ): UnitState | null {
   if (!inWorld(x, y)) return null;
   if (armySize(st, owner) >= currentArmyCap(st)) return null;
@@ -334,6 +333,7 @@ function spawnUnit(
     stealthed: false,
     action: 'spawn',
     targetId: null,
+    homeWing,
   };
   if (st.players[owner].blessed) u.buffs.blessed = true;
   st.units.push(u);
@@ -407,6 +407,7 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
     let sx = a.x;
     let sy = a.y;
     let wp: Vec2;
+    let homeWing: 0 | 1 = laneWingOf(input.player, a.x);
 
     if (st.phase === 'basalt') {
       // Fortress siege: units enter the field THROUGH one of your two
@@ -421,7 +422,9 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
         Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
       const lanes = FORT_LANES[input.player];
       const tappedWing: 0 | 1 = Math.abs(tapped.x - lanes[0]) < Math.abs(tapped.x - lanes[1]) ? 0 : 1;
-      const wing = preferDeployLane(st, input.player, tappedWing, !!stats.flying);
+      const wing = preferDeployLane(st, input.player, tappedWing, !!stats.flying, stats.count);
+      if (wing === null) return; // both ground lanes soft-full
+      homeWing = wing;
       const pad = pads[wing];
       sx = pad.x;
       const ownGate = st.obelisks.find((o) => o.owner === input.player && o.wing === wing);
@@ -463,6 +466,7 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
         }
         if (!fixed) return;
       }
+      homeWing = laneWingOf(input.player, sx);
       const len = Math.hypot(a.dirX, a.dirY) || 1;
       const nx = a.dirX / len;
       const ny = a.dirY / len;
@@ -495,18 +499,18 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
     if (stats.formation === 'line' && stats.count > 1) {
       for (let i = 0; i < stats.count; i++) {
         const p2 = at(i, stats.count, 0.7);
-        const u = spawnUnit(st, ev, input.player, def.species, p2.x, p2.y, wp);
+        const u = spawnUnit(st, ev, input.player, def.species, p2.x, p2.y, wp, homeWing);
         if (u) spawned.push(u);
       }
     } else if (stats.formation === 'pair' && stats.count === 2) {
       const a1 = at(0, 2, 0.8);
       const a2 = at(1, 2, 0.8);
-      const u1 = spawnUnit(st, ev, input.player, def.species, a1.x, a1.y, wp);
-      const u2 = spawnUnit(st, ev, input.player, def.species, a2.x, a2.y, wp);
+      const u1 = spawnUnit(st, ev, input.player, def.species, a1.x, a1.y, wp, homeWing);
+      const u2 = spawnUnit(st, ev, input.player, def.species, a2.x, a2.y, wp, homeWing);
       if (u1) spawned.push(u1);
       if (u2) spawned.push(u2);
     } else {
-      const u = spawnUnit(st, ev, input.player, def.species, sx, sy, wp);
+      const u = spawnUnit(st, ev, input.player, def.species, sx, sy, wp, homeWing);
       if (u) spawned.push(u);
     }
     for (const u of spawned) if (u.species === 'lion') lionRoar(st, ev, u);
@@ -788,7 +792,7 @@ function dealObeliskDamage(st: GameState, ev: GameEvent[], attacker: PlayerId, o
   // fortification is the HP surge applied when the first wing falls (below).
   const sister = st.obelisks.find((o) => o.owner === ob.owner && o.wing !== ob.wing);
   const fortified = !!sister && sister.hp <= 0;
-  const dealt = fortified ? Math.max(1, Math.round(amount * 0.85)) : amount;
+  const dealt = fortified ? Math.max(1, Math.round(amount * 0.82)) : amount;
   ob.hp -= dealt;
   st.players[attacker].damageDealt += dealt;
   ev.push({ type: 'obeliskHit', owner: ob.owner, amount: dealt, x: ob.x, y: ob.y });
@@ -796,9 +800,10 @@ function dealObeliskDamage(st: GameState, ev: GameEvent[], attacker: PlayerId, o
     ob.hp = 0;
     ev.push({ type: 'obeliskDown', owner: ob.owner, x: ob.x, y: ob.y });
     // Remaining wing surges: buys time for a counter-siege to land the
-    // reciprocal first gate (1–1 trades) and keeps clean sweeps rare.
+    // reciprocal first gate (1–1 trades) and keeps clean sweeps rare —
+    // sized for staged late armies that would otherwise steamroll the sister.
     if (sister && sister.hp > 0) {
-      const bonus = Math.round(sister.maxHp * 1.0);
+      const bonus = Math.round(sister.maxHp * 1.15);
       sister.maxHp += bonus;
       sister.hp = Math.min(sister.maxHp, sister.hp + bonus);
     }
@@ -1724,7 +1729,9 @@ export class BotBrain {
       }
       // Respect lane soft-cap so the bot doesn't invent mid-lane soup.
       const flying = !!def.stats?.flying;
-      lane = preferDeployLane(st, this.seat, lane, flying);
+      const chosen = preferDeployLane(st, this.seat, lane, flying, def.stats?.count ?? 1);
+      if (chosen === null) return null;
+      lane = chosen;
       const pad = pads[lane];
       this.nextActionTick = st.tick + 6;
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };

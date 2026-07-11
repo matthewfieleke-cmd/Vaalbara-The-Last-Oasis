@@ -252,7 +252,12 @@ export function GameScreen({
         return;
       }
       const tappedWing: 0 | 1 = pads[0] === pad ? 0 : 1;
-      const wing = preferDeployLane(st, seat, tappedWing, !!def.stats?.flying);
+      const wing = preferDeployLane(st, seat, tappedWing, !!def.stats?.flying, def.stats?.count ?? 1);
+      if (wing === null) {
+        showToast('Both lanes full — wait for a fighter to fall');
+        playUi('error');
+        return;
+      }
       if (wing !== tappedWing) {
         showToast('Lane full — reinforcing the other gate');
       }
