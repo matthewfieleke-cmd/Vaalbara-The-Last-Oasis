@@ -184,7 +184,23 @@ export function GameScreen({
 
     music.start();
     music.setMode('basalt');
-    driver.start();
+    // Phase-lock sim ticks to the soundtrack's 8th-note grid so warrior
+    // hits land on the drumline without delaying SFX past the swing.
+    const phase = music.battleTickPhase();
+    if (phase) {
+      let lastAudio = phase.now;
+      driver.start({
+        now: () => {
+          const t = music.audioNow();
+          if (t != null) lastAudio = t;
+          return lastAudio;
+        },
+        phaseOrigin: phase.origin,
+        align: (t) => music.alignToTickGrid(t),
+      });
+    } else {
+      driver.start();
+    }
     setBanner({
       id: Date.now(),
       title: 'Phase I — Raze Their Fortress',

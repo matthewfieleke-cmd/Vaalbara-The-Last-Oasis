@@ -9,14 +9,20 @@
  *    Music-bus volume eases up with those acts, then settles for Phase 2.
  *    Alive warriors add soft in-key presence beds (not melodic attack spam).
  *    Phase 2 (Oasis): D-dorian score, crossfaded over the march.
- *  - Warriors: the battle DRUMLINE. Attack hits are soft-quantized onto the
- *    16th grid so they lock with the taiko; species sit in distinct registers
- *    (bass titans, mid strikers, high ticks). Bees keep a living buzz bed.
- *    Deploy entrances are species-specific and short — a new instrument
- *    joining the mix, not a second orchestra.
+ *  - Warriors: the battle DRUMLINE. Attack hits land on the shared musical
+ *    grid (sim ticks are phase-locked to 8ths @ 100 BPM); species sit in
+ *    distinct registers (bass titans, mid strikers, high ticks). Bees keep a
+ *    living buzz bed. Deploy entrances are species-specific and short — a
+ *    new instrument joining the mix, not a second orchestra.
  * ========================================================================== */
 
 import type { GameEvent, SpeciesId } from './types';
+import { TICK_MS } from './types';
+
+/** One 16th note at 100 BPM — soundtrack scheduler step. */
+export const MUSIC_16TH_SEC = 0.15;
+/** One 8th note at 100 BPM — equals one sim tick (TICK_MS). */
+export const MUSIC_TICK_SEC = TICK_MS / 1000;
 
 /* ------------------------------------------------------------------------ */
 /* Core                                                                       */
@@ -538,13 +544,13 @@ export function playKo(): void {
 /* Event router — the game loop feeds sim events straight in                  */
 /* ------------------------------------------------------------------------ */
 
-/** Soft-snap a hit onto the soundtrack's 16th grid (100 BPM → 0.15 s).
- *  Combat stays on the sim tick; only the sound waits ≤80 ms so the drumline
- *  locks to the taiko without feeling laggy. */
+/** Schedule a warrior hit on the shared musical grid.
+ *  Sim ticks are phase-locked to 8ths, so nearest-16th is ~0 error and we
+ *  never escape off-grid (the old ≤80 ms soft-quantize could). */
 function quantizeAttackWhen(): number {
-  const ctx = core.ensure();
+  const ctx = core.ctx ?? (core.enabled ? core.ensure() : null);
   if (!ctx) return 0;
-  return music.quantizeWhen(ctx.currentTime, 0.08);
+  return music.quantizeWhenNearest(ctx.currentTime);
 }
 
 export function handleGameEvents(events: GameEvent[]): void {
@@ -679,10 +685,42 @@ class MusicDirector {
   /** Music-bus volume multiplier (1 → 1.1 → 1.2, settles in Oasis). */
   private volumeMul = 1;
   private volumeTarget = 1;
-  /** Grid origin aligned when music starts (for SFX quantize). */
+  /** Grid origin aligned when music starts (SFX + tick phase-lock share this). */
   private gridOrigin = 0;
   /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
   private allowClimax = true;
+
+  /** AudioContext currentTime when a context exists (even if muted). */
+  audioNow(): number | null {
+    if (core.ctx) return core.ctx.currentTime;
+    if (!core.enabled) return null;
+    return core.ensure()?.currentTime ?? null;
+  }
+
+  /** Soundtrack grid origin in AudioContext seconds (0 if not started). */
+  gridOriginTime(): number {
+    return this.gridOrigin;
+  }
+
+  /**
+   * Phase origin for TickDriver: audio time of battle tick 0.
+   * Tick k should fire at origin + k * MUSIC_TICK_SEC, landing on 8ths.
+   * Floors "now" onto the last 8th so the first step waits ~one tick — same
+   * cadence as the old setInterval(300) lead-in.
+   */
+  battleTickPhase(): { now: number; origin: number } | null {
+    const now = this.audioNow();
+    if (now == null) return null;
+    const g = this.gridOrigin || now;
+    const origin = g + Math.floor((now - g) / MUSIC_TICK_SEC) * MUSIC_TICK_SEC;
+    return { now, origin };
+  }
+
+  /** Snap a time down onto the nearest past-or-equal 8th of the music grid. */
+  alignToTickGrid(t: number): number {
+    const g = this.gridOrigin || t;
+    return g + Math.floor((t - g) / MUSIC_TICK_SEC + 1e-9) * MUSIC_TICK_SEC;
+  }
 
   /* D natural minor. Frequencies for the ostinato register (D3-based). */
   private static OSTINATO: number[][] = [
@@ -739,7 +777,7 @@ class MusicDirector {
     this.nextNoteTime = ctx.currentTime + 0.08;
     this.gridOrigin = this.nextNoteTime;
     this.step = 0;
-    // 100 BPM 16th grid = 0.15 s per step (8 steps per 1.2 s = 4 sim ticks).
+    // 100 BPM: 16th = MUSIC_16TH_SEC; 8th = MUSIC_TICK_SEC (= one sim tick).
     this.schedTimer = setInterval(() => this.schedule(), 70);
   }
 
@@ -827,9 +865,10 @@ class MusicDirector {
     this.intensityTarget = Math.max(0, Math.min(1, v));
   }
 
-  /** Snap `when` forward onto the next 16th-note grid line, capped at maxDelay. */
+  /** Snap `when` forward onto the next 16th-note grid line, capped at maxDelay.
+   *  Prefer quantizeWhenNearest for warrior hits now that ticks are phase-locked. */
   quantizeWhen(when: number, maxDelay = 0.08): number {
-    const STEP = 0.15;
+    const STEP = MUSIC_16TH_SEC;
     const origin = this.gridOrigin || when;
     const steps = Math.ceil((when - origin) / STEP - 1e-9);
     const snapped = origin + Math.max(0, steps) * STEP;
@@ -837,6 +876,14 @@ class MusicDirector {
     if (delay < 0) return when;
     if (delay > maxDelay) return when; // too far — don't lag the hit
     return snapped;
+  }
+
+  /** Nearest 16th on the soundtrack grid — no off-grid escape hatch. */
+  quantizeWhenNearest(when: number): number {
+    const STEP = MUSIC_16TH_SEC;
+    const origin = this.gridOrigin || when;
+    const steps = Math.round((when - origin) / STEP);
+    return origin + Math.max(0, steps) * STEP;
   }
 
   /** Act intensity floor from Basalt elapsed time (smoothstep ramps). */
@@ -1078,7 +1125,7 @@ class MusicDirector {
 
   /** Schedule the full 2-bar theme starting at t0. mult shifts the octave. */
   private playTheme(t0: number, mult = 1, gain = 0.085): void {
-    const STEP = 0.15;
+    const STEP = MUSIC_16TH_SEC;
     for (const [st, freq, durSteps] of MusicDirector.THEME) {
       this.horn(t0 + st * STEP, freq * mult, durSteps * STEP + 0.12, gain);
     }
@@ -1088,7 +1135,7 @@ class MusicDirector {
     const ctx = core.ctx;
     if (!ctx || !this.running) return;
     this.tickIntensity();
-    const STEP = 0.15;
+    const STEP = MUSIC_16TH_SEC;
     while (this.nextNoteTime < ctx.currentTime + 0.3) {
       this.playStep(this.step, this.nextNoteTime);
       this.nextNoteTime += STEP;
