@@ -1752,6 +1752,8 @@ export class BotBrain {
     if (st.tick < this.nextActionTick) return null;
     if (st.tick % 2 !== 0) return null;
     const me = st.players[this.seat];
+    // Near the aqua cap every idle beat wastes income — spend with urgency.
+    const flush = me.aqua >= 8;
 
     const lavaInHand = me.hand.includes(LAVA_RAIN_CARD);
     if (lavaInHand && me.aqua >= cardDef(LAVA_RAIN_CARD, st.phase).cost) {
@@ -1766,7 +1768,7 @@ export class BotBrain {
             best = { x: e.x, y: e.y };
           }
         }
-        if (best && (bestScore >= 3 || (this.rng() < 0.45 && bestScore >= 2))) {
+        if (best && (bestScore >= 3 || (this.rng() < 0.55 && bestScore >= 2))) {
           this.nextActionTick = st.tick + 6;
           return { type: 'spell', card: LAVA_RAIN_CARD, x: best.x, y: best.y };
         }
@@ -1774,21 +1776,46 @@ export class BotBrain {
     }
 
     if (me.aqua < 2) return null;
-    if (this.rng() < 0.12) return null;
+    if (!flush && this.rng() < 0.06) return null;
     if (armySize(st, this.seat) >= currentArmyCap(st)) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
     if (affordable.length === 0) return null;
-    affordable.sort((a, b) => cardDef(b, st.phase).cost - cardDef(a, st.phase).cost);
-    const pick = affordable[Math.floor(this.rng() * Math.min(3, affordable.length))] as CardId;
+    // Score the hand: bigger bodies lead, with light counter-awareness —
+    // anti-air against flyers, air pressure when the foe can't answer it.
+    // Jitter keeps the bot human (reads, not scripts).
+    const foes = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
+    const foeFlyers = foes.filter((u) => !!speciesDef(u.species).stats?.flying).length;
+    const foeAntiAir = foes.some((u) => !!speciesDef(u.species).stats?.canHitAir);
+    const scored = affordable.map((c) => {
+      const d = cardDef(c, st.phase);
+      let s = d.cost + this.rng() * 2.2;
+      if (d.kind === 'unit') {
+        if (foeFlyers > 0 && d.stats?.canHitAir) s += 2;
+        if (!foeAntiAir && d.stats?.flying) s += 1.5;
+      }
+      return { c, s };
+    });
+    scored.sort((a, b) => b.s - a.s);
+    const pick = scored[0].c as CardId;
     const def = cardDef(pick, st.phase);
 
     if (def.kind === 'spell' && pick !== LAVA_RAIN_CARD) {
       const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat && isCombatVisible(st, u));
       if (enemies.length === 0) return null;
-      const e = enemies[Math.floor(this.rng() * enemies.length)];
+      // Aim at the densest knot — a random single target wasted the cast.
+      let best = enemies[0];
+      let bestN = 0;
+      for (const e of enemies) {
+        const n = enemies.filter((o) => dist2(o.x, o.y, e.x, e.y) <= 1.6 * 1.6).length;
+        if (n > bestN) {
+          bestN = n;
+          best = e;
+        }
+      }
+      if (bestN < 2 && !flush) return null; // hold it for a real clump
       this.nextActionTick = st.tick + 6;
-      return { type: 'spell', card: pick, x: e.x, y: e.y };
+      return { type: 'spell', card: pick, x: best.x, y: best.y };
     }
     if (def.kind === 'spell') return null;
 
@@ -1800,32 +1827,43 @@ export class BotBrain {
       // pressure in the same match. Blind focus on the weakest wing made
       // both bots converge on one corridor — the winner razed both gates
       // and the loser never scored even one (0% 1–1 trades).
-      const foes = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
       let lane: 0 | 1 = this.rng() < 0.5 ? 0 : 1;
       if (foes.length > 0) {
         const c0 = foes.filter((u) => Math.abs(u.x - pads[0].x) <= Math.abs(u.x - pads[1].x)).length;
         const c1 = foes.length - c0;
         lane = c0 <= c1 ? 0 : 1;
       }
-      // Occasional focus-fire on a crumbling wing (finishing blow).
-      if (wings.length > 0 && this.rng() < 0.28) {
+      // Commit to a crumbling wing (finishing blow).
+      if (wings.length > 0 && this.rng() < 0.5) {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
-        if (weakest.hp < weakest.maxHp * 0.45) lane = weakest.wing;
+        if (weakest.hp < weakest.maxHp * 0.55) lane = weakest.wing;
       }
+      // Highest priority: defend a gate under real pressure.
+      const myWings = st.obelisks.filter((o) => o.owner === this.seat && o.hp > 0);
+      let danger: 0 | 1 | null = null;
+      let dangerN = 0;
+      for (const w of myWings) {
+        const n = foes.filter((u) => dist2(u.x, u.y, w.x, w.y) <= 4.5 * 4.5).length;
+        if (n > dangerN) {
+          dangerN = n;
+          danger = w.wing;
+        }
+      }
+      if (danger !== null && dangerN >= 2 && this.rng() < 0.7) lane = danger;
       // Respect lane soft-cap so the bot doesn't invent mid-lane soup.
       const flying = !!def.stats?.flying;
       const chosen = preferDeployLane(st, this.seat, lane, flying, def.stats?.count ?? 1);
       if (chosen === null) return null;
       lane = chosen;
       const pad = pads[lane];
-      this.nextActionTick = st.tick + 6;
+      this.nextActionTick = st.tick + (flush ? 3 : 4);
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };
     }
     const x = Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5));
     const y = this.seat === 0
       ? WORLD_H - DEPLOY_DEPTH + 0.4 + this.rng() * (DEPLOY_DEPTH - 0.9)
       : 0.5 + this.rng() * (DEPLOY_DEPTH - 0.9);
-    this.nextActionTick = st.tick + 6;
+    this.nextActionTick = st.tick + (flush ? 3 : 4);
     return { type: 'deploy', card: pick, x, y, dirX: (this.rng() - 0.5) * 0.8, dirY };
   }
 }
