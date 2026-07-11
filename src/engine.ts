@@ -17,9 +17,9 @@ import {
   ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
   BRIDGE_HALF_W, CAPTURE_RATE, DEPLOY_DEPTH, FORT_ARCH_HALF_W, FORT_LANES, FORT_SPAWN_Y,
   FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
-  HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
+  HAND_SIZE, LANE_SOFT_CAP, LOTUS_HEAL_PCT, OBELISK_HP,
   PHASE1_TICKS, PHASE2_TICKS, RUBBLE_VISIBLE_DEPTH, RIVER_BANDS,
-  TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
+  TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, armyCap, fortPads, inDeployBand, inWorld,
 } from './types';
 import type {
   CardId, FactionId, GameEvent, GameState, ObeliskState, PhaseConfig, PlayerId,
@@ -171,6 +171,46 @@ export function armySize(st: GameState, owner: PlayerId): number {
   return st.units.reduce((n, u) => n + (u.hp > 0 && u.owner === owner ? 1 : 0), 0);
 }
 
+/** Current deploy ceiling for this match state (staged 6→7→8 in Basalt). */
+export function currentArmyCap(st: GameState): number {
+  const elapsed = st.phase === 'basalt'
+    ? Math.max(0, (st.cfg.phase1Ticks - st.phaseTicksLeft) * (TICK_MS / 1000))
+    : 0;
+  return armyCap(st.phase, elapsed);
+}
+
+/** Which gate lane (0/1) a world x is closer to for this owner. */
+function laneWingOf(owner: PlayerId, x: number): 0 | 1 {
+  const lanes = FORT_LANES[owner];
+  return Math.abs(x - lanes[0]) < Math.abs(x - lanes[1]) ? 0 : 1;
+}
+
+/** Living ground units this owner has committed to a gate lane. */
+export function laneGroundCount(st: GameState, owner: PlayerId, wing: 0 | 1): number {
+  return st.units.reduce((n, u) => {
+    if (u.hp <= 0 || u.owner !== owner) return n;
+    if (speciesDef(u.species).stats!.flying) return n;
+    return n + (u.homeWing === wing ? 1 : 0);
+  }, 0);
+}
+
+/**
+ * Pick a deploy gate: honour the player's tap when the lane has room for
+ * `need` ground bodies; otherwise snap to the emptier corridor. Returns null
+ * when neither lane can fit the card without breaking the soft cap.
+ * Flyers ignore the soft cap (they don't clog the bridge deck).
+ */
+export function preferDeployLane(
+  st: GameState, owner: PlayerId, preferredWing: 0 | 1, flying: boolean, need = 1,
+): 0 | 1 | null {
+  if (flying) return preferredWing;
+  const other = (1 - preferredWing) as 0 | 1;
+  const room = (wing: 0 | 1) => laneGroundCount(st, owner, wing) + need <= LANE_SOFT_CAP;
+  if (room(preferredWing)) return preferredWing;
+  if (room(other)) return other;
+  return null;
+}
+
 function groundOpen(st: GameState, x: number, y: number): boolean {
   return inWorld(x, y) && walkableAt(worldOf(st), x, y);
 }
@@ -270,10 +310,10 @@ function freshBuffs() {
 
 function spawnUnit(
   st: GameState, ev: GameEvent[], owner: PlayerId, species: UnitState['species'],
-  x: number, y: number, waypoint: Vec2 | null,
+  x: number, y: number, waypoint: Vec2 | null, homeWing: 0 | 1,
 ): UnitState | null {
   if (!inWorld(x, y)) return null;
-  if (armySize(st, owner) >= MAX_ARMY) return null;
+  if (armySize(st, owner) >= currentArmyCap(st)) return null;
   const stats = speciesDef(species).stats!;
   if (!stats.flying && !groundOpen(st, x, y)) return null;
   const u: UnitState = {
@@ -293,6 +333,7 @@ function spawnUnit(
     stealthed: false,
     action: 'spawn',
     targetId: null,
+    homeWing,
   };
   if (st.players[owner].blessed) u.buffs.blessed = true;
   st.units.push(u);
@@ -360,12 +401,13 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
 
   if (a.type === 'deploy' && def.kind === 'unit' && def.species) {
     if (!inWorld(a.x, a.y)) return;
-    if (armySize(st, input.player) >= MAX_ARMY) return;
+    if (armySize(st, input.player) >= currentArmyCap(st)) return;
     const stats = def.stats!;
 
     let sx = a.x;
     let sy = a.y;
     let wp: Vec2;
+    let homeWing: 0 | 1 = laneWingOf(input.player, a.x);
 
     if (st.phase === 'basalt') {
       // Fortress siege: units enter the field THROUGH one of your two
@@ -373,12 +415,18 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
       // materialises at the FAR end of the arch corridor — outside the
       // fortress — and marches the whole tunnel before emerging onto the
       // field, so every deployment reads as a gate sortie.
+      // Lane soft-cap: if the tapped gate is already crowded with ground
+      // troops, snap to the emptier corridor so individual duels stay readable.
       const pads = fortPads(input.player);
-      const pad = pads.reduce((best, cur) =>
+      const tapped = pads.reduce((best, cur) =>
         Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
-      sx = pad.x;
       const lanes = FORT_LANES[input.player];
-      const wing: 0 | 1 = Math.abs(pad.x - lanes[0]) < Math.abs(pad.x - lanes[1]) ? 0 : 1;
+      const tappedWing: 0 | 1 = Math.abs(tapped.x - lanes[0]) < Math.abs(tapped.x - lanes[1]) ? 0 : 1;
+      const wing = preferDeployLane(st, input.player, tappedWing, !!stats.flying, stats.count);
+      if (wing === null) return; // both ground lanes soft-full
+      homeWing = wing;
+      const pad = pads[wing];
+      sx = pad.x;
       const ownGate = st.obelisks.find((o) => o.owner === input.player && o.wing === wing);
       const ownRazed = !!ownGate && ownGate.hp <= 0;
       if (ownRazed) {
@@ -418,6 +466,7 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
         }
         if (!fixed) return;
       }
+      homeWing = laneWingOf(input.player, sx);
       const len = Math.hypot(a.dirX, a.dirY) || 1;
       const nx = a.dirX / len;
       const ny = a.dirY / len;
@@ -450,18 +499,18 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
     if (stats.formation === 'line' && stats.count > 1) {
       for (let i = 0; i < stats.count; i++) {
         const p2 = at(i, stats.count, 0.7);
-        const u = spawnUnit(st, ev, input.player, def.species, p2.x, p2.y, wp);
+        const u = spawnUnit(st, ev, input.player, def.species, p2.x, p2.y, wp, homeWing);
         if (u) spawned.push(u);
       }
     } else if (stats.formation === 'pair' && stats.count === 2) {
       const a1 = at(0, 2, 0.8);
       const a2 = at(1, 2, 0.8);
-      const u1 = spawnUnit(st, ev, input.player, def.species, a1.x, a1.y, wp);
-      const u2 = spawnUnit(st, ev, input.player, def.species, a2.x, a2.y, wp);
+      const u1 = spawnUnit(st, ev, input.player, def.species, a1.x, a1.y, wp, homeWing);
+      const u2 = spawnUnit(st, ev, input.player, def.species, a2.x, a2.y, wp, homeWing);
       if (u1) spawned.push(u1);
       if (u2) spawned.push(u2);
     } else {
-      const u = spawnUnit(st, ev, input.player, def.species, sx, sy, wp);
+      const u = spawnUnit(st, ev, input.player, def.species, sx, sy, wp, homeWing);
       if (u) spawned.push(u);
     }
     for (const u of spawned) if (u.species === 'lion') lionRoar(st, ev, u);
@@ -739,12 +788,25 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
 
 function dealObeliskDamage(st: GameState, ev: GameEvent[], attacker: PlayerId, ob: ObeliskState, amount: number): void {
   if (ob.hp <= 0 || amount <= 0) return;
-  ob.hp -= amount;
-  st.players[attacker].damageDealt += amount;
-  ev.push({ type: 'obeliskHit', owner: ob.owner, amount, x: ob.x, y: ob.y });
+  // Mild last-stand DR while the sister wing is already down. The big
+  // fortification is the HP surge applied when the first wing falls (below).
+  const sister = st.obelisks.find((o) => o.owner === ob.owner && o.wing !== ob.wing);
+  const fortified = !!sister && sister.hp <= 0;
+  const dealt = fortified ? Math.max(1, Math.round(amount * 0.82)) : amount;
+  ob.hp -= dealt;
+  st.players[attacker].damageDealt += dealt;
+  ev.push({ type: 'obeliskHit', owner: ob.owner, amount: dealt, x: ob.x, y: ob.y });
   if (ob.hp <= 0) {
     ob.hp = 0;
     ev.push({ type: 'obeliskDown', owner: ob.owner, x: ob.x, y: ob.y });
+    // Remaining wing surges: buys time for a counter-siege to land the
+    // reciprocal first gate (1–1 trades) and keeps clean sweeps rare —
+    // sized for staged late armies that would otherwise steamroll the sister.
+    if (sister && sister.hp > 0) {
+      const bonus = Math.round(sister.maxHp * 1.15);
+      sister.maxHp += bonus;
+      sister.hp = Math.min(sister.maxHp, sister.hp + bonus);
+    }
   }
 }
 
@@ -1079,7 +1141,9 @@ function laneDiscipline(st: GameState): void {
   }
 }
 
-/** Soft separation: overlapping same-layer units push each other apart. */
+/** Soft separation: overlapping same-layer units push each other apart.
+ *  Same-owner pairs bias the shove along the lane (Y) so bridges don't
+ *  spray warriors sideways into lava / neighboring corridors. */
 function separateUnits(st: GameState): void {
   const units = st.units.filter((u) => u.hp > 0);
   for (let i = 0; i < units.length; i++) {
@@ -1098,8 +1162,16 @@ function separateUnits(st: GameState): void {
       if (d2 >= minD * minD || d2 === 0) continue;
       const d = Math.sqrt(d2);
       const push = (minD - d) / 2;
-      const ux = dx / d;
-      const uy = dy / d;
+      let ux = dx / d;
+      let uy = dy / d;
+      // Same army: prefer column depth over lateral shove (anti-chaos).
+      if (a.owner === b.owner && !aFly) {
+        ux *= 0.35;
+        uy = uy >= 0 ? Math.max(0.55, Math.abs(uy)) : -Math.max(0.55, Math.abs(uy));
+        const len = Math.hypot(ux, uy) || 1;
+        ux /= len;
+        uy /= len;
+      }
       const world = worldOf(st);
       const move = (u: UnitState, mx: number, my: number, fly: boolean) => {
         const nx = Math.max(0.2, Math.min(WORLD_W - 0.2, u.x + mx));
@@ -1143,18 +1215,35 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   else u.buffs.slowMult = 1;
   if (u.atkTimer > 0) u.atkTimer--;
 
-  // 1. Attack when a target is in reach.
+  // 1. Attack when a target is in reach — unless we are already on an enemy
+  // gatehouse. Siege takes priority over chasing a distant skirmish so a
+  // counter-push can chip a tower while the main fight rages elsewhere.
+  // (Previously any aggro'd enemy cancelled siege entirely, which made
+  // mutual gate trades impossible: the field winner deleted the loser,
+  // then walked both towers unopposed.)
   const target = pickTarget(st, u);
   u.targetId = target?.id ?? null;
+  const ob = enemyObelisk(st, u);
+  const siegeReach = ob ? attackReach(u) + u.stats.radius + ob.r : 0;
+  const canSiege = !!ob && dist2(u.x, u.y, ob.x, ob.y) <= siegeReach * siegeReach;
+  const threatClose = target
+    && dist2(u.x, u.y, target.x, target.y) <= (Math.max(1.05, u.stats.radius + speciesDef(target.species).stats!.radius + 0.35) ** 2);
+
+  if (canSiege && !threatClose) {
+    if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob!);
+    else u.facing = ob!.x >= u.x ? 1 : -1;
+    return;
+  }
+
   if (target && canAttack(st, u, target)) {
     if (u.atkTimer <= 0) performAttack(st, ev, u, target);
     else u.facing = target.x >= u.x ? 1 : -1;
     return;
   }
 
-  // 1b. No duel in reach: siege the enemy obelisk when close enough.
-  const ob = target ? null : enemyObelisk(st, u);
-  if (ob) {
+  // 1b. Walk onto the gate if we're close but not yet in reach and nothing
+  // is in attack range.
+  if (ob && !target) {
     const reach = attackReach(u) + u.stats.radius + ob.r;
     if (dist2(u.x, u.y, ob.x, ob.y) <= reach * reach) {
       if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob);
@@ -1192,6 +1281,14 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
         x: ownLane,
         y: u.owner === 0 ? FORT_WALL_FRONT[0] - 0.5 : FORT_WALL_FRONT[1] + 0.5,
       };
+    } else if (
+      // On the enemy half with a gate still standing: commit to the siege
+      // unless a foe is in our face. This is what allows BOTH seats to chip
+      // a tower in the same match instead of one midfield wipe deciding all.
+      st.phase === 'basalt' && ob && !threatClose &&
+      (u.owner === 0 ? u.y < WORLD_H * 0.48 : u.y > WORLD_H * 0.52)
+    ) {
+      goal = siegeGoal(ob);
     } else {
       goal = { x: target.x, y: target.y };
     }
@@ -1593,7 +1690,7 @@ export class BotBrain {
 
     if (me.aqua < 2) return null;
     if (this.rng() < 0.12) return null;
-    if (armySize(st, this.seat) >= MAX_ARMY) return null;
+    if (armySize(st, this.seat) >= currentArmyCap(st)) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
     if (affordable.length === 0) return null;
@@ -1614,11 +1711,27 @@ export class BotBrain {
     if (st.phase === 'basalt') {
       const pads = fortPads(this.seat);
       const wings = st.obelisks.filter((o) => o.owner !== this.seat && o.hp > 0);
-      let lane = this.rng() < 0.5 ? 0 : 1;
-      if (wings.length > 0 && this.rng() < 0.78) {
-        const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
-        lane = weakest.wing;
+      // Default: counter-siege the emptier lane so both fortresses take
+      // pressure in the same match. Blind focus on the weakest wing made
+      // both bots converge on one corridor — the winner razed both gates
+      // and the loser never scored even one (0% 1–1 trades).
+      const foes = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
+      let lane: 0 | 1 = this.rng() < 0.5 ? 0 : 1;
+      if (foes.length > 0) {
+        const c0 = foes.filter((u) => Math.abs(u.x - pads[0].x) <= Math.abs(u.x - pads[1].x)).length;
+        const c1 = foes.length - c0;
+        lane = c0 <= c1 ? 0 : 1;
       }
+      // Occasional focus-fire on a crumbling wing (finishing blow).
+      if (wings.length > 0 && this.rng() < 0.28) {
+        const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
+        if (weakest.hp < weakest.maxHp * 0.45) lane = weakest.wing;
+      }
+      // Respect lane soft-cap so the bot doesn't invent mid-lane soup.
+      const flying = !!def.stats?.flying;
+      const chosen = preferDeployLane(st, this.seat, lane, flying, def.stats?.count ?? 1);
+      if (chosen === null) return null;
+      lane = chosen;
       const pad = pads[lane];
       this.nextActionTick = st.tick + 6;
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };

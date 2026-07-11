@@ -43,8 +43,9 @@ function unit(owner: PlayerId, species: SpeciesId, x: number, y: number): UnitSt
 
 // Beetle economy and projectile base damage.
 const beetle = cardDef('beetles');
-assert.equal(beetle.cost, 4);
-assert.equal(beetle.stats?.dmg, 20);
+assert.equal(beetle.cost, 5);
+assert.equal(beetle.stats?.dmg, 16);
+assert.ok((beetle.stats?.range ?? 0) <= 2.5, 'beetle must stand closer than the old 3.2 sniper perch');
 
 // Lane discipline: a defender spawned behind a razed left gate stays in its
 // own lane until it has climbed over the rubble, and only then crosses over

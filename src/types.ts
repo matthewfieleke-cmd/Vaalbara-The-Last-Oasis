@@ -26,9 +26,9 @@ export const WORLD_W = 9;
 export const WORLD_H = 15;
 
 /** Phase durations, in ticks (300 ms/tick). Phase 1 is a siege that ends
- *  when a fortress loses BOTH gatehouses — designed to take ~4 minutes.
- *  The tick budget is only a stalemate safety valve. */
-export const PHASE1_TICKS = 1200;
+ *  when a fortress loses BOTH gatehouses, or at the 5:00 stalemate valve.
+ *  Target: most matches reach ~5:00 with traded gatehouses (see balance-gates). */
+export const PHASE1_TICKS = 1000; // 5:00
 export const TRANSITION_TICKS = 20; // 6 s marching cutscene
 export const PHASE2_TICKS = 500;
 
@@ -165,6 +165,9 @@ export interface UnitState {
   /** Renderer hint: what this unit did during the last sim tick. */
   action: 'idle' | 'move' | 'attack' | 'spawn';
   targetId: number | null;
+  /** Gate lane this warrior sortied from (0/1). Soft-cap and readability
+   *  count by home wing so midfield drift doesn't invent a sixth body in one corridor. */
+  homeWing: 0 | 1;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -235,7 +238,8 @@ export interface ObeliskState {
    *  lane (in world coordinates, before any seat-view mirroring). */
   readonly wing: 0 | 1;
   hp: number;
-  readonly maxHp: number;
+  /** Grows when the sister wing falls (last-stand fortification surge). */
+  maxHp: number;
   readonly x: number;
   readonly y: number;
   readonly r: number;
@@ -438,14 +442,36 @@ export const AQUA_MAX = 10;
 export const AQUA_PER_TICK_P1 = 0.08;
 export const AQUA_PER_TICK_P2 = 0.16; // doubles in the Oasis
 export const HAND_SIZE = 4;
-/** Hard cap on living units per player — the field stays readable. Six
- *  gives three fighters per siege lane without turning the field to soup. */
-export const MAX_ARMY = 6;
+/** Absolute ceiling on living units per player. Early Phase 1 stays at
+ *  ARMY_BASE_CAP; slots 7–8 unlock with the minute-4 / minute-5 acts so the
+ *  field never opens as a mob. See armyCap(). */
+export const MAX_ARMY = 8;
+/** Readable early-game army size — about three fighters per siege lane. */
+export const ARMY_BASE_CAP = 6;
+/** Soft max ground units per lane per player. Extras deploy to the emptier
+ *  gate so lanes stay duels, not bumping piles. */
+export const LANE_SOFT_CAP = 4;
+
+/**
+ * Staged army cap from Basalt elapsed time (seconds).
+ *  - Minutes 1–3: 6 (readable duels)
+ *  - Start of minute 4 (t=3:00): 7
+ *  - Start of minute 5 (t=4:00): 8
+ * Oasis / transition keep the absolute ceiling so late answers still fit.
+ */
+export function armyCap(phase: 'basalt' | 'transition' | 'oasis' | 'ended', basaltElapsedSec = 0): number {
+  if (phase !== 'basalt') return MAX_ARMY;
+  if (basaltElapsedSec < 180) return ARMY_BASE_CAP;
+  if (basaltElapsedSec < 240) return 7;
+  return MAX_ARMY;
+}
 export const CAPTURE_RATE = 1;
 /** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
  *  with its own HP. The Basalt Fields end only when a fortress loses both. */
-/** Tuned for ~4 min average Phase-1 gatehouse collapse vs the scripted bot. */
-export const OBELISK_HP = 3100;
+/** First-gate HP. The remaining wing hardens after its sister falls
+ *  (see dealObeliskDamage) so clean sweeps stay rare — especially once
+ *  staged army slots 7–8 add late siege pressure. */
+export const OBELISK_HP = 2050;
 
 /** On a razed lane, warriors become combat-visible once they've climbed
  *  onto the causeway / rubble pile (depth from the field-side wall lip). */
@@ -453,7 +479,11 @@ export const RUBBLE_VISIBLE_DEPTH = 0.06;
 export const OBELISK_RADIUS = 0.55;
 /** Units only auto-acquire enemies inside this radius; otherwise they push
  *  the lane toward the enemy obelisk (Clash-Royale-style tower pressure). */
-export const AGGRO_RANGE = 3.2;
+/** Units only auto-acquire enemies inside this radius; otherwise they push
+ *  the lane toward the enemy gatehouse. Kept tight so opposite-lane armies
+ *  don't vacuum into one midfield brawl — both fortresses can take pressure
+ *  in the same match (the 1–1 gate trade). */
+export const AGGRO_RANGE = 2.15;
 export const VENT_DMG = 2;
 export const ACID_DMG = 1; // per stack per tick
 export const LOTUS_HEAL_PCT = 0.15;
