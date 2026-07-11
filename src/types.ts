@@ -439,9 +439,29 @@ export const AQUA_MAX = 10;
 export const AQUA_PER_TICK_P1 = 0.08;
 export const AQUA_PER_TICK_P2 = 0.16; // doubles in the Oasis
 export const HAND_SIZE = 4;
-/** Hard cap on living units per player — the field stays readable. Six
- *  gives three fighters per siege lane without turning the field to soup. */
-export const MAX_ARMY = 6;
+/** Absolute ceiling on living units per player. Early Phase 1 stays at
+ *  ARMY_BASE_CAP; slots 7–8 unlock with the minute-4 / minute-5 acts so the
+ *  field never opens as a mob. See armyCap(). */
+export const MAX_ARMY = 8;
+/** Readable early-game army size — about three fighters per siege lane. */
+export const ARMY_BASE_CAP = 6;
+/** Soft max ground units per lane per player. Extras deploy to the emptier
+ *  gate so lanes stay duels, not bumping piles. */
+export const LANE_SOFT_CAP = 4;
+
+/**
+ * Staged army cap from Basalt elapsed time (seconds).
+ *  - Minutes 1–3: 6 (readable duels)
+ *  - Start of minute 4 (t=3:00): 7
+ *  - Start of minute 5 (t=4:00): 8
+ * Oasis / transition keep the absolute ceiling so late answers still fit.
+ */
+export function armyCap(phase: 'basalt' | 'transition' | 'oasis' | 'ended', basaltElapsedSec = 0): number {
+  if (phase !== 'basalt') return MAX_ARMY;
+  if (basaltElapsedSec < 180) return ARMY_BASE_CAP;
+  if (basaltElapsedSec < 240) return 7;
+  return MAX_ARMY;
+}
 export const CAPTURE_RATE = 1;
 /** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
  *  with its own HP. The Basalt Fields end only when a fortress loses both. */

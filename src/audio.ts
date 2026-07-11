@@ -6,6 +6,8 @@
  *    Phase 1 (Basalt Fields): dark D-minor pulse that lifts at the start of
  *    minute 4, pushes at the start of minute 5, and crests in the last 10 s
  *    (skipped on early double-raze — hands off to the existing transition).
+ *    Music-bus volume eases up with those acts, then settles for Phase 2.
+ *    Alive warriors add soft in-key presence beds (not melodic attack spam).
  *    Phase 2 (Oasis): D-dorian score, crossfaded over the march.
  *  - Warriors: the battle DRUMLINE. Attack hits are soft-quantized onto the
  *    16th grid so they lock with the taiko; species sit in distinct registers
@@ -547,9 +549,27 @@ function quantizeAttackWhen(): number {
 
 export function handleGameEvents(events: GameEvent[]): void {
   if (!core.enabled) return;
-  // Cap simultaneous SFX per tick so big battles don't clip into mush.
-  let budget = 8;
-  for (const e of events) {
+  // Prefer combat punctuation when the field is busy so spells/heals don't
+  // starve the drumline — and raise the budget for late staged armies.
+  const rank = (e: GameEvent): number => {
+    switch (e.type) {
+      case 'attack':
+      case 'spawn':
+      case 'shoot':
+        return 0;
+      case 'spellCast':
+      case 'lavaTelegraph':
+      case 'lavaStrike':
+      case 'obeliskDown':
+        return 1;
+      default:
+        return 2;
+    }
+  };
+  const ordered = events.length > 1 ? [...events].sort((a, b) => rank(a) - rank(b)) : events;
+  let budget = 12;
+  const attackHeard = new Set<SpeciesId>();
+  for (const e of ordered) {
     if (budget <= 0) break;
     switch (e.type) {
       case 'spawn':
@@ -557,10 +577,15 @@ export function handleGameEvents(events: GameEvent[]): void {
         SPECIES_SFX[e.species].spawn();
         budget--;
         break;
-      case 'attack':
+      case 'attack': {
+        // One voice per species per tick once budget is tight — keeps the
+        // kit readable instead of a mush of identical hits.
+        if (attackHeard.has(e.species) && budget < 5) break;
+        attackHeard.add(e.species);
         SPECIES_SFX[e.species].attack(quantizeAttackWhen());
         budget--;
         break;
+      }
       case 'death':
         GLOBAL_SFX.death();
         budget--;
@@ -647,6 +672,13 @@ class MusicDirector {
   private basaltElapsed = 0;
   /** True while any bee swarm is alive — sustains the hive buzz bed. */
   private beePresence = false;
+  /** Species currently alive — drives soft in-key presence beds. */
+  private presenceSpecies = new Set<SpeciesId>();
+  /** 0 = establish, 1 = minute 4 color, 2 = minute 5 thicken. */
+  private actTier = 0;
+  /** Music-bus volume multiplier (1 → 1.1 → 1.2, settles in Oasis). */
+  private volumeMul = 1;
+  private volumeTarget = 1;
   /** Grid origin aligned when music starts (for SFX quantize). */
   private gridOrigin = 0;
   /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
@@ -737,14 +769,20 @@ class MusicDirector {
       }
       this.riser(2.4);
       this.intensityTarget = Math.max(this.intensity * 0.85, 0.45);
+      this.volumeTarget = 1; // settle before Oasis — no lingering climax loudness
+      this.actTier = 0;
     } else if (mode === 'oasis' && prev === 'transition') {
       this.braam(220, 1.4, 0.5);
       this.intensityTarget = 0.4;
+      this.volumeTarget = 1;
+      this.actTier = 0;
     } else if (mode === 'basalt') {
       this.braam(146.8, 1.6, 0.55);
       this.allowClimax = true;
       this.basaltElapsed = 0;
       this.intensityTarget = 0.28;
+      this.volumeTarget = 1;
+      this.actTier = 0;
     }
   }
 
@@ -754,23 +792,33 @@ class MusicDirector {
    * - Start of minute 5 (t=4:00): floor lifts toward 0.78 over ~12 s
    * - Last 10 s (t=4:50): climax crest toward 0.95 (skipped if early transition)
    * Army size still adds energy on top so a stacked board cooks earlier.
+   * Volume eases +10% / +20% with the same acts, then settles in Phase 2.
    */
   setBattlePulse(opts: {
     phase: MusicMode;
     basaltElapsedSec: number;
     unitCount: number;
     beesAlive: boolean;
+    speciesAlive?: SpeciesId[];
   }): void {
     this.beePresence = opts.beesAlive;
+    this.presenceSpecies = new Set(opts.speciesAlive ?? []);
     if (opts.phase === 'basalt') {
       this.basaltElapsed = opts.basaltElapsedSec;
       const floor = this.actFloor(opts.basaltElapsedSec);
-      const army = Math.min(1, opts.unitCount / 14);
-      // Floor sets the act; army density can only raise it further.
+      // Staged armies can reach ~16 living units — keep clock floors in charge.
+      const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, Math.max(floor, army * 0.88));
+      this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
+      this.actTier = opts.basaltElapsedSec < 180 ? 0 : opts.basaltElapsedSec < 240 ? 1 : 2;
     } else if (opts.phase === 'oasis') {
-      const army = Math.min(1, opts.unitCount / 14);
+      const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
+      this.volumeTarget = 1;
+      this.actTier = 0;
+    } else if (opts.phase === 'transition') {
+      this.volumeTarget = 1;
+      this.actTier = 0;
     }
   }
 
@@ -809,10 +857,92 @@ class MusicDirector {
     return ease(0.78, 0.95, (elapsed - 290) / 5);
   }
 
-  /** Ease intensity toward its target each scheduler slice — no hard jumps. */
+  /** Music-bus volume multiplier — same windows as act floors, never a jump. */
+  private actVolume(elapsed: number): number {
+    const ease = (a: number, b: number, t: number) => {
+      const x = Math.max(0, Math.min(1, t));
+      const s = x * x * (3 - 2 * x);
+      return a + (b - a) * s;
+    };
+    if (elapsed < 180) return 1;
+    if (elapsed < 192) return ease(1, 1.1, (elapsed - 180) / 12);
+    if (elapsed < 240) return 1.1;
+    if (elapsed < 252) return ease(1.1, 1.2, (elapsed - 240) / 12);
+    return 1.2;
+  }
+
+  /** Ease intensity + volume toward targets each scheduler slice. */
   private tickIntensity(): void {
     const d = this.intensityTarget - this.intensity;
-    this.intensity += d * 0.12; // ~smooth over a second of scheduler wakes
+    this.intensity += d * 0.12;
+    const vd = this.volumeTarget - this.volumeMul;
+    this.volumeMul += vd * 0.1;
+    if (this.bus && core.ctx) {
+      // Ride the director bus gain so stop() can still fade the whole bed out.
+      this.bus.gain.setTargetAtTime(Math.max(0.0001, this.volumeMul), core.ctx.currentTime, 0.08);
+    }
+  }
+
+  /**
+   * Soft in-key presence beds for living species. One slot per species,
+   * capped, scheduled on the 16th grid — color under the drumline, not a
+   * second melody fighting the ostinato.
+   */
+  private playPresence(t: number, s16: number, bar: number): void {
+    if (!this.bus || this.actTier < 1) return;
+    if (this.mode !== 'basalt' && this.mode !== 'intro') return;
+    const thick = this.actTier >= 2 ? 1.35 : 1;
+    const g = (0.016 + this.intensity * 0.012) * thick;
+
+    type Role = 'titan' | 'command' | 'swarm' | 'air' | 'siege' | 'skirmish';
+    const roleOf = (sp: SpeciesId): Role => {
+      if (sp === 'trex' || sp === 'bear') return 'titan';
+      if (sp === 'lion' || sp === 'bighorn') return 'command';
+      if (sp === 'fireants' || sp === 'porcupine') return 'swarm';
+      if (sp === 'eagle' || sp === 'bees') return 'air';
+      if (sp === 'beetles') return 'siege';
+      return 'skirmish';
+    };
+    const prio: Record<Role, number> = { titan: 0, air: 1, swarm: 2, command: 3, siege: 4, skirmish: 5 };
+    const picked: SpeciesId[] = [];
+    const seen = new Set<Role>();
+    const ordered = [...this.presenceSpecies].sort((a, b) => prio[roleOf(a)] - prio[roleOf(b)]);
+    for (const sp of ordered) {
+      const r = roleOf(sp);
+      if (r === 'air' && sp === 'bees') continue; // bee buzz bed already handles hive
+      if (seen.has(r) && r !== 'air') continue;
+      seen.add(r);
+      picked.push(sp);
+      if (picked.length >= 4) break;
+    }
+
+    for (const sp of picked) {
+      const role = roleOf(sp);
+      if (role === 'titan' && s16 === 0) {
+        // Low D–A open fifth under the taiko.
+        voice({ type: 'sine', freq: 73.4, dur: 1.8, gain: g * 0.9, attack: 0.2, bus: this.bus, when: t, pan: -0.15 });
+        voice({ type: 'triangle', freq: 110, dur: 1.8, gain: g * 0.55, attack: 0.25, bus: this.bus, when: t, pan: 0.15 });
+        if (this.actTier >= 2 && bar % 2 === 0) {
+          voice({ type: 'sawtooth', freq: 146.8, dur: 0.9, gain: g * 0.22, filterFreq: 420, attack: 0.08, bus: this.bus, when: t });
+        }
+      } else if (role === 'command' && bar % 4 === 0 && s16 === 0) {
+        // Short F–A–D fragment, scale-locked.
+        voice({ type: 'triangle', freq: 174.6, dur: 0.28, gain: g * 0.7, attack: 0.02, bus: this.bus, when: t, pan: -0.2 });
+        voice({ type: 'triangle', freq: 220, dur: 0.28, gain: g * 0.55, attack: 0.02, bus: this.bus, when: t + 0.15, pan: 0.1 });
+        voice({ type: 'triangle', freq: 293.7, dur: 0.4, gain: g * 0.45, attack: 0.02, bus: this.bus, when: t + 0.3, pan: 0.2 });
+      } else if (role === 'swarm' && s16 % 4 === 2) {
+        // Quiet scale ticks on offbeats — dust, not a lead.
+        voice({ type: 'triangle', freq: s16 === 2 ? 293.7 : 349.2, dur: 0.05, gain: g * 0.35, bus: this.bus, when: t });
+      } else if (role === 'air' && s16 === 8) {
+        this.shimmer(t, 587.3, 1.4, g * 0.55);
+      } else if (role === 'siege' && s16 === 0 && bar % 2 === 1) {
+        voice({ type: 'sine', freq: 98, dur: 1.2, gain: g * 0.5, attack: 0.15, bus: this.bus, when: t, pan: 0.25 });
+        voice({ type: 'triangle', freq: 146.8, dur: 1.0, gain: g * 0.28, attack: 0.18, bus: this.bus, when: t });
+      } else if (role === 'skirmish' && this.actTier >= 2 && bar % 4 === 2 && s16 === 0) {
+        voice({ type: 'triangle', freq: 220, dur: 0.35, gain: g * 0.4, attack: 0.03, bus: this.bus, when: t, pan: -0.25 });
+        voice({ type: 'triangle', freq: 330, dur: 0.35, gain: g * 0.28, attack: 0.03, bus: this.bus, when: t, pan: 0.25 });
+      }
+    }
   }
 
   /** Hive buzz bed — soft detuned drones while bees are on the field. */
@@ -973,6 +1103,8 @@ class MusicDirector {
 
     // Living bee buzz rides under every mode once a swarm is on the field.
     if (this.beePresence && s16 % 2 === 0) this.beeBuzz(t, inten);
+    // Species presence beds unlock with the minute-4 / minute-5 acts.
+    this.playPresence(t, s16, bar);
 
     switch (this.mode) {
       case 'menu': {

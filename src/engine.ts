@@ -17,9 +17,9 @@ import {
   ACID_DMG, AGGRO_RANGE, AQUA_MAX, AQUA_PER_TICK_P1, AQUA_PER_TICK_P2, BLESSING_MULT,
   BRIDGE_HALF_W, CAPTURE_RATE, DEPLOY_DEPTH, FORT_ARCH_HALF_W, FORT_LANES, FORT_SPAWN_Y,
   FORT_WALL_FRONT, FORT_WING_R, FORT_WING_Y,
-  HAND_SIZE, LOTUS_HEAL_PCT, MAX_ARMY, OBELISK_HP,
+  HAND_SIZE, LANE_SOFT_CAP, LOTUS_HEAL_PCT, OBELISK_HP,
   PHASE1_TICKS, PHASE2_TICKS, RUBBLE_VISIBLE_DEPTH, RIVER_BANDS,
-  TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, fortPads, inDeployBand, inWorld,
+  TICK_MS, TRANSITION_TICKS, VENT_DMG, WORLD_H, WORLD_W, armyCap, fortPads, inDeployBand, inWorld,
 } from './types';
 import type {
   CardId, FactionId, GameEvent, GameState, ObeliskState, PhaseConfig, PlayerId,
@@ -171,6 +171,47 @@ export function armySize(st: GameState, owner: PlayerId): number {
   return st.units.reduce((n, u) => n + (u.hp > 0 && u.owner === owner ? 1 : 0), 0);
 }
 
+/** Current deploy ceiling for this match state (staged 6→7→8 in Basalt). */
+export function currentArmyCap(st: GameState): number {
+  const elapsed = st.phase === 'basalt'
+    ? Math.max(0, (st.cfg.phase1Ticks - st.phaseTicksLeft) * (TICK_MS / 1000))
+    : 0;
+  return armyCap(st.phase, elapsed);
+}
+
+/** Which gate lane (0/1) a world x is closer to for this owner. */
+function laneWingOf(owner: PlayerId, x: number): 0 | 1 {
+  const lanes = FORT_LANES[owner];
+  return Math.abs(x - lanes[0]) < Math.abs(x - lanes[1]) ? 0 : 1;
+}
+
+/** Living ground units this owner has committed to a gate lane. */
+export function laneGroundCount(st: GameState, owner: PlayerId, wing: 0 | 1): number {
+  return st.units.reduce((n, u) => {
+    if (u.hp <= 0 || u.owner !== owner) return n;
+    if (speciesDef(u.species).stats!.flying) return n;
+    return n + (laneWingOf(owner, u.x) === wing ? 1 : 0);
+  }, 0);
+}
+
+/**
+ * Pick a deploy gate: honour the player's tap when the lane has room;
+ * otherwise snap to the emptier lane so armies don't pile into soup.
+ * Flyers ignore the soft cap (they don't clog the bridge deck).
+ */
+export function preferDeployLane(
+  st: GameState, owner: PlayerId, preferredWing: 0 | 1, flying: boolean,
+): 0 | 1 {
+  if (flying) return preferredWing;
+  if (laneGroundCount(st, owner, preferredWing) < LANE_SOFT_CAP) return preferredWing;
+  const other = (1 - preferredWing) as 0 | 1;
+  if (laneGroundCount(st, owner, other) < LANE_SOFT_CAP) return other;
+  // Both soft-full: still prefer the emptier corridor.
+  return laneGroundCount(st, owner, preferredWing) <= laneGroundCount(st, owner, other)
+    ? preferredWing
+    : other;
+}
+
 function groundOpen(st: GameState, x: number, y: number): boolean {
   return inWorld(x, y) && walkableAt(worldOf(st), x, y);
 }
@@ -273,7 +314,7 @@ function spawnUnit(
   x: number, y: number, waypoint: Vec2 | null,
 ): UnitState | null {
   if (!inWorld(x, y)) return null;
-  if (armySize(st, owner) >= MAX_ARMY) return null;
+  if (armySize(st, owner) >= currentArmyCap(st)) return null;
   const stats = speciesDef(species).stats!;
   if (!stats.flying && !groundOpen(st, x, y)) return null;
   const u: UnitState = {
@@ -360,7 +401,7 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
 
   if (a.type === 'deploy' && def.kind === 'unit' && def.species) {
     if (!inWorld(a.x, a.y)) return;
-    if (armySize(st, input.player) >= MAX_ARMY) return;
+    if (armySize(st, input.player) >= currentArmyCap(st)) return;
     const stats = def.stats!;
 
     let sx = a.x;
@@ -373,12 +414,16 @@ function applyInput(st: GameState, ev: GameEvent[], input: PlayerInput): void {
       // materialises at the FAR end of the arch corridor — outside the
       // fortress — and marches the whole tunnel before emerging onto the
       // field, so every deployment reads as a gate sortie.
+      // Lane soft-cap: if the tapped gate is already crowded with ground
+      // troops, snap to the emptier corridor so individual duels stay readable.
       const pads = fortPads(input.player);
-      const pad = pads.reduce((best, cur) =>
+      const tapped = pads.reduce((best, cur) =>
         Math.abs(cur.x - a.x) < Math.abs(best.x - a.x) ? cur : best);
-      sx = pad.x;
       const lanes = FORT_LANES[input.player];
-      const wing: 0 | 1 = Math.abs(pad.x - lanes[0]) < Math.abs(pad.x - lanes[1]) ? 0 : 1;
+      const tappedWing: 0 | 1 = Math.abs(tapped.x - lanes[0]) < Math.abs(tapped.x - lanes[1]) ? 0 : 1;
+      const wing = preferDeployLane(st, input.player, tappedWing, !!stats.flying);
+      const pad = pads[wing];
+      sx = pad.x;
       const ownGate = st.obelisks.find((o) => o.owner === input.player && o.wing === wing);
       const ownRazed = !!ownGate && ownGate.hp <= 0;
       if (ownRazed) {
@@ -1091,7 +1136,9 @@ function laneDiscipline(st: GameState): void {
   }
 }
 
-/** Soft separation: overlapping same-layer units push each other apart. */
+/** Soft separation: overlapping same-layer units push each other apart.
+ *  Same-owner pairs bias the shove along the lane (Y) so bridges don't
+ *  spray warriors sideways into lava / neighboring corridors. */
 function separateUnits(st: GameState): void {
   const units = st.units.filter((u) => u.hp > 0);
   for (let i = 0; i < units.length; i++) {
@@ -1110,8 +1157,16 @@ function separateUnits(st: GameState): void {
       if (d2 >= minD * minD || d2 === 0) continue;
       const d = Math.sqrt(d2);
       const push = (minD - d) / 2;
-      const ux = dx / d;
-      const uy = dy / d;
+      let ux = dx / d;
+      let uy = dy / d;
+      // Same army: prefer column depth over lateral shove (anti-chaos).
+      if (a.owner === b.owner && !aFly) {
+        ux *= 0.35;
+        uy = uy >= 0 ? Math.max(0.55, Math.abs(uy)) : -Math.max(0.55, Math.abs(uy));
+        const len = Math.hypot(ux, uy) || 1;
+        ux /= len;
+        uy /= len;
+      }
       const world = worldOf(st);
       const move = (u: UnitState, mx: number, my: number, fly: boolean) => {
         const nx = Math.max(0.2, Math.min(WORLD_W - 0.2, u.x + mx));
@@ -1630,7 +1685,7 @@ export class BotBrain {
 
     if (me.aqua < 2) return null;
     if (this.rng() < 0.12) return null;
-    if (armySize(st, this.seat) >= MAX_ARMY) return null;
+    if (armySize(st, this.seat) >= currentArmyCap(st)) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
     if (affordable.length === 0) return null;
@@ -1656,7 +1711,7 @@ export class BotBrain {
       // both bots converge on one corridor — the winner razed both gates
       // and the loser never scored even one (0% 1–1 trades).
       const foes = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
-      let lane = this.rng() < 0.5 ? 0 : 1;
+      let lane: 0 | 1 = this.rng() < 0.5 ? 0 : 1;
       if (foes.length > 0) {
         const c0 = foes.filter((u) => Math.abs(u.x - pads[0].x) <= Math.abs(u.x - pads[1].x)).length;
         const c1 = foes.length - c0;
@@ -1667,6 +1722,9 @@ export class BotBrain {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
         if (weakest.hp < weakest.maxHp * 0.45) lane = weakest.wing;
       }
+      // Respect lane soft-cap so the bot doesn't invent mid-lane soup.
+      const flying = !!def.stats?.flying;
+      lane = preferDeployLane(st, this.seat, lane, flying);
       const pad = pads[lane];
       this.nextActionTick = st.tick + 6;
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };

@@ -1,16 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LAVA_RAIN_CARD, MAX_ARMY, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W,
-  fortPads, inDeployBand,
+  LAVA_RAIN_CARD, PHASE1_TICKS, PHASE2_TICKS, PHASE_SPELL_CARD, TICK_MS, WORLD_H, WORLD_W,
+  armyCap, fortPads, inDeployBand,
 } from '../types';
-import type { CardId, GameEvent, GameState, PlayerId } from '../types';
+import type { CardId, GameEvent, GameState, PlayerId, SpeciesId } from '../types';
 import { cardDef } from '../data';
-import { BotBrain, TickDriver } from '../engine';
+import { BotBrain, TickDriver, preferDeployLane } from '../engine';
 import { Renderer } from '../render';
 import { handleGameEvents, music, playUi } from '../audio';
 import type { MatchSession } from '../net';
 import { SpriteArt } from './SpriteArt';
 import { getDuelArt, loadSprites } from '../sprites';
+
+function basaltElapsedSec(state: GameState): number {
+  if (state.phase !== 'basalt') return 0;
+  return Math.max(0, (state.cfg.phase1Ticks - state.phaseTicksLeft) * (TICK_MS / 1000));
+}
+
+function livingSpecies(state: GameState): SpeciesId[] {
+  const set = new Set<SpeciesId>();
+  for (const u of state.units) {
+    if (u.hp > 0) set.add(u.species);
+  }
+  return [...set];
+}
 
 interface Banner {
   id: number;
@@ -86,17 +99,16 @@ export function GameScreen({
         handleGameEvents(events);
         routeEvents(events, state);
         // Soundtrack + warrior drumline: act floors from the Phase 1 clock,
-        // army density on top, bee buzz while a swarm lives. Early double-raze
-        // hands off to the existing transition riser (climax crest skipped).
-        const p1Budget = state.cfg.phase1Ticks;
-        const basaltElapsed = state.phase === 'basalt'
-          ? Math.max(0, (p1Budget - state.phaseTicksLeft) * (TICK_MS / 1000))
-          : 0;
+        // army density on top, bee buzz while a swarm lives, species presence
+        // beds from minute 4. Early double-raze hands off to the existing
+        // transition riser (climax crest skipped).
+        const elapsed = basaltElapsedSec(state);
         music.setBattlePulse({
           phase: state.phase,
-          basaltElapsedSec: basaltElapsed,
+          basaltElapsedSec: elapsed,
           unitCount: state.units.filter((u) => u.hp > 0).length,
           beesAlive: state.units.some((u) => u.hp > 0 && u.species === 'bees'),
+          speciesAlive: livingSpecies(state),
         });
         music.setMode(state.phase);
         setUi({ ...state });
@@ -222,7 +234,7 @@ export function GameScreen({
       return;
     }
 
-    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= MAX_ARMY) {
+    if (st.units.filter((u) => u.owner === seat && u.hp > 0).length >= armyCap(st.phase, basaltElapsedSec(st))) {
       showToast('Army at full strength — lose a fighter first');
       playUi('error');
       return;
@@ -239,7 +251,13 @@ export function GameScreen({
         playUi('error');
         return;
       }
-      driver.submit(seat, { type: 'deploy', card, x: pad.x, y: pad.y, dirX: 0, dirY: seat === 0 ? -1 : 1 });
+      const tappedWing: 0 | 1 = pads[0] === pad ? 0 : 1;
+      const wing = preferDeployLane(st, seat, tappedWing, !!def.stats?.flying);
+      if (wing !== tappedWing) {
+        showToast('Lane full — reinforcing the other gate');
+      }
+      const dest = pads[wing];
+      driver.submit(seat, { type: 'deploy', card, x: dest.x, y: dest.y, dirX: 0, dirY: seat === 0 ? -1 : 1 });
       setSelectedCard(null);
       playUi('tap');
       return;
@@ -464,7 +482,7 @@ export function GameScreen({
           </div>
           <span className="aqua-count">{Math.floor(me?.aqua ?? 0)}</span>
           <span className="army-count">
-            ⚑ {ui ? ui.units.filter((u) => u.owner === seat && u.hp > 0).length : 0}/{MAX_ARMY}
+            ⚑ {ui ? ui.units.filter((u) => u.owner === seat && u.hp > 0).length : 0}/{ui ? armyCap(ui.phase, basaltElapsedSec(ui)) : 6}
           </span>
         </div>
         <div className="hand">
