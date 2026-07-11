@@ -85,8 +85,19 @@ export function GameScreen({
         (window as unknown as { __vbState?: typeof state }).__vbState = state;
         handleGameEvents(events);
         routeEvents(events, state);
-        // Battle density feeds the adaptive score.
-        music.setIntensity(Math.min(1, state.units.length / 14));
+        // Soundtrack + warrior drumline: act floors from the Phase 1 clock,
+        // army density on top, bee buzz while a swarm lives. Early double-raze
+        // hands off to the existing transition riser (climax crest skipped).
+        const p1Budget = state.cfg.phase1Ticks;
+        const basaltElapsed = state.phase === 'basalt'
+          ? Math.max(0, (p1Budget - state.phaseTicksLeft) * (TICK_MS / 1000))
+          : 0;
+        music.setBattlePulse({
+          phase: state.phase,
+          basaltElapsedSec: basaltElapsed,
+          unitCount: state.units.filter((u) => u.hp > 0).length,
+          beesAlive: state.units.some((u) => u.hp > 0 && u.species === 'bees'),
+        });
         music.setMode(state.phase);
         setUi({ ...state });
         // Local bot thinks after seeing the tick, like a remote player would.

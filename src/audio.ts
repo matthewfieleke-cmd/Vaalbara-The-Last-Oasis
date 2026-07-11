@@ -2,12 +2,16 @@
  * VAALBARA: THE LAST OASIS — audio.ts
  * A fully procedural Web Audio synthesizer. Zero audio files.
  *
- *  - Soundtrack: two generative layers scheduled on a musical clock.
- *    Phase 1 (Basalt Fields): dark, heavy, ominous rhythmic pulse in D minor.
- *    Phase 2 (Oasis): mysterious-hopeful score in D dorian, crossfaded
- *    seamlessly over ~4 seconds at the transition.
- *  - SFX: each species has a distinct synth profile (waveform, pitch curve,
- *    filter, noise mix) triggered on deployment spawn and combat ticks.
+ *  - Soundtrack: generative layers on a 100 BPM musical clock.
+ *    Phase 1 (Basalt Fields): dark D-minor pulse that lifts at the start of
+ *    minute 4, pushes at the start of minute 5, and crests in the last 10 s
+ *    (skipped on early double-raze — hands off to the existing transition).
+ *    Phase 2 (Oasis): D-dorian score, crossfaded over the march.
+ *  - Warriors: the battle DRUMLINE. Attack hits are soft-quantized onto the
+ *    16th grid so they lock with the taiko; species sit in distinct registers
+ *    (bass titans, mid strikers, high ticks). Bees keep a living buzz bed.
+ *    Deploy entrances are species-specific and short — a new instrument
+ *    joining the mix, not a second orchestra.
  * ========================================================================== */
 
 import type { GameEvent, SpeciesId } from './types';
@@ -171,149 +175,213 @@ function noise(o: NoiseOpts): void {
 
 /* ------------------------------------------------------------------------ */
 /* Species SFX profiles                                                       */
-/* Each species: { spawn, attack } with a signature timbre.                   */
+/* ------------------------------------------------------------------------ */
+/* Species voices — warriors are the BATTLE DRUMLINE                         */
+/*                                                                            */
+/* The soundtrack carries melody, harmony and pulse. Warriors add percussion  */
+/* and rhythm that sits on that pulse: bass thuds for titans, cracks for      */
+/* strikers, ticks for swarms, and a sustained buzz bed for bees. Animal      */
+/* vocal colour is reserved for deploy entrances and rare punctuation — not   */
+/* every swing — so a full fight stays beautiful instead of muddy.            */
 /* ------------------------------------------------------------------------ */
 
-type SfxFn = () => void;
+type SfxFn = (when?: number) => void;
+
+function nowOr(when?: number): number {
+  return when ?? (core.ctx?.currentTime ?? 0);
+}
+
+/** Soft pitch/gain jitter so repeated hits don't machine-gun. */
+function varN(base: number, spread = 0.04): number {
+  return base * (1 + (Math.random() * 2 - 1) * spread);
+}
 
 const SPECIES_SFX: Record<SpeciesId, { spawn: SfxFn; attack: SfxFn }> = {
   trex: {
-    // Sub-bass roar with a slow downward growl and rumbling noise floor.
-    spawn: () => {
-      voice({ type: 'sawtooth', freq: 90, freqEnd: 38, dur: 1.1, gain: 0.4, filterFreq: 300, attack: 0.05 });
-      voice({ type: 'square', freq: 55, freqEnd: 30, dur: 1.2, gain: 0.28, filterFreq: 160 });
-      noise({ dur: 1.0, gain: 0.2, filterFreq: 220, filterEnd: 60 });
+    // Entrance: short sub roar under a ceremonial drum — then the kit takes over.
+    spawn: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'sine', freq: 72, freqEnd: 38, dur: 0.55, gain: 0.42, when: t });
+      noise({ dur: 0.22, gain: 0.2, filterFreq: 700, filterEnd: 120, when: t });
+      voice({ type: 'sawtooth', freq: 90, freqEnd: 48, dur: 0.45, gain: 0.12, filterFreq: 220, attack: 0.04, when: t + 0.04 });
     },
-    attack: () => {
-      voice({ type: 'square', freq: 70, freqEnd: 35, dur: 0.35, gain: 0.4, filterFreq: 250 });
-      noise({ dur: 0.3, gain: 0.3, filterFreq: 400, filterEnd: 80 });
+    // Kick / taiko: BOOM
+    attack: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'sine', freq: varN(78), freqEnd: 36, dur: 0.32, gain: varN(0.44, 0.06), when: t });
+      noise({ dur: 0.12, gain: 0.22, filterFreq: 900, filterEnd: 160, when: t });
     },
   },
   lion: {
-    spawn: () => {
-      // Regal brassy roar: stacked saws with vibrato-like doubled detune.
-      voice({ type: 'sawtooth', freq: 160, freqEnd: 95, dur: 0.9, gain: 0.3, filterFreq: 900, attack: 0.03 });
-      voice({ type: 'sawtooth', freq: 164, freqEnd: 99, dur: 0.9, gain: 0.3, filterFreq: 900, attack: 0.03 });
-      noise({ dur: 0.7, gain: 0.14, filterFreq: 700, filterEnd: 200 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'sawtooth', freq: 150, freqEnd: 100, dur: 0.4, gain: 0.18, filterFreq: 700, attack: 0.03, when: t });
+      voice({ type: 'sine', freq: 110, freqEnd: 70, dur: 0.28, gain: 0.28, when: t + 0.05 });
+      noise({ dur: 0.15, gain: 0.1, filterFreq: 800, filterEnd: 250, when: t });
     },
-    attack: () => {
-      voice({ type: 'sawtooth', freq: 200, freqEnd: 120, dur: 0.22, gain: 0.28, filterFreq: 1100 });
+    // Mid tom: tom–TOM
+    attack: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'sine', freq: varN(160), freqEnd: 85, dur: 0.12, gain: 0.22, when: t });
+      voice({ type: 'sine', freq: varN(140), freqEnd: 70, dur: 0.18, gain: 0.3, when: t + 0.07 });
+      noise({ dur: 0.06, gain: 0.1, filterFreq: 1400, filterEnd: 400, when: t + 0.07 });
     },
   },
   eagle: {
-    spawn: () => {
-      // Piercing screech gliding upward then down.
-      voice({ type: 'triangle', freq: 900, freqEnd: 2400, dur: 0.18, gain: 0.2 });
-      voice({ type: 'triangle', freq: 2400, freqEnd: 1100, dur: 0.35, gain: 0.22, when: (core.ctx?.currentTime ?? 0) + 0.16 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      // Brief cry on entrance only.
+      voice({ type: 'triangle', freq: 1400, freqEnd: 2200, dur: 0.12, gain: 0.14, when: t });
+      voice({ type: 'triangle', freq: 2000, freqEnd: 900, dur: 0.22, gain: 0.12, when: t + 0.1 });
+      noise({ dur: 0.08, gain: 0.08, filterFreq: 4500, filterType: 'highpass', when: t + 0.08 });
     },
-    attack: () => {
-      voice({ type: 'triangle', freq: 1800, freqEnd: 700, dur: 0.15, gain: 0.2 });
-      noise({ dur: 0.1, gain: 0.12, filterFreq: 4000, filterType: 'highpass' });
+    // High peck: swoop — ting
+    attack: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.07, gain: 0.1, filterFreq: 5000, filterType: 'highpass', when: t });
+      voice({ type: 'triangle', freq: varN(2100), freqEnd: 900, dur: 0.09, gain: 0.16, when: t + 0.04 });
     },
   },
   honeybadger: {
-    spawn: () => {
-      // Feral chittering snarl: rapid square chirps.
-      for (let i = 0; i < 4; i++) {
-        voice({ type: 'square', freq: 320 + i * 60, freqEnd: 180, dur: 0.09, gain: 0.16, when: (core.ctx?.currentTime ?? 0) + i * 0.07 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      for (let i = 0; i < 3; i++) {
+        voice({ type: 'square', freq: 380 + i * 40, freqEnd: 200, dur: 0.06, gain: 0.1, when: t + i * 0.05 });
       }
+      noise({ dur: 0.1, gain: 0.08, filterFreq: 2500, filterType: 'bandpass', when: t });
     },
-    attack: () => {
-      voice({ type: 'square', freq: 420, freqEnd: 200, dur: 0.1, gain: 0.2 });
-      voice({ type: 'square', freq: 500, freqEnd: 240, dur: 0.08, gain: 0.16, when: (core.ctx?.currentTime ?? 0) + 0.06 });
+    // Snare double: crack-crack
+    attack: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.05, gain: varN(0.2, 0.08), filterFreq: 3500, filterType: 'bandpass', when: t });
+      voice({ type: 'square', freq: varN(420), freqEnd: 180, dur: 0.06, gain: 0.12, when: t });
+      noise({ dur: 0.045, gain: varN(0.16, 0.08), filterFreq: 3200, filterType: 'bandpass', when: t + 0.055 });
+      voice({ type: 'square', freq: varN(480), freqEnd: 200, dur: 0.05, gain: 0.1, when: t + 0.055 });
     },
   },
   scorpion: {
-    spawn: () => {
-      // Dry chitinous clicks.
+    spawn: (when) => {
+      const t = nowOr(when);
       for (let i = 0; i < 3; i++) {
-        noise({ dur: 0.04, gain: 0.2, filterFreq: 3000, filterType: 'bandpass', when: (core.ctx?.currentTime ?? 0) + i * 0.09 });
+        noise({ dur: 0.03, gain: 0.14, filterFreq: 2800, filterType: 'bandpass', when: t + i * 0.07 });
       }
     },
-    attack: () => {
-      // Whip-crack sting.
-      voice({ type: 'sine', freq: 1500, freqEnd: 150, dur: 0.12, gain: 0.26 });
-      noise({ dur: 0.05, gain: 0.2, filterFreq: 5000, filterType: 'highpass' });
+    // Metallic click → whip
+    attack: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.025, gain: 0.14, filterFreq: 3200, filterType: 'bandpass', when: t });
+      noise({ dur: 0.02, gain: 0.1, filterFreq: 4000, filterType: 'bandpass', when: t + 0.04 });
+      voice({ type: 'sine', freq: varN(1600), freqEnd: 140, dur: 0.1, gain: 0.22, when: t + 0.07 });
+      noise({ dur: 0.04, gain: 0.14, filterFreq: 5500, filterType: 'highpass', when: t + 0.07 });
     },
   },
   fireants: {
-    spawn: () => {
-      noise({ dur: 0.5, gain: 0.1, filterFreq: 2600, filterType: 'bandpass' });
-      voice({ type: 'sawtooth', freq: 700, freqEnd: 900, dur: 0.4, gain: 0.05 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      for (let i = 0; i < 5; i++) {
+        noise({ dur: 0.025, gain: 0.07, filterFreq: 3000, filterType: 'bandpass', when: t + i * 0.04 });
+      }
     },
-    attack: () => {
-      noise({ dur: 0.12, gain: 0.12, filterFreq: 3200, filterType: 'bandpass' });
-      voice({ type: 'sine', freq: 1100, freqEnd: 600, dur: 0.08, gain: 0.08 });
+    // Castanet ticks: tik-tik-tik-tik
+    attack: (when) => {
+      const t = nowOr(when);
+      for (let i = 0; i < 4; i++) {
+        noise({
+          dur: 0.022,
+          gain: varN(0.09, 0.1),
+          filterFreq: 2800 + i * 200,
+          filterType: 'bandpass',
+          when: t + i * 0.035,
+        });
+      }
     },
   },
   bear: {
-    spawn: () => {
-      voice({ type: 'sawtooth', freq: 110, freqEnd: 55, dur: 1.0, gain: 0.34, filterFreq: 420, attack: 0.06 });
-      noise({ dur: 0.8, gain: 0.16, filterFreq: 300, filterEnd: 90 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'sine', freq: 68, freqEnd: 40, dur: 0.5, gain: 0.36, when: t });
+      noise({ dur: 0.2, gain: 0.14, filterFreq: 600, filterEnd: 140, when: t });
+      voice({ type: 'sawtooth', freq: 95, freqEnd: 55, dur: 0.35, gain: 0.1, filterFreq: 280, attack: 0.05, when: t + 0.06 });
     },
-    attack: () => {
-      // Heavy swipe: whoosh into thud.
-      noise({ dur: 0.16, gain: 0.22, filterFreq: 900, filterEnd: 2400, filterType: 'bandpass' });
-      voice({ type: 'sine', freq: 130, freqEnd: 45, dur: 0.25, gain: 0.34, when: (core.ctx?.currentTime ?? 0) + 0.1 });
+    // Floor tom: THUD (optional double body-weight)
+    attack: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.1, gain: 0.16, filterFreq: 1100, filterEnd: 400, filterType: 'bandpass', when: t });
+      voice({ type: 'sine', freq: varN(95), freqEnd: 42, dur: 0.28, gain: varN(0.38, 0.05), when: t + 0.05 });
     },
   },
   bighorn: {
-    spawn: () => {
-      // Hollow horn call.
-      voice({ type: 'triangle', freq: 220, freqEnd: 330, dur: 0.5, gain: 0.24, filterFreq: 800 });
-      voice({ type: 'triangle', freq: 110, dur: 0.5, gain: 0.16 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'triangle', freq: 200, freqEnd: 280, dur: 0.28, gain: 0.14, filterFreq: 700, when: t });
+      voice({ type: 'sine', freq: 90, dur: 0.25, gain: 0.16, when: t });
+      noise({ dur: 0.08, gain: 0.1, filterFreq: 1800, filterEnd: 500, when: t + 0.12 });
     },
-    attack: () => {
-      // Skull-crack impact.
-      voice({ type: 'square', freq: 180, freqEnd: 60, dur: 0.18, gain: 0.32, filterFreq: 500 });
-      noise({ dur: 0.1, gain: 0.24, filterFreq: 1500, filterEnd: 300 });
+    // Woodblock → stone: tok — GONG (short)
+    attack: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'square', freq: varN(220), freqEnd: 140, dur: 0.05, gain: 0.12, filterFreq: 900, when: t });
+      voice({ type: 'sine', freq: varN(130), freqEnd: 55, dur: 0.2, gain: 0.28, when: t + 0.06 });
+      noise({ dur: 0.07, gain: 0.14, filterFreq: 1600, filterEnd: 350, when: t + 0.06 });
     },
   },
   bees: {
-    spawn: () => {
-      // Detuned saw drone swelling in.
-      voice({ type: 'sawtooth', freq: 210, freqEnd: 230, dur: 0.9, gain: 0.1, attack: 0.25 });
-      voice({ type: 'sawtooth', freq: 216, freqEnd: 236, dur: 0.9, gain: 0.1, attack: 0.25 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      // Hive swell on entrance — the sustained bed is handled by MusicDirector.
+      voice({ type: 'sawtooth', freq: 210, freqEnd: 240, dur: 0.7, gain: 0.08, attack: 0.2, when: t });
+      voice({ type: 'sawtooth', freq: 216, freqEnd: 246, dur: 0.7, gain: 0.07, attack: 0.22, when: t });
     },
-    attack: () => {
-      voice({ type: 'sawtooth', freq: 260, freqEnd: 320, dur: 0.2, gain: 0.12 });
-      voice({ type: 'sine', freq: 1400, freqEnd: 900, dur: 0.06, gain: 0.1 });
+    // Shaker crest + tiny stings: shhhhh — plik-plik
+    attack: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.14, gain: 0.1, filterFreq: 4000, filterEnd: 7000, filterType: 'bandpass', when: t });
+      voice({ type: 'sine', freq: varN(1500), freqEnd: 1100, dur: 0.04, gain: 0.08, when: t + 0.1 });
+      voice({ type: 'sine', freq: varN(1700), freqEnd: 1200, dur: 0.035, gain: 0.07, when: t + 0.14 });
     },
   },
   wolves: {
-    spawn: () => {
-      // Rising howl.
-      voice({ type: 'sine', freq: 300, freqEnd: 620, dur: 0.7, gain: 0.2, attack: 0.12 });
-      voice({ type: 'sine', freq: 302, freqEnd: 610, dur: 0.75, gain: 0.14, attack: 0.15 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      // Short howl colour on entrance only.
+      voice({ type: 'sine', freq: 320, freqEnd: 520, dur: 0.45, gain: 0.12, attack: 0.1, when: t });
+      voice({ type: 'sine', freq: 110, freqEnd: 80, dur: 0.2, gain: 0.14, when: t + 0.15 });
     },
-    attack: () => {
-      voice({ type: 'square', freq: 350, freqEnd: 180, dur: 0.12, gain: 0.18, filterFreq: 1300 });
-      noise({ dur: 0.08, gain: 0.1, filterFreq: 2000, filterType: 'bandpass' });
+    // Hand-drum: dum-da-da
+    attack: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'sine', freq: varN(175), freqEnd: 95, dur: 0.1, gain: 0.2, when: t });
+      voice({ type: 'sine', freq: varN(200), freqEnd: 120, dur: 0.07, gain: 0.14, when: t + 0.06 });
+      voice({ type: 'sine', freq: varN(190), freqEnd: 110, dur: 0.07, gain: 0.12, when: t + 0.11 });
+      noise({ dur: 0.04, gain: 0.08, filterFreq: 2000, filterType: 'bandpass', when: t });
     },
   },
   porcupine: {
-    spawn: () => {
-      // Rattling quills.
-      for (let i = 0; i < 5; i++) {
-        noise({ dur: 0.03, gain: 0.12, filterFreq: 4200, filterType: 'bandpass', when: (core.ctx?.currentTime ?? 0) + i * 0.05 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      for (let i = 0; i < 4; i++) {
+        noise({ dur: 0.025, gain: 0.09, filterFreq: 4200, filterType: 'bandpass', when: t + i * 0.04 });
       }
-      voice({ type: 'triangle', freq: 180, freqEnd: 140, dur: 0.3, gain: 0.12 });
     },
-    attack: () => {
-      voice({ type: 'triangle', freq: 700, freqEnd: 1600, dur: 0.08, gain: 0.14 });
-      noise({ dur: 0.05, gain: 0.14, filterFreq: 5000, filterType: 'highpass' });
+    // Güiro scrape → wood tok
+    attack: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.08, gain: 0.12, filterFreq: 3500, filterEnd: 5500, filterType: 'bandpass', when: t });
+      voice({ type: 'triangle', freq: varN(650), freqEnd: 400, dur: 0.06, gain: 0.1, when: t + 0.07 });
     },
   },
   beetles: {
-    spawn: () => {
-      // Pressurised chemical hiss priming.
-      noise({ dur: 0.5, gain: 0.14, filterFreq: 1800, filterEnd: 3600, filterType: 'bandpass' });
-      voice({ type: 'square', freq: 90, freqEnd: 130, dur: 0.4, gain: 0.08 });
+    spawn: (when) => {
+      const t = nowOr(when);
+      noise({ dur: 0.35, gain: 0.1, filterFreq: 1800, filterEnd: 3200, filterType: 'bandpass', when: t });
+      voice({ type: 'square', freq: 90, freqEnd: 120, dur: 0.25, gain: 0.05, when: t });
     },
-    attack: () => {
-      // Artillery pop + boiling spray.
-      voice({ type: 'square', freq: 220, freqEnd: 60, dur: 0.1, gain: 0.26 });
-      noise({ dur: 0.35, gain: 0.18, filterFreq: 3000, filterEnd: 700 });
+    // Artillery: tok — POP — sss
+    attack: (when) => {
+      const t = nowOr(when);
+      voice({ type: 'square', freq: varN(160), freqEnd: 90, dur: 0.04, gain: 0.08, filterFreq: 600, when: t });
+      voice({ type: 'square', freq: varN(200), freqEnd: 55, dur: 0.08, gain: 0.22, when: t + 0.05 });
+      noise({ dur: 0.28, gain: 0.14, filterFreq: 2800, filterEnd: 600, when: t + 0.05 });
     },
   },
 };
@@ -450,7 +518,7 @@ export function playResult(win: boolean): void {
   (win ? GLOBAL_SFX.victory : GLOBAL_SFX.defeat)();
 }
 
-/* Direct species hooks for the Duels mode stage. */
+/* Direct species hooks for the Duels mode stage (immediate — not battle-grid). */
 
 export function playSpeciesAttack(sp: SpeciesId): void {
   if (core.enabled) SPECIES_SFX[sp].attack();
@@ -468,19 +536,29 @@ export function playKo(): void {
 /* Event router — the game loop feeds sim events straight in                  */
 /* ------------------------------------------------------------------------ */
 
+/** Soft-snap a hit onto the soundtrack's 16th grid (100 BPM → 0.15 s).
+ *  Combat stays on the sim tick; only the sound waits ≤80 ms so the drumline
+ *  locks to the taiko without feeling laggy. */
+function quantizeAttackWhen(): number {
+  const ctx = core.ensure();
+  if (!ctx) return 0;
+  return music.quantizeWhen(ctx.currentTime, 0.08);
+}
+
 export function handleGameEvents(events: GameEvent[]): void {
   if (!core.enabled) return;
   // Cap simultaneous SFX per tick so big battles don't clip into mush.
-  let budget = 7;
+  let budget = 8;
   for (const e of events) {
     if (budget <= 0) break;
     switch (e.type) {
       case 'spawn':
+        // Entrances fire immediately — a new instrument joining the mix.
         SPECIES_SFX[e.species].spawn();
         budget--;
         break;
       case 'attack':
-        SPECIES_SFX[e.species].attack();
+        SPECIES_SFX[e.species].attack(quantizeAttackWhen());
         budget--;
         break;
       case 'death':
@@ -505,7 +583,7 @@ export function handleGameEvents(events: GameEvent[]): void {
         budget--;
         break;
       case 'shoot':
-        SPECIES_SFX.beetles.attack();
+        SPECIES_SFX.beetles.attack(quantizeAttackWhen());
         budget--;
         break;
       case 'splash':
@@ -563,6 +641,16 @@ class MusicDirector {
   private step = 0;
   private schedTimer: ReturnType<typeof setInterval> | null = null;
   private intensity = 0.35;
+  /** Smooth target for intensity — act floors + army density blend here. */
+  private intensityTarget = 0.35;
+  /** Basalt elapsed seconds (0 at Phase 1 start). */
+  private basaltElapsed = 0;
+  /** True while any bee swarm is alive — sustains the hive buzz bed. */
+  private beePresence = false;
+  /** Grid origin aligned when music starts (for SFX quantize). */
+  private gridOrigin = 0;
+  /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
+  private allowClimax = true;
 
   /* D natural minor. Frequencies for the ostinato register (D3-based). */
   private static OSTINATO: number[][] = [
@@ -617,6 +705,7 @@ class MusicDirector {
     }
     this.bus.connect(this.reverb);
     this.nextNoteTime = ctx.currentTime + 0.08;
+    this.gridOrigin = this.nextNoteTime;
     this.step = 0;
     // 100 BPM 16th grid = 0.15 s per step (8 steps per 1.2 s = 4 sim ticks).
     this.schedTimer = setInterval(() => this.schedule(), 70);
@@ -639,19 +728,100 @@ class MusicDirector {
     if (mode === this.mode) return;
     const prev = this.mode;
     this.mode = mode;
-    // Punctuate big scene changes.
+    // Punctuate big scene changes — same transition vocabulary as before.
     if (mode === 'transition') {
+      // Early double-raze before 4:50: skip climax crest, hand the energy
+      // straight to the existing riser so the march still feels continuous.
+      if (prev === 'basalt' && this.basaltElapsed < 290) {
+        this.allowClimax = false;
+      }
       this.riser(2.4);
+      this.intensityTarget = Math.max(this.intensity * 0.85, 0.45);
     } else if (mode === 'oasis' && prev === 'transition') {
       this.braam(220, 1.4, 0.5);
+      this.intensityTarget = 0.4;
     } else if (mode === 'basalt') {
       this.braam(146.8, 1.6, 0.55);
+      this.allowClimax = true;
+      this.basaltElapsed = 0;
+      this.intensityTarget = 0.28;
     }
   }
 
-  /** Battle density (0..1) drives percussion energy and note density. */
+  /**
+   * Drive Basalt act intensity from the Phase 1 clock + army density.
+   * - Start of minute 4 (t=3:00): floor lifts toward 0.55 over ~12 s
+   * - Start of minute 5 (t=4:00): floor lifts toward 0.78 over ~12 s
+   * - Last 10 s (t=4:50): climax crest toward 0.95 (skipped if early transition)
+   * Army size still adds energy on top so a stacked board cooks earlier.
+   */
+  setBattlePulse(opts: {
+    phase: MusicMode;
+    basaltElapsedSec: number;
+    unitCount: number;
+    beesAlive: boolean;
+  }): void {
+    this.beePresence = opts.beesAlive;
+    if (opts.phase === 'basalt') {
+      this.basaltElapsed = opts.basaltElapsedSec;
+      const floor = this.actFloor(opts.basaltElapsedSec);
+      const army = Math.min(1, opts.unitCount / 14);
+      // Floor sets the act; army density can only raise it further.
+      this.intensityTarget = Math.min(1, Math.max(floor, army * 0.88));
+    } else if (opts.phase === 'oasis') {
+      const army = Math.min(1, opts.unitCount / 14);
+      this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
+    }
+  }
+
+  /** @deprecated Prefer setBattlePulse — kept for cinematic/menu callers. */
   setIntensity(v: number): void {
-    this.intensity = Math.max(0, Math.min(1, v));
+    this.intensityTarget = Math.max(0, Math.min(1, v));
+  }
+
+  /** Snap `when` forward onto the next 16th-note grid line, capped at maxDelay. */
+  quantizeWhen(when: number, maxDelay = 0.08): number {
+    const STEP = 0.15;
+    const origin = this.gridOrigin || when;
+    const steps = Math.ceil((when - origin) / STEP - 1e-9);
+    const snapped = origin + Math.max(0, steps) * STEP;
+    const delay = snapped - when;
+    if (delay < 0) return when;
+    if (delay > maxDelay) return when; // too far — don't lag the hit
+    return snapped;
+  }
+
+  /** Act intensity floor from Basalt elapsed time (smoothstep ramps). */
+  private actFloor(elapsed: number): number {
+    const ease = (a: number, b: number, t: number) => {
+      const x = Math.max(0, Math.min(1, t));
+      const s = x * x * (3 - 2 * x);
+      return a + (b - a) * s;
+    };
+    // Establish (minutes 1–3)
+    if (elapsed < 180) return 0.28;
+    // Start of minute 4 → lift
+    if (elapsed < 240) return ease(0.28, 0.55, (elapsed - 180) / 12);
+    // Start of minute 5 → push
+    if (elapsed < 290) return ease(0.55, 0.78, (elapsed - 240) / 12);
+    // Last 10 s climax (only if we weren't forced into early transition)
+    if (!this.allowClimax) return 0.78;
+    return ease(0.78, 0.95, (elapsed - 290) / 5);
+  }
+
+  /** Ease intensity toward its target each scheduler slice — no hard jumps. */
+  private tickIntensity(): void {
+    const d = this.intensityTarget - this.intensity;
+    this.intensity += d * 0.12; // ~smooth over a second of scheduler wakes
+  }
+
+  /** Hive buzz bed — soft detuned drones while bees are on the field. */
+  private beeBuzz(t: number, inten: number): void {
+    if (!this.bus || !this.beePresence) return;
+    const g = 0.018 + inten * 0.014;
+    voice({ type: 'sawtooth', freq: 220, dur: 0.32, gain: g, attack: 0.08, filterFreq: 900, bus: this.bus, when: t, pan: -0.25 });
+    voice({ type: 'sawtooth', freq: 233, dur: 0.32, gain: g * 0.85, attack: 0.1, filterFreq: 1100, bus: this.bus, when: t, pan: 0.25 });
+    voice({ type: 'triangle', freq: 440, dur: 0.28, gain: g * 0.35, attack: 0.12, bus: this.bus, when: t });
   }
 
   /** The Zimmer hit — public so the cinematic can score its reveals. */
@@ -787,6 +957,7 @@ class MusicDirector {
   private schedule(): void {
     const ctx = core.ctx;
     if (!ctx || !this.running) return;
+    this.tickIntensity();
     const STEP = 0.15;
     while (this.nextNoteTime < ctx.currentTime + 0.3) {
       this.playStep(this.step, this.nextNoteTime);
@@ -799,6 +970,9 @@ class MusicDirector {
     const s16 = step % 16; // position in bar
     const bar = Math.floor(step / 16);
     const inten = this.intensity;
+
+    // Living bee buzz rides under every mode once a swarm is on the field.
+    if (this.beePresence && s16 % 2 === 0) this.beeBuzz(t, inten);
 
     switch (this.mode) {
       case 'menu': {
@@ -832,10 +1006,13 @@ class MusicDirector {
         // Cold shimmer strings hold the minor third high above, once per bar.
         if (s16 === 4) this.shimmer(t, bar % 4 === 1 ? 466.2 : 587.3, 2.0, 0.016 + inten * 0.012);
         // Taiko pattern: heavy downbeat, answer on 11; fills at high intensity.
-        if (s16 === 0) this.taiko(t, true);
+        if (s16 === 0) this.taiko(t, true, 0.85 + inten * 0.2);
         if (s16 === 10) this.taiko(t, false, 0.9);
         if (inten > 0.5 && s16 === 13) this.taiko(t, false, 0.7);
         if (inten > 0.75 && s16 % 4 === 2) this.taiko(t, false, 0.45);
+        // Climax crest (last ~10 s): denser answers without a new stinger —
+        // feeds the existing transition riser instead of fighting it.
+        if (inten > 0.88 && (s16 === 4 || s16 === 12)) this.taiko(t, false, 0.55);
         // Tick-hats keep the 16th grid alive once the fight warms up.
         if (inten > 0.35 && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.6);
         // The horn theme rises out of the ostinato every 8 bars.
