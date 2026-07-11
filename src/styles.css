@@ -134,6 +134,7 @@ button {
   z-index: 20;
   background: #000;
   overflow: hidden;
+  --cine-hero-ground: 62%;
 }
 
 .cinematic canvas {
@@ -145,14 +146,24 @@ button {
 
 .cine-text {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  /* Story cards sit in the upper third so they clear mid-field rivers /
+     the pond and read cleanly on a phone without covering the stage. */
+  top: max(4.5rem, calc(var(--safe-top, 0px) + 3.2rem));
+  bottom: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   text-align: center;
-  padding: 2rem;
+  padding: 0 clamp(1.1rem, 5.5vw, 1.75rem);
   pointer-events: none;
+}
+
+.cinematic.world-oasis .cine-text {
+  /* Oasis title cards sit a touch higher — pond occupies the mid band. */
+  top: max(4.2rem, calc(var(--safe-top, 0px) + 2.8rem));
 }
 
 /* A soft full-width dark band behind the copy keeps it legible over any
@@ -162,27 +173,28 @@ button {
   position: absolute;
   left: 0;
   right: 0;
-  top: 50%;
-  height: 15rem;
-  transform: translateY(-50%);
-  background: radial-gradient(ellipse 85% 100% at 50% 50%, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.35) 60%, transparent 100%);
+  top: -1.2rem;
+  bottom: -1.4rem;
+  background: radial-gradient(ellipse 90% 100% at 50% 40%, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.4) 55%, transparent 100%);
   z-index: -1;
 }
 
 .cine-text h2 {
-  font-size: 1.7rem;
+  font-size: clamp(1.15rem, 5.2vw, 1.65rem);
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  line-height: 1.2;
+  max-width: 18ch;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95), 0 2px 26px rgba(0, 0, 0, 0.9);
 }
 
 .cine-text p {
-  margin-top: 0.9rem;
-  max-width: 30ch;
+  margin-top: 0.75rem;
+  max-width: min(28ch, 92vw);
   color: var(--ink);
-  font-size: 1.02rem;
-  line-height: 1.55;
+  font-size: clamp(0.92rem, 3.8vw, 1.05rem);
+  line-height: 1.5;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.95), 0 1px 14px rgba(0, 0, 0, 0.9);
 }
 
@@ -202,19 +214,33 @@ button {
   position: absolute;
   left: 0;
   right: 0;
-  top: 71%;
+  /* Locked to the painted stage via the canvas --cine-hero-ground. */
+  top: var(--cine-hero-ground, 62%);
+  transform: translateY(-50%);
   text-align: center;
-  background: radial-gradient(ellipse 70% 130% at 50% 50%, rgba(0, 0, 0, 0.6), transparent 100%);
-  padding: 0.6rem 0;
+  background: radial-gradient(ellipse 78% 140% at 50% 50%, rgba(0, 0, 0, 0.78), transparent 100%);
+  padding: 0.55rem 1rem 0.7rem;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  align-items: center;
+  gap: 0.12rem;
   pointer-events: none;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.cinematic.world-basalt.has-hero .cine-hero-label {
+  /* Magma nameplates sit above the warrior — keep letter-spacing readable. */
+  transform: translateY(-10%);
+}
+
+.cinematic.world-oasis.has-hero .cine-hero-label {
+  transform: translateY(0);
 }
 
 .cine-hero-label .epithet {
-  font-size: 0.68rem;
-  letter-spacing: 0.34em;
+  font-size: clamp(0.58rem, 2.6vw, 0.7rem);
+  letter-spacing: 0.28em;
   text-transform: uppercase;
   color: var(--ink-dim);
   text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9);
@@ -222,9 +248,11 @@ button {
 
 .cine-hero-label .name {
   font-weight: 900;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  font-size: 1.5rem;
+  font-size: clamp(1.15rem, 5.4vw, 1.55rem);
+  line-height: 1.15;
+  max-width: 16ch;
   text-shadow: 0 2px 22px rgba(0, 0, 0, 0.95);
 }
 
@@ -237,13 +265,15 @@ button {
   align-items: center;
   justify-content: center;
   gap: 1rem;
+  padding: 0 1.5rem;
+  padding-bottom: var(--safe-bottom, 0px);
   background: rgba(4, 2, 8, 0.55);
   color: var(--ink);
 }
 
 .tap-to-begin b {
-  font-size: 1.15rem;
-  letter-spacing: 0.4em;
+  font-size: clamp(0.95rem, 4.2vw, 1.15rem);
+  letter-spacing: 0.32em;
   font-weight: 900;
   animation: tap-pulse 1.8s ease-in-out infinite;
 }

@@ -45,8 +45,47 @@ const INTRO_WIDTH_FRAC: Partial<Record<SpeciesId, number>> = {
   lion: 0.70,
   bear: 0.68,
 };
-/** T-Rex uses per-frame width (up to 90% of screen) — never clip snout/tail. */
-const INTRO_WIDTH_MAX = 0.90;
+
+/**
+ * Where champions stand in the arena paintings (normalized image coords).
+ * These mark the desired VISUAL CENTER of the warrior — Magma between the
+ * two lava rivers, Oasis in the heart of the pond — not screen center.
+ */
+const STAGE_FOCUS: Record<'basalt' | 'oasis', { x: number; y: number }> = {
+  basalt: { x: 0.50, y: 0.475 },
+  oasis: { x: 0.50, y: 0.455 },
+};
+
+/** Nameplate line in painting space. Magma sits ABOVE the warrior (under the
+ *  top river) so copy never covers the body; Oasis sits below in the pond. */
+const LABEL_FOCUS: Record<'basalt' | 'oasis', number> = {
+  basalt: 0.372,
+  oasis: 0.620,
+};
+
+interface ArenaLayout {
+  ox: number;
+  oy: number;
+  iw: number;
+  ih: number;
+}
+
+/** Cover-fit the arena painting the same way the backdrop is drawn. */
+function arenaLayout(
+  img: HTMLImageElement,
+  W: number,
+  H: number,
+  ambient: number,
+  dir: number,
+  driftAmt: number,
+): ArenaLayout {
+  const scale = Math.max((W * 1.12) / img.naturalWidth, (H * 1.18) / img.naturalHeight);
+  const iw = img.naturalWidth * scale;
+  const ih = img.naturalHeight * scale;
+  const margin = Math.max(0, (ih - H) / 2);
+  const drift = Math.sin(ambient * 0.11 * dir + dir * 2.1) * margin * driftAmt;
+  return { ox: (W - iw) / 2, oy: (H - ih) / 2 + drift, iw, ih };
+}
 
 function heroBeats(at: number, world: 'basalt' | 'oasis', heroes: Beat['hero'][]): Beat[] {
   return heroes.map((hero, i) => ({ at: at + i * HERO_TIME, hero, world }));
@@ -84,6 +123,7 @@ const TOTAL = 84;
 
 export function Cinematic({ onDone }: { onDone: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [started, setStarted] = useState(false);
   const [beatIdx, setBeatIdx] = useState(-1);
   const doneRef = useRef(false);
@@ -178,26 +218,36 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
       // crossfading between worlds as the story moves. COVER-fit: scale to
       // whichever axis is binding (plus drift margin) so the painting always
       // fills the whole screen on any aspect ratio.
-      const drawArena = (img: HTMLImageElement | null, alpha: number, dir: number) => {
-        if (!img || alpha <= 0.01) return;
+      // Drift is kept gentle so champions stay locked to rivers / pond.
+      const showingHero = !!(t >= 0 && active.hero);
+      const driftAmt = showingHero ? 0.12 : 0.28;
+      const basaltImg = getPhaseArt('basalt');
+      const oasisImg = getPhaseArt('oasis');
+      const basaltLay = basaltImg ? arenaLayout(basaltImg, W, H, ambient, 1, driftAmt) : null;
+      const oasisLay = oasisImg ? arenaLayout(oasisImg, W, H, ambient, -1, driftAmt) : null;
+      const drawArena = (img: HTMLImageElement | null, lay: ArenaLayout | null, alpha: number) => {
+        if (!img || !lay || alpha <= 0.01) return;
         ctx.save();
         ctx.globalAlpha = alpha;
-        const scale = Math.max((W * 1.12) / img.naturalWidth, (H * 1.18) / img.naturalHeight);
-        const iw = img.naturalWidth * scale;
-        const ih = img.naturalHeight * scale;
-        // Seamless slow drift: a bounded sine, never a wrapping jump.
-        const margin = Math.max(0, (ih - H) / 2);
-        const drift = Math.sin(ambient * 0.11 * dir + dir * 2.1) * margin * 0.85;
-        ctx.drawImage(img, (W - iw) / 2, (H - ih) / 2 + drift, iw, ih);
+        ctx.drawImage(img, lay.ox, lay.oy, lay.iw, lay.ih);
         ctx.restore();
       };
-      drawArena(getPhaseArt('basalt'), (1 - worldBlend) * 0.85, 1);
-      drawArena(getPhaseArt('oasis'), worldBlend * 0.85, -1);
+      drawArena(basaltImg, basaltLay, (1 - worldBlend) * 0.85);
+      drawArena(oasisImg, oasisLay, worldBlend * 0.85);
 
-      // Depth wash so text and heroes pop over the busy paintings.
-      const wash = ctx.createRadialGradient(W / 2, H * 0.5, H * 0.1, W / 2, H * 0.55, H * 0.75);
-      wash.addColorStop(0, 'rgba(0,0,0,0.14)');
-      wash.addColorStop(1, 'rgba(0,0,0,0.68)');
+      // Stage focus in the active painting → screen (feet / hover line).
+      const focusWorld = active.world;
+      const focus = STAGE_FOCUS[focusWorld];
+      const focusLay = focusWorld === 'oasis' ? oasisLay : basaltLay;
+      const stageX = focusLay ? focusLay.ox + focus.x * focusLay.iw : W / 2;
+      const stageY = focusLay ? focusLay.oy + focus.y * focusLay.ih : H * 0.52;
+
+      // Depth wash keyed to the stage so heroes pop without burying the
+      // rivers / pond that give them their place.
+      const wash = ctx.createRadialGradient(stageX, stageY, H * 0.08, stageX, stageY, H * 0.72);
+      wash.addColorStop(0, 'rgba(0,0,0,0.10)');
+      wash.addColorStop(0.55, 'rgba(0,0,0,0.42)');
+      wash.addColorStop(1, 'rgba(0,0,0,0.72)');
       ctx.fillStyle = wash;
       ctx.fillRect(0, 0, W, H);
 
@@ -218,8 +268,9 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
       ctx.fillRect(0, 0, W, barH);
       ctx.fillRect(0, H - barH, W, barH);
 
-      // The animated hero: run-cycle frames striding in place, fading in and
-      // out on the exact same envelope as its DOM title card.
+      // The animated hero: run-cycle frames striding in place on the stage
+      // focus (between lava rivers / in the pond), fading with its DOM label.
+      let labelGroundCss = H * 0.62;
       if (t >= 0 && active.hero) {
         const hero = active.hero;
         const anim = getAnim(hero.species);
@@ -230,17 +281,13 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           beatT / FADE,                      // fade in
           (beatDur - beatT) / FADE,          // fade out
         ));
-        const rise = (1 - Math.min(1, beatT / FADE)) * H * 0.012;
-        const cx = W / 2;
-        const cy = H * 0.56 + rise;
+        const rise = (1 - Math.min(1, beatT / FADE)) * H * 0.01;
+        // Slight optical bias: right-facing walkers read left-heavy otherwise.
+        const cx = stageX + W * 0.015;
+        // stageY is the desired visual centre of the warrior in the painting.
+        const centerY = stageY + rise;
         ctx.save();
         ctx.globalAlpha = heroAlpha;
-        // Ground glow.
-        const glow = ctx.createRadialGradient(cx, cy + H * 0.07, 4, cx, cy + H * 0.07, W * 0.34);
-        glow.addColorStop(0, `hsla(${hero.hue} 85% 55% / 0.4)`);
-        glow.addColorStop(1, `hsla(${hero.hue} 85% 50% / 0)`);
-        ctx.fillStyle = glow;
-        ctx.fillRect(0, cy - H * 0.1, W, H * 0.3);
         if (anim) {
           // Prefer the dedicated 8-frame parade cycle (twice the poses of
           // the battle sheets) — each crossfade then covers a much smaller
@@ -253,39 +300,41 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
           const i0 = Math.floor(phase) % n;
           const frac = phase - Math.floor(phase);
           const mix = frac * frac * (3 - 2 * frac);
-          const targetH = H * 0.3 * (HERO_SCALE[hero.species] ?? 1);
-          // No glow on the hero: a canvas shadow re-renders for BOTH
-          // crossfade layers, so its intensity pumps with the blend and
-          // reads as flicker around the silhouette.
+          // Sized to fit the stage band (between rivers / inside the pond).
+          const targetH = H * (focusWorld === 'basalt' ? 0.26 : 0.27) * (HERO_SCALE[hero.species] ?? 1);
           ctx.shadowBlur = 0;
-          // Smooth, continuous bob: gentle hover for flyers, a soft rolling
-          // stride-sway for walkers (two beats per stride cycle).
           const bob = flying
             ? Math.sin(beatT * 2.4) * H * 0.006
             : Math.sin(beatT * cps * Math.PI * 4) * -H * 0.003;
-          // ONE scale for the whole cycle. Per-frame width clamps made the
-          // hero visibly bump each time the crop width changed; instead
-          // clamp against the widest frame of the set so scale never moves.
           const widthFrac = INTRO_WIDTH_FRAC[hero.species] ?? 0.78;
-          // Walkers anchor at their feet on the ground line; flyers anchor
-          // at their stabilised point (head/centre) hovering above it.
-          const anchorLineY = flying && frames === anim.intro ? cy - H * 0.03 : cy + H * 0.07;
+          // Approximate foot line (for glow + nameplate); draw path recentres.
+          const groundY = flying ? centerY + H * 0.02 : centerY + targetH * 0.38;
+          const glow = ctx.createRadialGradient(cx, groundY, 4, cx, groundY, W * 0.28);
+          glow.addColorStop(0, `hsla(${hero.hue} 85% 55% / 0.34)`);
+          glow.addColorStop(1, `hsla(${hero.hue} 85% 50% / 0)`);
+          ctx.fillStyle = glow;
+          ctx.fillRect(0, groundY - H * 0.08, W, H * 0.20);
+          let feetY = groundY;
           const drawHero = (f: typeof frames[number], alpha: number) => {
             let frameScale: number;
             if (hero.species === 'trex') {
-              // Per-frame fit against the full keyed panel (not content crop).
+              // Fit inside the mid-field band — keep snout/tail, don't cover rivers.
               frameScale = Math.min(
-                (H * 0.94) / f.canvas.height,
-                (W * INTRO_WIDTH_MAX) / f.canvas.width,
+                (H * 0.28) / f.canvas.height,
+                (W * 0.92) / f.canvas.width,
               );
             } else {
               frameScale = Math.min(targetH / f.h, (W * widthFrac) / f.w);
             }
+            // Content mid (not full-canvas mid) — keyed panels have empty padding.
+            const contentMidY = f.anchorY - f.h * (flying ? 0.50 : 0.48);
+            const drawY = centerY - contentMidY * frameScale + bob;
+            feetY = centerY + (f.anchorY - contentMidY) * frameScale;
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
               cx - f.anchorX * frameScale,
-              anchorLineY - f.anchorY * frameScale + bob,
+              drawY,
               f.canvas.width * frameScale,
               f.canvas.height * frameScale,
             );
@@ -301,11 +350,30 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
               : mix;
           drawHero(frames[i0], 1);
           if (blendMix > 0.02) drawHero(frames[(i0 + 1) % n], blendMix);
+          // Prefer the painted stage label line so copy never sits on lava /
+          // the pond bank; fall back to feet if the layout isn't ready.
+          if (focusLay) {
+            labelGroundCss = focusLay.oy + LABEL_FOCUS[focusWorld] * focusLay.ih;
+          } else {
+            labelGroundCss = Math.min(feetY + H * 0.018, H - barH - H * 0.10);
+          }
         } else {
-          ctx.translate(cx, cy);
+          ctx.translate(cx, centerY);
           drawSpecies(ctx, hero.species, W * 0.16, t);
+          labelGroundCss = centerY + H * 0.10;
         }
         ctx.restore();
+      }
+
+      // Keep the DOM nameplate locked under the champion's feet.
+      const root = rootRef.current;
+      if (root) {
+        const cssY = `${(labelGroundCss / dpr).toFixed(1)}px`;
+        if (root.style.getPropertyValue('--cine-hero-ground') !== cssY) {
+          root.style.setProperty('--cine-hero-ground', cssY);
+        }
+        root.dataset.world = active.world;
+        root.dataset.hero = showingHero ? '1' : '0';
       }
 
       raf = requestAnimationFrame(frame);
@@ -324,7 +392,10 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="cinematic">
+    <div
+      ref={rootRef}
+      className={`cinematic${active?.hero ? ' has-hero' : ''}${active ? ` world-${active.world}` : ''}`}
+    >
       <canvas ref={canvasRef} />
       {!started && (
         <button className="tap-to-begin" onClick={begin}>
