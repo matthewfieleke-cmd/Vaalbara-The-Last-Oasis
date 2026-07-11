@@ -11,7 +11,7 @@ A high-fidelity, mobile-first multiplayer PWA tactics game — real-time arena b
 
 ### Two-phase match (~8 minutes)
 
-1. **The Basalt Fields (5 min)** — jagged black rock, sulfur vents that punish campers, and magma rivers crossed only at the rock bridges — the arena painting IS the collision geometry. Deploy units from your baseline with a **drag-to-fling vector**. Accumulate **Dominance** — 50% territory pushed, 50% damage dealt.
+1. **The Basalt Fields (5 min)** — jagged black rock, sulfur vents that punish campers, and magma rivers crossed only at the rock bridges — the arena painting IS the collision geometry. Deploy units from your baseline with a **drag-to-fling vector**. Accumulate **Dominance** — 50% territory pushed, 50% damage dealt. Phase 1 ends when a fortress loses both gatehouses, or at the 5:00 valve.
 2. **The Transition** — the camera pans up; survivors physically march into the Oasis carrying their remaining HP. The Dominance leader receives the **Vaalbara Blessing** (+10% speed & damage).
 3. **The Oasis (3 min)** — a vibrant pond ecosystem. Aqua income **doubles**. Deep shallows slow heavy units 40%, reeds grant stealth, lily pads sink under colossal units, and lotus blooms burst into 15% AOE healing mist. Win by **king-of-the-hill** majority control of the pond. A 50/50 meter at the buzzer is an official Tie.
 

@@ -26,9 +26,9 @@ export const WORLD_W = 9;
 export const WORLD_H = 15;
 
 /** Phase durations, in ticks (300 ms/tick). Phase 1 is a siege that ends
- *  when a fortress loses BOTH gatehouses — designed to take ~4 minutes.
- *  The tick budget is only a stalemate safety valve. */
-export const PHASE1_TICKS = 1200;
+ *  when a fortress loses BOTH gatehouses, or at the 5:00 stalemate valve.
+ *  Target: most matches reach ~5:00 with traded gatehouses (see balance-gates). */
+export const PHASE1_TICKS = 1000; // 5:00
 export const TRANSITION_TICKS = 20; // 6 s marching cutscene
 export const PHASE2_TICKS = 500;
 
@@ -235,7 +235,8 @@ export interface ObeliskState {
    *  lane (in world coordinates, before any seat-view mirroring). */
   readonly wing: 0 | 1;
   hp: number;
-  readonly maxHp: number;
+  /** Grows when the sister wing falls (last-stand fortification surge). */
+  maxHp: number;
   readonly x: number;
   readonly y: number;
   readonly r: number;
@@ -444,8 +445,9 @@ export const MAX_ARMY = 6;
 export const CAPTURE_RATE = 1;
 /** Phase-1 objective: each seat's fortress has TWO gatehouse wings, each
  *  with its own HP. The Basalt Fields end only when a fortress loses both. */
-/** Tuned for ~4 min average Phase-1 gatehouse collapse vs the scripted bot. */
-export const OBELISK_HP = 3100;
+/** First-gate HP. The remaining wing hardens after its sister falls
+ *  (see dealObeliskDamage) so clean sweeps stay rare. */
+export const OBELISK_HP = 1950;
 
 /** On a razed lane, warriors become combat-visible once they've climbed
  *  onto the causeway / rubble pile (depth from the field-side wall lip). */
@@ -453,7 +455,11 @@ export const RUBBLE_VISIBLE_DEPTH = 0.06;
 export const OBELISK_RADIUS = 0.55;
 /** Units only auto-acquire enemies inside this radius; otherwise they push
  *  the lane toward the enemy obelisk (Clash-Royale-style tower pressure). */
-export const AGGRO_RANGE = 3.2;
+/** Units only auto-acquire enemies inside this radius; otherwise they push
+ *  the lane toward the enemy gatehouse. Kept tight so opposite-lane armies
+ *  don't vacuum into one midfield brawl — both fortresses can take pressure
+ *  in the same match (the 1–1 gate trade). */
+export const AGGRO_RANGE = 2.15;
 export const VENT_DMG = 2;
 export const ACID_DMG = 1; // per stack per tick
 export const LOTUS_HEAL_PCT = 0.15;

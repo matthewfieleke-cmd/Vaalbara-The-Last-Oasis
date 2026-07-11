@@ -739,12 +739,24 @@ function performAttack(st: GameState, ev: GameEvent[], u: RuntimeUnit, target: U
 
 function dealObeliskDamage(st: GameState, ev: GameEvent[], attacker: PlayerId, ob: ObeliskState, amount: number): void {
   if (ob.hp <= 0 || amount <= 0) return;
-  ob.hp -= amount;
-  st.players[attacker].damageDealt += amount;
-  ev.push({ type: 'obeliskHit', owner: ob.owner, amount, x: ob.x, y: ob.y });
+  // Mild last-stand DR while the sister wing is already down. The big
+  // fortification is the HP surge applied when the first wing falls (below).
+  const sister = st.obelisks.find((o) => o.owner === ob.owner && o.wing !== ob.wing);
+  const fortified = !!sister && sister.hp <= 0;
+  const dealt = fortified ? Math.max(1, Math.round(amount * 0.85)) : amount;
+  ob.hp -= dealt;
+  st.players[attacker].damageDealt += dealt;
+  ev.push({ type: 'obeliskHit', owner: ob.owner, amount: dealt, x: ob.x, y: ob.y });
   if (ob.hp <= 0) {
     ob.hp = 0;
     ev.push({ type: 'obeliskDown', owner: ob.owner, x: ob.x, y: ob.y });
+    // Remaining wing surges: buys time for a counter-siege to land the
+    // reciprocal first gate (1–1 trades) and keeps clean sweeps rare.
+    if (sister && sister.hp > 0) {
+      const bonus = Math.round(sister.maxHp * 1.0);
+      sister.maxHp += bonus;
+      sister.hp = Math.min(sister.maxHp, sister.hp + bonus);
+    }
   }
 }
 
@@ -1143,18 +1155,35 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   else u.buffs.slowMult = 1;
   if (u.atkTimer > 0) u.atkTimer--;
 
-  // 1. Attack when a target is in reach.
+  // 1. Attack when a target is in reach — unless we are already on an enemy
+  // gatehouse. Siege takes priority over chasing a distant skirmish so a
+  // counter-push can chip a tower while the main fight rages elsewhere.
+  // (Previously any aggro'd enemy cancelled siege entirely, which made
+  // mutual gate trades impossible: the field winner deleted the loser,
+  // then walked both towers unopposed.)
   const target = pickTarget(st, u);
   u.targetId = target?.id ?? null;
+  const ob = enemyObelisk(st, u);
+  const siegeReach = ob ? attackReach(u) + u.stats.radius + ob.r : 0;
+  const canSiege = !!ob && dist2(u.x, u.y, ob.x, ob.y) <= siegeReach * siegeReach;
+  const threatClose = target
+    && dist2(u.x, u.y, target.x, target.y) <= (Math.max(1.05, u.stats.radius + speciesDef(target.species).stats!.radius + 0.35) ** 2);
+
+  if (canSiege && !threatClose) {
+    if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob!);
+    else u.facing = ob!.x >= u.x ? 1 : -1;
+    return;
+  }
+
   if (target && canAttack(st, u, target)) {
     if (u.atkTimer <= 0) performAttack(st, ev, u, target);
     else u.facing = target.x >= u.x ? 1 : -1;
     return;
   }
 
-  // 1b. No duel in reach: siege the enemy obelisk when close enough.
-  const ob = target ? null : enemyObelisk(st, u);
-  if (ob) {
+  // 1b. Walk onto the gate if we're close but not yet in reach and nothing
+  // is in attack range.
+  if (ob && !target) {
     const reach = attackReach(u) + u.stats.radius + ob.r;
     if (dist2(u.x, u.y, ob.x, ob.y) <= reach * reach) {
       if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob);
@@ -1192,6 +1221,14 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
         x: ownLane,
         y: u.owner === 0 ? FORT_WALL_FRONT[0] - 0.5 : FORT_WALL_FRONT[1] + 0.5,
       };
+    } else if (
+      // On the enemy half with a gate still standing: commit to the siege
+      // unless a foe is in our face. This is what allows BOTH seats to chip
+      // a tower in the same match instead of one midfield wipe deciding all.
+      st.phase === 'basalt' && ob && !threatClose &&
+      (u.owner === 0 ? u.y < WORLD_H * 0.48 : u.y > WORLD_H * 0.52)
+    ) {
+      goal = siegeGoal(ob);
     } else {
       goal = { x: target.x, y: target.y };
     }
@@ -1614,10 +1651,21 @@ export class BotBrain {
     if (st.phase === 'basalt') {
       const pads = fortPads(this.seat);
       const wings = st.obelisks.filter((o) => o.owner !== this.seat && o.hp > 0);
+      // Default: counter-siege the emptier lane so both fortresses take
+      // pressure in the same match. Blind focus on the weakest wing made
+      // both bots converge on one corridor — the winner razed both gates
+      // and the loser never scored even one (0% 1–1 trades).
+      const foes = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat);
       let lane = this.rng() < 0.5 ? 0 : 1;
-      if (wings.length > 0 && this.rng() < 0.78) {
+      if (foes.length > 0) {
+        const c0 = foes.filter((u) => Math.abs(u.x - pads[0].x) <= Math.abs(u.x - pads[1].x)).length;
+        const c1 = foes.length - c0;
+        lane = c0 <= c1 ? 0 : 1;
+      }
+      // Occasional focus-fire on a crumbling wing (finishing blow).
+      if (wings.length > 0 && this.rng() < 0.28) {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
-        lane = weakest.wing;
+        if (weakest.hp < weakest.maxHp * 0.45) lane = weakest.wing;
       }
       const pad = pads[lane];
       this.nextActionTick = st.tick + 6;
