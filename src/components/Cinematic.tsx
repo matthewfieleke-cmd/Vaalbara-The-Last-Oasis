@@ -18,6 +18,8 @@ interface Beat {
   hero?: { species: SpeciesId; hue: number; name: string; epithet: string };
   world: 'basalt' | 'oasis';
   braam?: boolean;
+  /** Where story copy sits: top band (default) or mid-stage (rivers / pond). */
+  textPlace?: 'top' | 'stage';
 }
 
 const HERO_TIME = 3.6;
@@ -56,12 +58,9 @@ const STAGE_FOCUS: Record<'basalt' | 'oasis', { x: number; y: number }> = {
   oasis: { x: 0.50, y: 0.455 },
 };
 
-/** Nameplate line in painting space. Magma sits ABOVE the warrior (under the
- *  top river) so copy never covers the body; Oasis sits below in the pond. */
-const LABEL_FOCUS: Record<'basalt' | 'oasis', number> = {
-  basalt: 0.372,
-  oasis: 0.620,
-};
+/** Oasis nameplate line in painting space (below the warrior in the pond).
+ *  Magma champion titles use the same upper band as the opening story cards. */
+const OASIS_LABEL_Y = 0.620;
 
 interface ArenaLayout {
   ox: number;
@@ -115,8 +114,8 @@ const BEATS: Beat[] = [
     { species: 'beetles', hue: 130, name: 'Beetle', epithet: 'The Artillery' },
   ]),
 
-  { at: 70.5, title: 'Two Armies. One Water.', body: 'Cross the lava. Hold the pond. History remembers one coalition.', world: 'basalt', braam: true },
-  { at: 77.5, title: 'Vaalbara', body: 'The drought ends today.', world: 'oasis', braam: true },
+  { at: 70.5, title: 'Two Armies. One Water.', body: 'Cross the lava. Hold the pond. History remembers one coalition.', world: 'basalt', braam: true, textPlace: 'stage' },
+  { at: 77.5, title: 'Vaalbara', body: 'The drought ends today.', world: 'oasis', braam: true, textPlace: 'stage' },
 ];
 
 const TOTAL = 84;
@@ -285,7 +284,9 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         // Slight optical bias: right-facing walkers read left-heavy otherwise.
         const cx = stageX + W * 0.015;
         // stageY is the desired visual centre of the warrior in the painting.
-        const centerY = stageY + rise;
+        // Bees' painted mass sits low in the cluster — lift so the swarm reads
+        // level with walkers in the pond.
+        const centerY = stageY + rise - (hero.species === 'bees' ? H * 0.035 : 0);
         ctx.save();
         ctx.globalAlpha = heroAlpha;
         if (anim) {
@@ -307,8 +308,8 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
             ? Math.sin(beatT * 2.4) * H * 0.006
             : Math.sin(beatT * cps * Math.PI * 4) * -H * 0.003;
           const widthFrac = INTRO_WIDTH_FRAC[hero.species] ?? 0.78;
-          // Approximate foot line (for glow + nameplate); draw path recentres.
-          const groundY = flying ? centerY + H * 0.02 : centerY + targetH * 0.38;
+          // Approximate foot/glow line; draw path recentres on visual mid.
+          const groundY = flying ? centerY : centerY + targetH * 0.38;
           const glow = ctx.createRadialGradient(cx, groundY, 4, cx, groundY, W * 0.28);
           glow.addColorStop(0, `hsla(${hero.hue} 85% 55% / 0.34)`);
           glow.addColorStop(1, `hsla(${hero.hue} 85% 50% / 0)`);
@@ -326,10 +327,14 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
             } else {
               frameScale = Math.min(targetH / f.h, (W * widthFrac) / f.w);
             }
-            // Content mid (not full-canvas mid) — keyed panels have empty padding.
-            const contentMidY = f.anchorY - f.h * (flying ? 0.50 : 0.48);
+            // Walkers: content mid is above the foot anchor. Flyers (eagle/bees)
+            // already store visual-centre anchors — use them directly so they
+            // sit level with walkers in mid-field / pond.
+            const contentMidY = flying ? f.anchorY : f.anchorY - f.h * 0.48;
             const drawY = centerY - contentMidY * frameScale + bob;
-            feetY = centerY + (f.anchorY - contentMidY) * frameScale;
+            feetY = flying
+              ? centerY + f.h * 0.35 * frameScale
+              : centerY + (f.anchorY - contentMidY) * frameScale;
             ctx.globalAlpha = heroAlpha * alpha;
             ctx.drawImage(
               f.canvas,
@@ -350,11 +355,11 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
               : mix;
           drawHero(frames[i0], 1);
           if (blendMix > 0.02) drawHero(frames[(i0 + 1) % n], blendMix);
-          // Prefer the painted stage label line so copy never sits on lava /
-          // the pond bank; fall back to feet if the layout isn't ready.
-          if (focusLay) {
-            labelGroundCss = focusLay.oy + LABEL_FOCUS[focusWorld] * focusLay.ih;
-          } else {
+          // Oasis nameplates sit below the warrior in the pond. Magma titles
+          // use the shared upper band via CSS (same as opening story cards).
+          if (focusWorld === 'oasis' && focusLay) {
+            labelGroundCss = focusLay.oy + OASIS_LABEL_Y * focusLay.ih;
+          } else if (focusWorld === 'oasis') {
             labelGroundCss = Math.min(feetY + H * 0.018, H - barH - H * 0.10);
           }
         } else {
@@ -365,12 +370,17 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         ctx.restore();
       }
 
-      // Keep the DOM nameplate locked under the champion's feet.
+      // Keep DOM copy locked to the painted stage / shared upper band.
       const root = rootRef.current;
       if (root) {
         const cssY = `${(labelGroundCss / dpr).toFixed(1)}px`;
         if (root.style.getPropertyValue('--cine-hero-ground') !== cssY) {
           root.style.setProperty('--cine-hero-ground', cssY);
+        }
+        // Closing story cards sit on the same stage focus as the warriors.
+        const stageTextY = `${(stageY / dpr).toFixed(1)}px`;
+        if (root.style.getPropertyValue('--cine-stage-text') !== stageTextY) {
+          root.style.setProperty('--cine-stage-text', stageTextY);
         }
         root.dataset.world = active.world;
         root.dataset.hero = showingHero ? '1' : '0';
@@ -394,7 +404,12 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
   return (
     <div
       ref={rootRef}
-      className={`cinematic${active?.hero ? ' has-hero' : ''}${active ? ` world-${active.world}` : ''}`}
+      className={[
+        'cinematic',
+        active?.hero ? 'has-hero' : '',
+        active ? `world-${active.world}` : '',
+        active?.textPlace === 'stage' ? 'stage-text' : '',
+      ].filter(Boolean).join(' ')}
     >
       <canvas ref={canvasRef} />
       {!started && (
@@ -405,7 +420,11 @@ export function Cinematic({ onDone }: { onDone: () => void }) {
         </button>
       )}
       {active && (active.title || active.body) ? (
-        <div className="cine-text" key={beatIdx} style={fadeStyle}>
+        <div
+          className={`cine-text${active.textPlace === 'stage' ? ' on-stage' : ''}`}
+          key={beatIdx}
+          style={fadeStyle}
+        >
           {active.title && <h2>{active.title}</h2>}
           {active.body && <p>{active.body}</p>}
         </div>
