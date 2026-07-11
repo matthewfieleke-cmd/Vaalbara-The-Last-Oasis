@@ -3,15 +3,21 @@
  * A fully procedural Web Audio synthesizer. Zero audio files.
  *
  *  - Soundtrack: generative layers on a 100 BPM musical clock.
- *    Phase 1 (Basalt Fields) — five-minute ADDITIVE ladder (hard cuts):
- *      Min 1: front ensemble without hats
- *      Min 2: + hats (full front ensemble)
- *      Min 3: + 16ths, octave strings, low brass, choir air (full corps)
- *      Min 4: + wider strings, reinforced brass, rich chord bed (sus/add2/m7)
- *      Min 5: + max string/brass/choir mass + warrior SFX/presence lift
- *    Each minute KEEPS prior layers and only adds — never thins the pulse.
+ *    Phase 1 (Basalt Fields) — five-minute ADDITIVE ladder ("Time" model):
+ *      One chord loop (Dm→Bb→Gm→A) for all five minutes. The theme is the
+ *      protagonist: stated softly every cycle from minute 1, growing until
+ *      the full-brass statement in minute 5 — payoff through recognition.
+ *      Min 1: seed — soft theme, legato string bed, pulse, taiko heartbeat
+ *      Min 2: + hats + cello answer phrase in the back half of each cycle
+ *      Min 3: + 16ths, octave strings, low brass, horn takes the theme
+ *      Min 4: + wider/brighter bed, reinforced brass, theme in octaves
+ *      Min 5: + choir, driving 8th battery, high descant over the theme
+ *    Minute boundaries are Babylon arrivals: the last bar BREATHES (texture
+ *    thins, battery fill, cymbal swell) and the new minute lands with a
+ *    unison hit + volume snap. Layers only add — never thin the pulse.
  *    Early double-raze skips the last crest into the transition riser → Oasis.
  *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
+ *    A bus compressor glues the stacked layers so density reads as power.
  *  - Warriors: battery on the shared grid + presence beds as depth builders.
  * ========================================================================== */
 
@@ -31,6 +37,7 @@ class AudioCore {
   ctx: AudioContext | null = null;
   master: GainNode | null = null;
   musicBus: GainNode | null = null;
+  musicComp: DynamicsCompressorNode | null = null;
   sfxBus: GainNode | null = null;
   enabled = true;
 
@@ -45,7 +52,17 @@ class AudioCore {
       this.master.connect(this.ctx.destination);
       this.musicBus = this.ctx.createGain();
       this.musicBus.gain.value = 0.55;
-      this.musicBus.connect(this.master);
+      // Glue compressor on the score bus: stacked layers cohere instead of
+      // blurring, and taiko hits make the whole mix "breathe" (the pump that
+      // sells a dense hybrid-orchestral wall). SFX stays uncompressed.
+      this.musicComp = this.ctx.createDynamicsCompressor();
+      this.musicComp.threshold.value = -20;
+      this.musicComp.knee.value = 18;
+      this.musicComp.ratio.value = 3.5;
+      this.musicComp.attack.value = 0.01;
+      this.musicComp.release.value = 0.28;
+      this.musicBus.connect(this.musicComp);
+      this.musicComp.connect(this.master);
       this.sfxBus = this.ctx.createGain();
       this.sfxBus.gain.value = 0.9;
       this.sfxBus.connect(this.master);
@@ -690,6 +707,10 @@ class MusicDirector {
   private gridOrigin = 0;
   /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
   private allowClimax = true;
+  /** Set at each minute flip — playStep fires a unison arrival on the next beat. */
+  private pendingArrival = false;
+  /** Tier whose pre-flip cymbal swell was already scheduled (one per breath bar). */
+  private swellTier = -1;
 
   /** AudioContext currentTime when a context exists (even if muted). */
   audioNow(): number | null {
@@ -745,16 +766,26 @@ class MusicDirector {
   private static OASIS_LEAD = [587.3, 523.3, 440, 523.3, 587.3, 659.3, 587.3, 880];
 
   /**
-   * Act 3 sustained harmony cells (D minor tapestry):
-   * Dm(add2), Asus4, A (4–3 resolve), Bbmaj7, F, Dm7.
+   * Sustained harmony, LOCKED to the ostinato cycle (bar % 4 = Dm Bb Gm A).
+   * Rich voicings of the same progression — never fights the ostinato.
    */
-  private static APEX_CHORDS: number[][] = [
+  private static BED_CHORDS: number[][] = [
     [146.8, 164.8, 220, 293.7],       // Dm add2
-    [110, 146.8, 164.8, 220],         // Asus4 (D = sus4)
-    [110, 138.6, 164.8, 220],         // A (4→3: D resolves to C#)
-    [116.5, 174.6, 233.1, 349.2],     // Bbmaj7
-    [174.6, 220, 261.6, 349.2],       // F
-    [146.8, 220, 261.6, 349.2],       // Dm7
+    [116.5, 174.6, 233.1, 293.7],     // Bb (D on top — common tone)
+    [98, 146.8, 233.1, 293.7],        // Gm (Bb + D — common tones)
+    [110, 138.6, 164.8, 220],         // A (C# leading tone pulls home to Dm)
+  ];
+  /** Asus4 for the cadence bar — D suspends, then resolves to C# (4→3). */
+  private static A_SUS4: number[] = [110, 146.8, 164.8, 220];
+
+  /** Cello answer to the theme — bars 3–4 of each cycle (Gm → A): G–F–E
+   *  descent landing on the fifth of A. [16th-step, freq, dur-steps]. */
+  private static CELLO_ANSWER: Array<[number, number, number]> = [
+    [0, 196, 6],      // G3
+    [6, 174.6, 2],    // F3
+    [8, 164.8, 6],    // E3 — leading into the A bar
+    [16, 146.8, 4],   // D3
+    [20, 138.6, 8],   // C#3 — the pull home
   ];
 
   /** The Vaalbara motif — a rising D-minor horn theme threaded through the
@@ -825,6 +856,8 @@ class MusicDirector {
       this.intensityTarget = Math.max(this.intensity * 0.85, 0.45);
       this.volumeTarget = 1; // settle before Oasis — no lingering climax loudness
       this.actTier = 0;
+      this.pendingArrival = false;
+      this.swellTier = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (mode === 'oasis' && prev === 'transition') {
@@ -843,6 +876,8 @@ class MusicDirector {
       this.volumeMul = 1.06;
       this.actTier = 0;
       this.lastVolumeTier = 0;
+      this.pendingArrival = false;
+      this.swellTier = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.42);
     }
@@ -870,8 +905,13 @@ class MusicDirector {
       this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
       // Hard minute tiers: 0–1 / 1–2 / 2–3 / 3–4 / 4–5
       const nextTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
-      // Snap bus gain at the minute mark so each new layer also bumps volume.
+      // Snap bus gain at the minute mark so each new layer also bumps volume,
+      // and arm the Babylon arrival — playStep lands the unison hit on the
+      // next beat so the release stays on the musical grid.
       if (nextTier !== this.lastVolumeTier) {
+        if (nextTier > this.lastVolumeTier && this.lastVolumeTier >= 0) {
+          this.pendingArrival = true;
+        }
         this.lastVolumeTier = nextTier;
         this.volumeMul = this.volumeTarget;
         if (this.bus && core.ctx) {
@@ -1183,15 +1223,82 @@ class MusicDirector {
     }
   }
 
-  /** Sustained rich chord bed — Time-like held harmony under the apex. */
-  private richChordBed(t: number, freqs: number[], dur: number, gain: number): void {
+  /**
+   * Sustained legato string section — held harmony under the rhythm from
+   * minute 1 (the "Time" bed: what turns a loop into a piece). Detuned saw
+   * pairs per chord tone; extra octaves join as the minutes climb.
+   */
+  private legatoStrings(t: number, freqs: number[], dur: number, gain: number, filterHz: number, tier: number): void {
     if (!this.bus) return;
     freqs.forEach((f, i) => {
-      const pan = ((i % 2 === 0 ? -1 : 1) * (0.12 + i * 0.1));
-      voice({ type: 'triangle', freq: f, dur, gain, attack: dur * 0.4, bus: this.bus, when: t, pan });
-      voice({ type: 'sine', freq: f * 0.5, dur, gain: gain * 0.45, attack: dur * 0.45, bus: this.bus, when: t, pan: -pan * 0.4 });
-      voice({ type: 'sawtooth', freq: f, dur, gain: gain * 0.22, filterFreq: 480, attack: dur * 0.5, bus: this.bus, when: t, pan });
+      const pan = (i % 2 === 0 ? -1 : 1) * (0.15 + i * 0.09);
+      voice({ type: 'sawtooth', freq: f, dur, gain, filterFreq: filterHz, attack: 0.5, bus: this.bus, when: t, pan });
+      voice({ type: 'sawtooth', freq: f * 1.006, dur, gain: gain * 0.7, filterFreq: filterHz * 0.85, attack: 0.6, bus: this.bus, when: t, pan: -pan * 0.7 });
+      if (tier >= 2) {
+        voice({ type: 'sawtooth', freq: f * 2.004, dur, gain: gain * 0.3, filterFreq: filterHz * 1.4, attack: 0.7, bus: this.bus, when: t, pan: pan * 0.5 });
+      }
     });
+    if (tier >= 3) voice({ type: 'sine', freq: freqs[0] * 0.5, dur, gain: gain * 0.8, attack: 0.55, bus: this.bus, when: t });
+    if (tier >= 4) voice({ type: 'triangle', freq: freqs[freqs.length - 1] * 2, dur, gain: gain * 0.5, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+  }
+
+  /** The theme as a soft, clean seed — the "piano" of minutes 1–2, kept as
+   *  sparkle doubling once the horns take over. */
+  private softTheme(t0: number, mult: number, gain: number): void {
+    if (!this.bus) return;
+    const STEP = MUSIC_16TH_SEC;
+    for (const [st, freq, durSteps] of MusicDirector.THEME) {
+      const t = t0 + st * STEP;
+      voice({ type: 'triangle', freq: freq * mult, dur: durSteps * STEP + 0.3, gain, attack: 0.006, bus: this.bus, when: t, pan: 0.12 });
+      voice({ type: 'sine', freq: freq * mult * 2.002, dur: durSteps * STEP * 0.5 + 0.15, gain: gain * 0.35, attack: 0.006, bus: this.bus, when: t, pan: -0.15 });
+    }
+  }
+
+  /** Cello answering phrase in the back half of each cycle — the second
+   *  voice in dialogue with the theme (from minute 2; brass doubles later). */
+  private playAnswer(t0: number, gain: number, brass = false): void {
+    if (!this.bus) return;
+    const STEP = MUSIC_16TH_SEC;
+    for (const [st, freq, durSteps] of MusicDirector.CELLO_ANSWER) {
+      const t = t0 + st * STEP;
+      const dur = durSteps * STEP + 0.15;
+      voice({ type: 'sawtooth', freq, dur, gain, filterFreq: 480, attack: 0.06, bus: this.bus, when: t, pan: -0.22 });
+      voice({ type: 'sawtooth', freq: freq * 1.005, dur, gain: gain * 0.6, filterFreq: 380, attack: 0.08, bus: this.bus, when: t, pan: 0.18 });
+      if (brass) {
+        voice({ type: 'sawtooth', freq: freq * 0.5, dur, gain: gain * 0.5, filterFreq: 300, attack: 0.1, bus: this.bus, when: t });
+      }
+    }
+  }
+
+  /** Reverse-cymbal swell through the breath bar — tension INTO the arrival. */
+  private cymbalSwell(t: number, dur: number, gain: number): void {
+    const ctx = core.ensure();
+    if (!ctx || !this.bus) return;
+    const src = ctx.createBufferSource();
+    src.buffer = getNoise(ctx);
+    src.loop = true;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(1200, t);
+    hp.frequency.exponentialRampToValueAtTime(5200, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + dur);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.12);
+    src.connect(hp);
+    hp.connect(g);
+    g.connect(this.bus);
+    src.start(t);
+    src.stop(t + dur + 0.2);
+  }
+
+  /** Unison downbeat hit when a new minute lands — the company front. */
+  private arrivalHit(t: number, tier: number, inten: number): void {
+    if (!this.bus) return;
+    this.braamAt(t, 73.4, 1.6 + tier * 0.06, 0.34 + tier * 0.05 + inten * 0.12, 0);
+    this.taiko(t, true, 1.15);
+    this.taiko(t + MUSIC_16TH_SEC, false, 0.7);
+    noise({ dur: 0.5, gain: 0.11, filterFreq: 5200, filterType: 'highpass', bus: this.bus, when: t });
   }
 
   private padChord(t: number, freqs: number[], dur: number, gain = 0.05): void {
@@ -1311,14 +1418,31 @@ class MusicDirector {
       }
 
       case 'basalt': {
-        // Five-minute ADDITIVE ladder. Hard cuts at :00 of each minute.
-        // tier 0 = min1 (no hats) … tier 4 = min5 (max mass). Never thin prior layers.
+        // Five-minute ADDITIVE ladder over ONE chord loop (Dm→Bb→Gm→A).
+        // The theme is the protagonist from minute 1; each minute keeps every
+        // prior layer and adds one voice. Minute flips are Babylon arrivals:
+        // breath bar (thin texture + battery fill + cymbal swell) → unison hit.
         const cell = MusicDirector.OSTINATO[bar % 4];
         const tier = this.actTier; // 0..4
         const filterOpen = tier <= 1 ? 1400 : tier === 2 ? 1900 : tier === 3 ? 2100 : 2400;
 
-        // Ostinato: 8ths in min1–2, full 16ths from min3; octave from min3; wider from min4–5.
-        const gate = tier >= 2 ? 1 : (s16 % 2 === 0 ? 1 : 0);
+        // --- Minute-boundary craft -------------------------------------
+        // Breath: the last ~bar before a flip. The ensemble inhales together.
+        const secToFlip = 60 - (this.basaltElapsed % 60);
+        const breath = tier < 4 && this.basaltElapsed > 5 && secToFlip <= 2.4;
+        if (breath && this.swellTier !== tier) {
+          this.swellTier = tier;
+          this.cymbalSwell(t, Math.max(0.8, secToFlip - 0.1), 0.05 + tier * 0.012);
+        }
+        // Arrival: the new minute lands with a unison hit on the next beat.
+        if (this.pendingArrival && s16 % 4 === 0) {
+          this.pendingArrival = false;
+          this.arrivalHit(t, tier, inten);
+        }
+
+        // --- Ostinato engine (suspense — never stops, thins only to breathe)
+        // 8ths in min1–2, full 16ths from min3; octaves stack with the tiers.
+        const gate = breath ? (s16 % 4 === 0 ? 1 : 0) : tier >= 2 ? 1 : (s16 % 2 === 0 ? 1 : 0);
         if (gate) {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
           const strVel = accent * (0.62 + inten * 0.4) * (tier <= 1 ? 1 : tier === 2 ? 1.12 : tier === 3 ? 1.2 : 1.28);
@@ -1334,6 +1458,7 @@ class MusicDirector {
           }
         }
 
+        // --- Floor: sub bass + cello + low brass mass -------------------
         if (s16 === 0) {
           voice({
             type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
@@ -1351,19 +1476,20 @@ class MusicDirector {
           }
         }
 
-        if (tier === 2 && s16 === 0 && bar % 2 === 0) {
-          const root = MusicDirector.OSTINATO[bar % 4][0];
-          this.padChord(t, [root, root * 1.5, root * 2], 2.5, 0.022 + inten * 0.018);
-        }
-        if (tier >= 3 && s16 === 0) {
-          const chord = MusicDirector.APEX_CHORDS[bar % MusicDirector.APEX_CHORDS.length];
-          this.richChordBed(t, chord, 2.5, (0.018 + inten * 0.014) * (tier >= 4 ? 1.35 : 1));
-          if (bar % 6 === 1) {
-            voice({ type: 'triangle', freq: 146.8, dur: 1.05, gain: 0.035, attack: 0.05, bus: this.bus, when: t, pan: -0.2 });
-            voice({ type: 'triangle', freq: 138.6, dur: 1.15, gain: 0.03, attack: 0.08, bus: this.bus, when: t + 1.0, pan: 0.15 });
+        // --- Legato string bed: held harmony from MINUTE 1, locked to the
+        // ostinato progression. Every 8th bar the A chord suspends (Asus4)
+        // and resolves 4→3 — the whole ensemble cadences together.
+        if (s16 === 0 && !breath) {
+          const bedGain = (0.015 + tier * 0.005 + inten * 0.008);
+          const bedHz = 750 + tier * 250;
+          if (bar % 8 === 7) {
+            this.legatoStrings(t, MusicDirector.A_SUS4, 1.25, bedGain, bedHz, tier);
+            this.legatoStrings(t + 1.2, MusicDirector.BED_CHORDS[3], 1.3, bedGain, bedHz, tier);
+          } else {
+            this.legatoStrings(t, MusicDirector.BED_CHORDS[bar % 4], 2.5, bedGain, bedHz, tier);
           }
         }
-        if (tier >= 4 && s16 === 0) {
+        if (tier >= 4 && s16 === 0 && !breath) {
           this.choirSustain(t, 2.5, 0.03 + inten * 0.018);
         }
 
@@ -1371,24 +1497,50 @@ class MusicDirector {
           this.shimmer(t, bar % 4 === 1 ? 466.2 : (tier >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + tier * 0.002);
         }
 
+        // --- Battery: heartbeat always; fills feed the arrivals ----------
         if (s16 === 0) this.taiko(t, true, 0.8 + inten * 0.2 + tier * 0.02);
         if (s16 === 10) this.taiko(t, false, 0.85);
         if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
         if (tier >= 2 && s16 % 4 === 2) this.taiko(t, false, 0.4);
-        if (tier >= 4 && (s16 === 4 || s16 === 12)) this.taiko(t, false, 0.48);
+        // Min 5: the drumline goes full corps — a driving 8th-note pulse.
+        if (tier >= 4 && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3);
+        // Breath-bar fill: denser each minute, crescendos into the downbeat.
+        if (breath && s16 >= 8 && s16 % 2 === 0) this.taiko(t, false, 0.35 + (s16 - 8) * 0.05 + tier * 0.05);
+        if (breath && tier >= 2 && (s16 === 13 || s16 === 15)) this.taiko(t, false, 0.55 + tier * 0.04);
 
-        // Hats from min2 only (min1 = one layer removed).
-        if (tier >= 1 && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
+        // Hats from min2 only; they drop out to breathe with everyone else.
+        if (tier >= 1 && !breath && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
 
-        if (tier <= 1 && bar % 8 === 4 && s16 === 0) this.playTheme(t, 1, 0.07 + inten * 0.04);
-        if (tier === 2 && bar % 4 === 2 && s16 === 0) this.playTheme(t, 1, 0.1 + inten * 0.05);
-        if (tier === 3 && bar % 4 === 0 && s16 === 0) this.playTheme(t, 1, 0.11 + inten * 0.05);
-        if (tier >= 4 && bar % 4 === 0 && s16 === 0) {
-          this.playTheme(t, 1, 0.12 + inten * 0.055);
-          this.playTheme(t, 2, 0.05 + inten * 0.025);
+        // --- The theme is the PROTAGONIST ("Time" seed) ------------------
+        // Stated every cycle from minute 1: soft seed → horns → octaves →
+        // full statement with descant. Payoff through recognition.
+        if (bar % 4 === 0 && s16 === 0 && !breath) {
+          if (tier === 0) this.softTheme(t, 2, 0.042 + inten * 0.012);
+          if (tier === 1) this.softTheme(t, 2, 0.048 + inten * 0.014);
+          if (tier === 2) {
+            this.playTheme(t, 1, 0.1 + inten * 0.05);
+            this.softTheme(t, 2, 0.03);
+          }
+          if (tier === 3) {
+            this.playTheme(t, 1, 0.11 + inten * 0.05);
+            this.playTheme(t, 2, 0.045 + inten * 0.02);
+            this.softTheme(t, 2, 0.028);
+          }
+          if (tier >= 4) {
+            this.playTheme(t, 1, 0.12 + inten * 0.055);
+            this.playTheme(t, 2, 0.05 + inten * 0.025);
+            this.softTheme(t, 4, 0.02);
+            // High descant — sustained A5 riding above the full statement.
+            voice({ type: 'triangle', freq: 880, dur: 4.6, gain: 0.02 + inten * 0.008, attack: 1.4, bus: this.bus, when: t, pan: 0.25 });
+            voice({ type: 'triangle', freq: 880 * 1.005, dur: 4.6, gain: 0.016, attack: 1.6, bus: this.bus, when: t, pan: -0.25 });
+          }
+        }
+        // --- The answer: cello line in dialogue (bars 3–4 of each cycle) --
+        if (tier >= 1 && bar % 4 === 2 && s16 === 0 && !breath) {
+          this.playAnswer(t, 0.05 + inten * 0.02 + tier * 0.006, tier >= 3);
         }
 
-        if (step > 0 && s16 === 0) {
+        if (step > 0 && s16 === 0 && !breath) {
           if (tier <= 1 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
           else if (tier === 2 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.38 + inten * 0.18, 0);
           else if (tier === 3 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.18, 0);
