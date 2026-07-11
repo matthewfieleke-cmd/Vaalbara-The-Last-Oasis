@@ -3,18 +3,17 @@
  * A fully procedural Web Audio synthesizer. Zero audio files.
  *
  *  - Soundtrack: generative layers on a 100 BPM musical clock.
- *    Phase 1 (Basalt Fields) is a corps / Zimmer-style three-act book:
- *      Act 0 (min 1–3): front ensemble — 8th ostinato, hats, shimmer, theme
- *      Act 1 (min 4):   full corps — 16ths, octave strings, low brass, choir air
- *      Act 2 (min 5):   finale — antiphonal braam wall, SATB choir, double-octave
- *                       theme, battery break → tutti, volume crest
- *    Clock owns the arc; living warriors add color beds (not the conductor).
- *    Early double-raze skips the last-10s crest into the transition riser.
+ *    Phase 1 (Basalt Fields) — 2–2–1 corps / Zimmer book:
+ *      Act 1 (0:00–2:00): front ensemble — 8th ostinato, hats, shimmer, theme
+ *      Act 2 (2:00–4:00): full corps — 16ths, octave strings, low brass, choir air
+ *      Act 3 (4:00–5:00): additive apex (Time / Babylon craft) — sustained rich
+ *                       chords, melody through them, ≤3 braams; triumph → awe
+ *    Clock owns the arc; warriors are battery + depth color (presence beds).
+ *    Early double-raze skips the last crest into the transition riser.
+ *    Cinematic intro: pre-corps intensity-gated bed (not the battle finale).
  *    Phase 2 (Oasis): D-dorian score, crossfaded over the march.
- *  - Warriors: the battle DRUMLINE (battery). Attack hits land on the shared
- *    musical grid (sim ticks phase-locked to 8ths @ 100 BPM); species sit in
- *    distinct registers. Bees keep a living buzz bed. Deploy entrances are
- *    species-specific and short — a new instrument joining the mix.
+ *  - Warriors: battle DRUMLINE on the shared grid (ticks = 8ths @ 100 BPM);
+ *    species also thicken the Act 3 tapestry as non-percussive color.
  * ========================================================================== */
 
 import type { GameEvent, SpeciesId } from './types';
@@ -681,7 +680,7 @@ class MusicDirector {
   private beePresence = false;
   /** Species currently alive — drives soft in-key presence beds. */
   private presenceSpecies = new Set<SpeciesId>();
-  /** 0 = front ensemble (min 1–3), 1 = full corps (min 4), 2 = finale (min 5). */
+  /** 0 = Act1 front ensemble (0–2:00), 1 = Act2 full corps (2–4:00), 2 = Act3 apex. */
   private actTier = 0;
   /** Music-bus volume multiplier (ensemble weight across acts). */
   private volumeMul = 1.08;
@@ -743,6 +742,19 @@ class MusicDirector {
     [164.8, 246.9, 329.6, 493.9], // Em
   ];
   private static OASIS_LEAD = [587.3, 523.3, 440, 523.3, 587.3, 659.3, 587.3, 880];
+
+  /**
+   * Act 3 sustained harmony cells (D minor tapestry):
+   * Dm(add2), Asus4, A (4–3 resolve), Bbmaj7, F, Dm7.
+   */
+  private static APEX_CHORDS: number[][] = [
+    [146.8, 164.8, 220, 293.7],       // Dm add2
+    [110, 146.8, 164.8, 220],         // Asus4 (D = sus4)
+    [110, 138.6, 164.8, 220],         // A (4→3: D resolves to C#)
+    [116.5, 174.6, 233.1, 349.2],     // Bbmaj7
+    [174.6, 220, 261.6, 349.2],       // F
+    [146.8, 220, 261.6, 349.2],       // Dm7
+  ];
 
   /** The Vaalbara motif — a rising D-minor horn theme threaded through the
    *  intro, the menu and both battle phases. [16th-step, freq, dur-steps]. */
@@ -835,10 +847,7 @@ class MusicDirector {
 
   /**
    * Drive Basalt act intensity from the Phase 1 clock; army only tints.
-   * - Act 0 (min 1–3): floor ~0.52 — front ensemble (old minute-4 book)
-   * - Act 1 (min 4):   floor → 0.78 — full corps (old minute-5 book)
-   * - Act 2 (min 5):   floor → 0.92 — finale mass (new)
-   * - Last 10 s: crest → 0.98 (skipped on early double-raze)
+   * 2–2–1 book: Act1 0–2:00, Act2 2–4:00, Act3 4–5:00 (additive apex).
    * Army density adds a small color bump — audio only, no sim change.
    */
   setBattlePulse(opts: {
@@ -856,9 +865,10 @@ class MusicDirector {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, floor + army * 0.14);
       this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
-      this.actTier = opts.basaltElapsedSec < 180 ? 0 : opts.basaltElapsedSec < 240 ? 1 : 2;
-      this.rideSfxBus(this.actTier === 0 ? 0.92 : this.actTier === 1 ? 1.0 : 1.06);
-      this.rideReverb(this.actTier >= 2 ? 0.58 : 0.45);
+      // 2–2–1
+      this.actTier = opts.basaltElapsedSec < 120 ? 0 : opts.basaltElapsedSec < 240 ? 1 : 2;
+      this.rideSfxBus(this.actTier === 0 ? 0.92 : this.actTier === 1 ? 1.0 : 1.04);
+      this.rideReverb(this.actTier >= 2 ? 0.56 : 0.45);
     } else if (opts.phase === 'oasis') {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
@@ -900,40 +910,37 @@ class MusicDirector {
     return origin + Math.max(0, steps) * STEP;
   }
 
-  /** Act intensity floor from Basalt elapsed time (smoothstep ramps). */
+  /** Act intensity floor — 2–2–1 smoothstep ramps. */
   private actFloor(elapsed: number): number {
     const ease = (a: number, b: number, t: number) => {
       const x = Math.max(0, Math.min(1, t));
       const s = x * x * (3 - 2 * x);
       return a + (b - a) * s;
     };
-    // Act 0 — front ensemble (min 1–3)
-    if (elapsed < 180) return 0.52;
-    // Act 1 — full corps (min 4)
-    if (elapsed < 240) return ease(0.52, 0.78, (elapsed - 180) / 12);
-    // Act 2 — finale (min 5)
-    if (elapsed < 290) return ease(0.78, 0.92, (elapsed - 240) / 12);
-    if (!this.allowClimax) return 0.92;
-    return ease(0.92, 0.98, (elapsed - 290) / 5);
+    // Act 1 — front ensemble (0–2:00)
+    if (elapsed < 120) return 0.52;
+    // Act 2 — full corps (2–4:00)
+    if (elapsed < 240) return ease(0.52, 0.78, (elapsed - 120) / 12);
+    // Act 3 — additive apex (4–5:00)
+    if (elapsed < 290) return ease(0.78, 0.9, (elapsed - 240) / 12);
+    if (!this.allowClimax) return 0.9;
+    return ease(0.9, 0.96, (elapsed - 290) / 5);
   }
 
-  /** Music-bus volume — ensemble weight; finale crest is the loudest point. */
+  /** Music-bus volume — bloom into Act 3 awe without crushing. */
   private actVolume(elapsed: number): number {
     const ease = (a: number, b: number, t: number) => {
       const x = Math.max(0, Math.min(1, t));
       const s = x * x * (3 - 2 * x);
       return a + (b - a) * s;
     };
-    // Act 0
-    if (elapsed < 180) return 1.08;
-    // Act 1
-    if (elapsed < 192) return ease(1.08, 1.22, (elapsed - 180) / 12);
+    if (elapsed < 120) return 1.08;
+    if (elapsed < 132) return ease(1.08, 1.22, (elapsed - 120) / 12);
     if (elapsed < 240) return 1.22;
-    // Act 2 finale
-    if (elapsed < 252) return ease(1.22, 1.35, (elapsed - 240) / 12);
-    if (elapsed < 290) return 1.35;
-    if (!this.allowClimax) return 1.35;
-    return ease(1.35, 1.42, (elapsed - 290) / 5);
+    if (elapsed < 252) return ease(1.22, 1.3, (elapsed - 240) / 12);
+    if (elapsed < 290) return 1.3;
+    if (!this.allowClimax) return 1.3;
+    return ease(1.3, 1.36, (elapsed - 290) / 5);
   }
 
   /** Ease intensity + volume toward targets each scheduler slice. */
@@ -1177,11 +1184,15 @@ class MusicDirector {
     }
   }
 
-  /** Short brass stab on the backbeat — company-front punctuation. */
-  private brassStab(t: number, freq: number, gain: number, pan = 0): void {
+  /** Sustained rich chord bed — Time-like held harmony under the apex. */
+  private richChordBed(t: number, freqs: number[], dur: number, gain: number): void {
     if (!this.bus) return;
-    voice({ type: 'sawtooth', freq, dur: 0.18, gain, filterFreq: 720, filterQ: 1.1, attack: 0.01, bus: this.bus, when: t, pan });
-    voice({ type: 'sawtooth', freq: freq * 1.5, dur: 0.14, gain: gain * 0.45, filterFreq: 900, attack: 0.01, bus: this.bus, when: t, pan: -pan });
+    freqs.forEach((f, i) => {
+      const pan = ((i % 2 === 0 ? -1 : 1) * (0.12 + i * 0.1));
+      voice({ type: 'triangle', freq: f, dur, gain, attack: dur * 0.4, bus: this.bus, when: t, pan });
+      voice({ type: 'sine', freq: f * 0.5, dur, gain: gain * 0.45, attack: dur * 0.45, bus: this.bus, when: t, pan: -pan * 0.4 });
+      voice({ type: 'sawtooth', freq: f, dur, gain: gain * 0.22, filterFreq: 480, attack: dur * 0.5, bus: this.bus, when: t, pan });
+    });
   }
 
   private padChord(t: number, freqs: number[], dur: number, gain = 0.05): void {
@@ -1273,119 +1284,160 @@ class MusicDirector {
         break;
       }
 
-      case 'intro':
-      case 'basalt': {
-        // Corps book remapped: Act0 = old min4, Act1 = old min5, Act2 = new finale.
-        // Intro plays the finale chart for cinematic mass.
+      case 'intro': {
+        // Option A — pre-corps cinematic bed: intensity-gated, no act-tier finale.
         const cell = MusicDirector.OSTINATO[bar % 4];
-        const corps = this.mode === 'basalt' ? this.actTier : 2;
-        // Battery break: bar 7 of each 8-bar phrase in the finale — pocket for the drumline.
-        const batteryBreak = corps >= 2 && bar % 8 === 7;
-        const tuttiReturn = corps >= 2 && bar % 8 === 0 && s16 === 0 && bar > 0;
-        const filterOpen = corps === 0 ? 1400 : corps === 1 ? 1900 : 2200;
-
-        // Ostinato: Act0 eighths → Act1+ sixteenths (muted during battery break).
-        const gate = batteryBreak ? 0
-          : corps >= 1 ? 1
-          : (s16 % 2 === 0 ? 1 : 0);
+        const gate = inten > 0.55 ? 1 : inten > 0.3 ? (s16 % 2 === 0 ? 1 : 0) : (s16 % 4 === 0 ? 1 : 0);
         if (gate) {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
-          const strVel = accent * (0.62 + inten * 0.4) * (corps === 0 ? 1 : corps === 1 ? 1.12 : 1.18);
-          this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
-          // Full corps+: octave double — the wall of strings.
-          if (corps >= 1) {
-            this.stringNote(t, cell[s16] * 2, strVel * 0.55, 0.12, filterOpen * 1.1);
-          }
-          // Finale: second octave shimmer (high violins).
-          if (corps >= 2 && s16 % 4 === 0) {
-            this.stringNote(t, cell[s16] * 4, strVel * 0.22, 0.1, 2800);
-          }
+          this.stringNote(t, cell[s16], accent * (0.7 + inten * 0.5));
         }
-
-        // Bass root each bar; cello / low brass grow with the act.
         if (s16 === 0) {
-          voice({
-            type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
-            gain: batteryBreak ? 0.3 : 0.26, filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
-          });
-          if (!batteryBreak) {
+          voice({ type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2, gain: 0.26, filterFreq: 130, attack: 0.03, bus: this.bus, when: t });
+          this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.085 + inten * 0.03);
+        }
+        if (s16 === 4) this.shimmer(t, bar % 4 === 1 ? 466.2 : 587.3, 2.0, 0.016 + inten * 0.012);
+        if (s16 === 0) this.taiko(t, true, 0.85 + inten * 0.2);
+        if (s16 === 10) this.taiko(t, false, 0.9);
+        if (inten > 0.5 && s16 === 13) this.taiko(t, false, 0.7);
+        if (inten > 0.75 && s16 % 4 === 2) this.taiko(t, false, 0.45);
+        if (inten > 0.35 && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.6);
+        if (bar % 8 === 4 && s16 === 0) this.playTheme(t, 1, 0.07 + inten * 0.05);
+        if (step % 128 === 0 && step > 0) this.braam(73.4, 1.6, 0.34 + inten * 0.2);
+        if (step % 64 === 48) {
+          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.03, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+          voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.026, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
+        }
+        break;
+      }
+
+      case 'basalt': {
+        // 2–2–1 battle book. Acts 1–2 keep the loved front-ensemble / full-corps
+        // language. Act 3 is an additive Time/Babylon apex: triumph → awe.
+        const cell = MusicDirector.OSTINATO[bar % 4];
+        const corps = this.actTier;
+        const apexT = Math.max(0, this.basaltElapsed - 240); // 0..60 inside Act 3
+        // Additive layers inside the final minute (new voice every ~12s).
+        const apexLayer = apexT < 12 ? 0 : apexT < 24 ? 1 : apexT < 36 ? 2 : apexT < 48 ? 3 : 4;
+        const filterOpen = corps === 0 ? 1400 : corps === 1 ? 1900 : 1600;
+
+        if (corps < 2) {
+          // ——— Acts 1 & 2 (verse / lift) — unchanged language ———
+          const gate = corps >= 1 ? 1 : (s16 % 2 === 0 ? 1 : 0);
+          if (gate) {
+            const accent = s16 % 4 === 0 ? 1.25 : 0.85;
+            const strVel = accent * (0.62 + inten * 0.4) * (corps === 0 ? 1 : 1.12);
+            this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
+            if (corps >= 1) {
+              this.stringNote(t, cell[s16] * 2, strVel * 0.55, 0.12, filterOpen * 1.1);
+            }
+          }
+          if (s16 === 0) {
+            voice({
+              type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
+              gain: 0.26, filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
+            });
             this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.085 + inten * 0.03);
             if (corps >= 1) {
               this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, 0.055 + inten * 0.045);
             }
-            // Finale: reinforced low fifth (trombone weight).
-            if (corps >= 2) {
-              this.lowBrass(t, MusicDirector.CELLO[bar % 4] * 0.5, 2.2, 0.04 + inten * 0.03);
-            }
           }
-        }
-
-        // Thin choir air on full-corps even bars; finale gets real SATB sustain.
-        if (!batteryBreak && corps === 1 && s16 === 0 && bar % 2 === 0) {
-          const root = MusicDirector.OSTINATO[bar % 4][0];
-          this.padChord(t, [root, root * 1.5, root * 2], 2.5, 0.022 + inten * 0.018);
-        }
-        if (!batteryBreak && corps >= 2 && s16 === 0) {
-          this.choirSustain(t, 2.4, 0.028 + inten * 0.022);
-        }
-
-        // Cold shimmer from Act 0 onward.
-        if (!batteryBreak && s16 === 4) {
-          this.shimmer(t, bar % 4 === 1 ? 466.2 : 587.3, 2.0, 0.014 + inten * 0.014);
-        }
-
-        // Battery — heavier during break; fills from full corps onward.
-        const batVel = batteryBreak ? 1.25 : 1;
-        if (s16 === 0) this.taiko(t, true, (0.82 + inten * 0.2) * batVel);
-        if (s16 === 10) this.taiko(t, false, 0.85 * batVel);
-        if (corps >= 0 && inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65 * batVel);
-        if (corps >= 1 && s16 % 4 === 2) this.taiko(t, false, 0.4 * batVel);
-        // Finale: mid-battery answers + climax crest hits.
-        if (corps >= 2 && (s16 === 4 || s16 === 12)) this.taiko(t, false, 0.5 * batVel);
-        if (corps >= 2 && inten > 0.9 && s16 % 2 === 1) {
-          // Rim / tenor tick between warrior pockets.
-          noise({ dur: 0.04, gain: 0.05, filterFreq: 4200, filterType: 'highpass', bus: this.bus, when: t });
-        }
-        if (tuttiReturn) {
-          this.braamAt(t, 73.4, 1.8, 0.55 + inten * 0.2, 0);
-          this.taiko(t, true, 1.15);
-        }
-
-        // Tick-hats from Act 0 (front ensemble book).
-        if (!batteryBreak && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
-
-        // Horn theme: statement → denser returns → double-octave finale.
-        if (!batteryBreak) {
+          if (corps === 1 && s16 === 0 && bar % 2 === 0) {
+            const root = MusicDirector.OSTINATO[bar % 4][0];
+            this.padChord(t, [root, root * 1.5, root * 2], 2.5, 0.022 + inten * 0.018);
+          }
+          if (s16 === 4) {
+            this.shimmer(t, bar % 4 === 1 ? 466.2 : 587.3, 2.0, 0.014 + inten * 0.014);
+          }
+          if (s16 === 0) this.taiko(t, true, 0.82 + inten * 0.2);
+          if (s16 === 10) this.taiko(t, false, 0.85);
+          if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
+          if (corps >= 1 && s16 % 4 === 2) this.taiko(t, false, 0.4);
+          if (s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
           if (corps === 0 && bar % 8 === 4 && s16 === 0) this.playTheme(t, 1, 0.075 + inten * 0.04);
           if (corps === 1 && bar % 4 === 2 && s16 === 0) this.playTheme(t, 1, 0.1 + inten * 0.055);
-          if (corps >= 2 && bar % 4 === 2 && s16 === 0) {
-            this.playTheme(t, 1, 0.12 + inten * 0.06);
-            this.playTheme(t, 2, 0.07 + inten * 0.04); // octave-up trumpet register
+          if (step > 0) {
+            if (corps === 1 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.22, 0);
+            else if (corps === 0 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
           }
-        }
+          if (step % 64 === 48) {
+            voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.028 + inten * 0.01, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+            voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.024 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
+          }
+        } else {
+          // ——— Act 3 apex: additive tapestry, triumph → awe, ≤3 braams ———
+          // Soft ostinato pulse under held chords (Time seed), not denser hits.
+          if (s16 % 4 === 0) {
+            const accent = s16 === 0 ? 1.1 : 0.7;
+            this.stringNote(t, cell[s16], accent * (0.45 + inten * 0.25), 0.16, filterOpen);
+            if (apexLayer >= 3) {
+              this.stringNote(t, cell[s16] * 2, accent * 0.28, 0.14, 2000);
+            }
+          }
 
-        // Braam language: soft cadences in Act 0/1; antiphonal wall in finale.
-        if (this.mode === 'basalt' && step > 0 && !batteryBreak) {
-          if (corps >= 2 && s16 === 0 && bar % 2 === 0) {
-            // Antiphonal L/R every other bar.
-            this.braamAt(t, 73.4, 1.55, 0.42 + inten * 0.2, bar % 4 === 0 ? -0.55 : 0.55);
-          } else if (corps === 1 && step % 64 === 0) {
-            this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.22, 0);
-          } else if (corps === 0 && step % 128 === 0) {
-            this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
+          // Rotating rich chord bed (add2 / sus4→3 / maj7 / m7).
+          if (s16 === 0) {
+            const chord = MusicDirector.APEX_CHORDS[bar % MusicDirector.APEX_CHORDS.length];
+            const bedGain = (0.02 + inten * 0.018) * (1 + apexLayer * 0.12);
+            this.richChordBed(t, chord, 2.5, bedGain);
+            // Sub pulse — heartbeat, not blare.
+            voice({
+              type: 'sine', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
+              gain: 0.2 + apexLayer * 0.02, attack: 0.04, bus: this.bus, when: t,
+            });
+            if (apexLayer >= 1) {
+              this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.07 + inten * 0.03);
+            }
+            // 4–3 suspension gesture when landing on the Asus→A pair.
+            if (bar % 6 === 1 && apexLayer >= 1) {
+              voice({ type: 'triangle', freq: 146.8, dur: 1.1, gain: 0.04, attack: 0.05, bus: this.bus, when: t, pan: -0.2 });
+              voice({ type: 'triangle', freq: 138.6, dur: 1.2, gain: 0.035, attack: 0.08, bus: this.bus, when: t + 1.05, pan: 0.15 });
+            }
           }
-          // Finale backbeat brass stabs — company front between warrior hits.
-          if (corps >= 2 && s16 === 8) {
-            this.brassStab(t, 146.8, 0.09 + inten * 0.05, bar % 2 === 0 ? 0.4 : -0.4);
-          }
-        }
 
-        // High tension drone from Act 0; finale adds dominant pressure (A).
-        if (!batteryBreak && step % 64 === 48) {
-          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.028 + inten * 0.01, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
-          voice({ type: 'triangle', freq: 622.3, dur: 2.2, gain: 0.024 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
-          if (corps >= 2) {
-            voice({ type: 'sawtooth', freq: 220, dur: 2.0, gain: 0.03 + inten * 0.015, filterFreq: 600, attack: 0.5, bus: this.bus, when: t, pan: 0.1 });
+          // Layer 0+: soft choir air; Layer 4: full SATB awe hold.
+          if (s16 === 0 && apexLayer >= 0 && apexLayer < 4 && bar % 2 === 0) {
+            this.choirSustain(t, 2.4, 0.018 + inten * 0.012);
+          }
+          if (s16 === 0 && apexLayer >= 4) {
+            this.choirSustain(t, 2.6, 0.034 + inten * 0.02);
+            this.shimmer(t, 880, 2.4, 0.02 + inten * 0.012);
+          }
+
+          // Shimmer widens in lift layers.
+          if (s16 === 4 && apexLayer >= 1) {
+            this.shimmer(t, bar % 2 === 0 ? 587.3 : 698.5, 2.0, 0.014 + apexLayer * 0.004);
+          }
+
+          // Battery stays in pocket for warrior hits — light answers only.
+          if (s16 === 0) this.taiko(t, true, 0.72 + inten * 0.15);
+          if (s16 === 10) this.taiko(t, false, 0.7);
+          if (apexLayer >= 2 && s16 === 13) this.taiko(t, false, 0.5);
+          if (s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 0.7 : 0.4);
+
+          // TRIUMPH: horn theme as long melodic spine (layer 2+).
+          if (apexLayer >= 2 && bar % 4 === 0 && s16 === 0) {
+            this.playTheme(t, 1, 0.11 + inten * 0.05);
+            if (apexLayer >= 3) this.playTheme(t, 2, 0.045 + inten * 0.025);
+          }
+
+          // ≤3 braams total in the minute — cadential, not a loop.
+          // 1) triumph entry ~24s  2) awe bloom ~50s  3) optional crest ~55s
+          if (s16 === 0) {
+            if (apexT >= 24 && apexT < 24.55) {
+              this.braamAt(t, 73.4, 1.7, 0.42 + inten * 0.15, 0);
+            } else if (apexT >= 49.5 && apexT < 50.1) {
+              this.braamAt(t, 65.4, 1.9, 0.48 + inten * 0.16, 0);
+              this.taiko(t, true, 1.05);
+            } else if (this.allowClimax && apexT >= 54.5 && apexT < 55.1) {
+              this.braamAt(t, 73.4, 1.5, 0.36 + inten * 0.12, 0);
+            }
+          }
+
+          // Awe: high tension drone opens into vastness late.
+          if (apexLayer >= 3 && step % 64 === 48) {
+            voice({ type: 'triangle', freq: 587.3, dur: 2.4, gain: 0.03 + inten * 0.012, attack: 0.9, bus: this.bus, when: t, pan: 0.35 });
+            voice({ type: 'triangle', freq: 698.5, dur: 2.4, gain: 0.026 + inten * 0.01, attack: 1.0, bus: this.bus, when: t, pan: -0.35 });
           }
         }
         break;
