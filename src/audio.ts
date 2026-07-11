@@ -3,17 +3,16 @@
  * A fully procedural Web Audio synthesizer. Zero audio files.
  *
  *  - Soundtrack: generative layers on a 100 BPM musical clock.
- *    Phase 1 (Basalt Fields) — 2–2–1 corps / Zimmer book:
- *      Act 1 (0:00–2:00): front ensemble — 8th ostinato, hats, shimmer, theme
- *      Act 2 (2:00–4:00): full corps — 16ths, octave strings, low brass, choir air
- *      Act 3 (4:00–5:00): additive apex (Time / Babylon craft) — sustained rich
- *                       chords, melody through them, ≤3 braams; triumph → awe
- *    Clock owns the arc; warriors are battery + depth color (presence beds).
- *    Early double-raze skips the last crest into the transition riser.
- *    Cinematic intro: pre-corps intensity-gated bed (not the battle finale).
- *    Phase 2 (Oasis): D-dorian score, crossfaded over the march.
- *  - Warriors: battle DRUMLINE on the shared grid (ticks = 8ths @ 100 BPM);
- *    species also thicken the Act 3 tapestry as non-percussive color.
+ *    Phase 1 (Basalt Fields) — five-minute ADDITIVE ladder (hard cuts):
+ *      Min 1: front ensemble without hats
+ *      Min 2: + hats (full front ensemble)
+ *      Min 3: + 16ths, octave strings, low brass, choir air (full corps)
+ *      Min 4: + wider strings, reinforced brass, rich chord bed (sus/add2/m7)
+ *      Min 5: + max string/brass/choir mass + warrior SFX/presence lift
+ *    Each minute KEEPS prior layers and only adds — never thins the pulse.
+ *    Early double-raze skips the last crest into the transition riser → Oasis.
+ *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
+ *  - Warriors: battery on the shared grid + presence beds as depth builders.
  * ========================================================================== */
 
 import type { GameEvent, SpeciesId } from './types';
@@ -680,7 +679,7 @@ class MusicDirector {
   private beePresence = false;
   /** Species currently alive — drives soft in-key presence beds. */
   private presenceSpecies = new Set<SpeciesId>();
-  /** 0 = Act1 front ensemble (0–2:00), 1 = Act2 full corps (2–4:00), 2 = Act3 apex. */
+  /** 0..4 = Phase 1 minute index (hard-cut additive ladder). */
   private actTier = 0;
   /** Music-bus volume multiplier (ensemble weight across acts). */
   private volumeMul = 1.08;
@@ -837,18 +836,18 @@ class MusicDirector {
       this.braam(146.8, 1.6, 0.48);
       this.allowClimax = true;
       this.basaltElapsed = 0;
-      this.intensityTarget = 0.52;
-      this.volumeTarget = 1.08; // front-ensemble open — finales earn the crest
+      this.intensityTarget = 0.5;
+      this.volumeTarget = 1.06;
       this.actTier = 0;
-      this.rideSfxBus(0.92);
-      this.rideReverb(0.45);
+      this.rideSfxBus(0.9);
+      this.rideReverb(0.42);
     }
   }
 
   /**
-   * Drive Basalt act intensity from the Phase 1 clock; army only tints.
-   * 2–2–1 book: Act1 0–2:00, Act2 2–4:00, Act3 4–5:00 (additive apex).
-   * Army density adds a small color bump — audio only, no sim change.
+   * Drive Basalt from the Phase 1 clock; army only tints.
+   * Five hard-cut minutes: each keeps prior layers and adds one more.
+   * Audio only — no sim change. Transition/Oasis still settle the buses.
    */
   setBattlePulse(opts: {
     phase: MusicMode;
@@ -865,10 +864,12 @@ class MusicDirector {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, floor + army * 0.14);
       this.volumeTarget = this.actVolume(opts.basaltElapsedSec);
-      // 2–2–1
-      this.actTier = opts.basaltElapsedSec < 120 ? 0 : opts.basaltElapsedSec < 240 ? 1 : 2;
-      this.rideSfxBus(this.actTier === 0 ? 0.92 : this.actTier === 1 ? 1.0 : 1.04);
-      this.rideReverb(this.actTier >= 2 ? 0.56 : 0.45);
+      // Hard minute tiers: 0–1 / 1–2 / 2–3 / 3–4 / 4–5
+      this.actTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
+      const sfxByTier = [0.9, 0.94, 1.0, 1.04, 1.1];
+      const revByTier = [0.42, 0.45, 0.48, 0.54, 0.6];
+      this.rideSfxBus(sfxByTier[this.actTier] ?? 1.0);
+      this.rideReverb(revByTier[this.actTier] ?? 0.45);
     } else if (opts.phase === 'oasis') {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
@@ -910,37 +911,19 @@ class MusicDirector {
     return origin + Math.max(0, steps) * STEP;
   }
 
-  /** Act intensity floor — 2–2–1 smoothstep ramps. */
+  /** Hard intensity floors per minute — no arrangement crossfades. */
   private actFloor(elapsed: number): number {
-    const ease = (a: number, b: number, t: number) => {
-      const x = Math.max(0, Math.min(1, t));
-      const s = x * x * (3 - 2 * x);
-      return a + (b - a) * s;
-    };
-    // Act 1 — front ensemble (0–2:00)
-    if (elapsed < 120) return 0.52;
-    // Act 2 — full corps (2–4:00)
-    if (elapsed < 240) return ease(0.52, 0.78, (elapsed - 120) / 12);
-    // Act 3 — additive apex (4–5:00)
-    if (elapsed < 290) return ease(0.78, 0.9, (elapsed - 240) / 12);
-    if (!this.allowClimax) return 0.9;
-    return ease(0.9, 0.96, (elapsed - 290) / 5);
+    const m = Math.min(4, Math.floor(elapsed / 60));
+    return [0.5, 0.55, 0.72, 0.84, 0.94][m] ?? 0.5;
   }
 
-  /** Music-bus volume — bloom into Act 3 awe without crushing. */
+  /** Hard volume steps per minute — power only grows. */
   private actVolume(elapsed: number): number {
-    const ease = (a: number, b: number, t: number) => {
-      const x = Math.max(0, Math.min(1, t));
-      const s = x * x * (3 - 2 * x);
-      return a + (b - a) * s;
-    };
-    if (elapsed < 120) return 1.08;
-    if (elapsed < 132) return ease(1.08, 1.22, (elapsed - 120) / 12);
-    if (elapsed < 240) return 1.22;
-    if (elapsed < 252) return ease(1.22, 1.3, (elapsed - 240) / 12);
-    if (elapsed < 290) return 1.3;
-    if (!this.allowClimax) return 1.3;
-    return ease(1.3, 1.36, (elapsed - 290) / 5);
+    const m = Math.min(4, Math.floor(elapsed / 60));
+    const v = [1.06, 1.12, 1.22, 1.32, 1.4][m] ?? 1.06;
+    // Last 10 s crest if we weren't forced into early transition.
+    if (elapsed >= 290 && this.allowClimax) return Math.min(1.45, v + 0.04);
+    return v;
   }
 
   /** Ease intensity + volume toward targets each scheduler slice. */
@@ -977,7 +960,7 @@ class MusicDirector {
     // Presence rides from Act 0 (front ensemble) onward — color under the book.
     if (!this.bus) return;
     if (this.mode !== 'basalt' && this.mode !== 'intro') return;
-    const thick = this.actTier >= 2 ? 1.5 : this.actTier >= 1 ? 1.35 : 1;
+    const thick = this.actTier >= 4 ? 1.65 : this.actTier >= 3 ? 1.45 : this.actTier >= 2 ? 1.25 : 1;
     const g = (0.016 + this.intensity * 0.012) * thick;
 
     type Role = 'titan' | 'command' | 'swarm' | 'air' | 'siege' | 'skirmish';
@@ -1008,7 +991,7 @@ class MusicDirector {
         // Low D–A open fifth under the taiko.
         voice({ type: 'sine', freq: 73.4, dur: 1.8, gain: g * 0.9, attack: 0.2, bus: this.bus, when: t, pan: -0.15 });
         voice({ type: 'triangle', freq: 110, dur: 1.8, gain: g * 0.55, attack: 0.25, bus: this.bus, when: t, pan: 0.15 });
-        if (this.actTier >= 1 && bar % 2 === 0) {
+        if (this.actTier >= 2 && bar % 2 === 0) {
           voice({ type: 'sawtooth', freq: 146.8, dur: 0.9, gain: g * 0.22, filterFreq: 420, attack: 0.08, bus: this.bus, when: t });
         }
       } else if (role === 'command' && bar % 4 === 0 && s16 === 0) {
@@ -1024,7 +1007,7 @@ class MusicDirector {
       } else if (role === 'siege' && s16 === 0 && bar % 2 === 1) {
         voice({ type: 'sine', freq: 98, dur: 1.2, gain: g * 0.5, attack: 0.15, bus: this.bus, when: t, pan: 0.25 });
         voice({ type: 'triangle', freq: 146.8, dur: 1.0, gain: g * 0.28, attack: 0.18, bus: this.bus, when: t });
-      } else if (role === 'skirmish' && this.actTier >= 1 && bar % 4 === 2 && s16 === 0) {
+      } else if (role === 'skirmish' && this.actTier >= 2 && bar % 4 === 2 && s16 === 0) {
         voice({ type: 'triangle', freq: 220, dur: 0.35, gain: g * 0.4, attack: 0.03, bus: this.bus, when: t, pan: -0.25 });
         voice({ type: 'triangle', freq: 330, dur: 0.35, gain: g * 0.28, attack: 0.03, bus: this.bus, when: t, pan: 0.25 });
       }
