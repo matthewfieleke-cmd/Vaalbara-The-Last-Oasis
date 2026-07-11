@@ -98,8 +98,8 @@ export function GameScreen({
         (window as unknown as { __vbState?: typeof state }).__vbState = state;
         handleGameEvents(events);
         routeEvents(events, state);
-        // Soundtrack: corps acts from the Phase 1 clock (front ensemble →
-        // full corps → finale); army tints color beds only.
+        // Soundtrack: 2–2–1 Phase 1 acts (front ensemble → full corps →
+        // additive apex); army tints color beds only.
         const elapsed = basaltElapsedSec(state);
         music.setBattlePulse({
           phase: state.phase,
