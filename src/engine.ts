@@ -332,6 +332,7 @@ function spawnUnit(
     waypoint,
     stall: 0,
     stallRef: Infinity,
+    unstick: 0,
     buffs: freshBuffs(),
     stealthed: false,
     action: 'spawn',
@@ -1067,7 +1068,9 @@ function steerStep(
   };
 
   // Full step, then wall-slide on each axis, then a widening deflection fan
-  // (45°, 90°, 120° either way — deterministic order biased by unit id).
+  // (45°, 90°, 120°, 150°, 180° either way — deterministic order biased by
+  // unit id). The retreat angles matter: a unit shoved into a terrain pocket
+  // whose only open ground is BEHIND it could otherwise never move again.
   if (tryMove(sx, sy)) return true;
   if (tryMove(sx, 0)) return true;
   if (tryMove(0, sy)) return true;
@@ -1076,7 +1079,7 @@ function steerStep(
     y: vx * Math.sin(ang) + vy * Math.cos(ang),
   });
   const sign = u.id % 2 === 0 ? 1 : -1;
-  for (const base of [0.7853981633974483, 1.5707963267948966, 2.0943951023931953]) {
+  for (const base of [0.7853981633974483, 1.5707963267948966, 2.0943951023931953, 2.617993877991494, Math.PI]) {
     for (const ang of [base * sign, -base * sign]) {
       const v = rot(sx, sy, ang);
       if (tryMove(v.x, v.y)) return true;
@@ -1218,6 +1221,7 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   if (u.buffs.slowTicks > 0) u.buffs.slowTicks--;
   else u.buffs.slowMult = 1;
   if (u.atkTimer > 0) u.atkTimer--;
+  if (u.unstick > 0) u.unstick--;
 
   // 1. Attack when a target is in reach — unless we are already on an enemy
   // gatehouse. Siege takes priority over chasing a distant skirmish so a
@@ -1236,12 +1240,16 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   if (canSiege && !threatClose) {
     if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob!);
     else u.facing = ob!.x >= u.x ? 1 : -1;
+    u.stall = 0;
+    u.stallRef = Infinity;
     return;
   }
 
   if (target && canAttack(st, u, target)) {
     if (u.atkTimer <= 0) performAttack(st, ev, u, target);
     else u.facing = target.x >= u.x ? 1 : -1;
+    u.stall = 0;
+    u.stallRef = Infinity;
     return;
   }
 
@@ -1252,6 +1260,8 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
     if (dist2(u.x, u.y, ob.x, ob.y) <= reach * reach) {
       if (u.atkTimer <= 0) attackObelisk(st, ev, u, ob);
       else u.facing = ob.x >= u.x ? 1 : -1;
+      u.stall = 0;
+      u.stallRef = Infinity;
       return;
     }
   }
@@ -1269,7 +1279,7 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
   }
 
   let goal: Vec2;
-  if (target) {
+  if (target && u.unstick === 0) {
     // Lane discipline: a warrior still behind its own wall FINISHES ITS OWN
     // LANE first — through the tunnel or up over the rubble mound — and only
     // then crosses toward enemies in other lanes from the battlefield side.
@@ -1341,6 +1351,18 @@ function tickUnit(st: GameState, ev: GameEvent[], raw: UnitState): void {
         u.stall = 0;
         u.stallRef = Infinity;
       }
+    }
+  } else if (target && u.unstick === 0 && !moved) {
+    // Chase-lock wedge: steering has HARD-FAILED (not wiggled — failed) for
+    // 3 s straight while holding a target. Break off the chase for ~4 s so
+    // movement falls back to the corridor-routed siege march, which walks
+    // the unit around the river instead of leaving it planted at the bank
+    // until an enemy happens to wander into attack range.
+    u.stall++;
+    u.stallRef = Infinity;
+    if (u.stall >= 10) {
+      u.stall = 0;
+      u.unstick = 14;
     }
   } else {
     u.stall = 0;
