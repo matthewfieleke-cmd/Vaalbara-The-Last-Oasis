@@ -19,6 +19,11 @@
  *    cymbal swell hints at the boundary. The braam-and-crash arrival is
  *    reserved for ONE moment — the start of minute 5 (breath bar → hit).
  *    Layers only add — never thin the pulse.
+ *    FORM (Believer/Higher): every 8-bar phrase = lean VERSE half + stacked
+ *    CHORUS half, with a suckout-and-slam on chorus downbeats from minute 3
+ *    and chained lifts (swell + triplet taiko ramp) into every chorus.
+ *    The theme rotates two strains and three voices, chorus-half only, with
+ *    whispered verse fragments — the motif never repeats the same way twice.
  *    Early double-raze skips the last crest into the transition riser → Oasis.
  *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
  *    A bus compressor glues the stacked layers so density reads as power.
@@ -719,6 +724,8 @@ class MusicDirector {
   private breathUntilStep = -1;
   /** Minute whose pre-boundary soft swell was already scheduled. */
   private swellMinute = -1;
+  /** Bar of the minute-5 arrival — suppresses the suckout in that bar. */
+  private arrivalBar = -1;
 
   /** AudioContext currentTime when a context exists (even if muted). */
   audioNow(): number | null {
@@ -808,6 +815,25 @@ class MusicDirector {
     [24, 440, 2],     // A4
     [26, 392, 2],     // G4
     [28, 349.23, 4],  // F4 — settle
+  ];
+
+  /** Second strain — a descending RESPONSE to the theme. Alternates with the
+   *  A-strain so the motif never plays the same way twice in a row. */
+  private static THEME_B: Array<[number, number, number]> = [
+    [0, 440, 4],      // A4 — start on the reach
+    [4, 392, 2],      // G4
+    [6, 349.23, 2],   // F4
+    [8, 392, 4],      // G4
+    [12, 293.66, 8],  // D4 — settle low
+    [20, 349.23, 4],  // F4
+    [24, 329.63, 2],  // E4
+    [26, 293.66, 2],  // D4
+    [28, 261.63, 4],  // C4 — soft 9th over Bb, opens back to Dm
+  ];
+
+  /** Opening gesture only (through the A4 reach) — the verse whisper. */
+  private static THEME_FRAG: Array<[number, number, number]> = [
+    [0, 293.66, 4], [4, 349.23, 4], [8, 329.63, 2], [10, 293.66, 2], [12, 440, 8],
   ];
 
   start(): void {
@@ -1253,13 +1279,30 @@ class MusicDirector {
 
   /** The theme as a soft, clean seed — the "piano" of minutes 1–2, kept as
    *  sparkle doubling once the horns take over. */
-  private softTheme(t0: number, mult: number, gain: number): void {
+  private softTheme(t0: number, mult: number, gain: number, notes: Array<[number, number, number]> = MusicDirector.THEME): void {
     if (!this.bus) return;
     const STEP = MUSIC_16TH_SEC;
-    for (const [st, freq, durSteps] of MusicDirector.THEME) {
+    for (const [st, freq, durSteps] of notes) {
       const t = t0 + st * STEP;
       voice({ type: 'triangle', freq: freq * mult, dur: durSteps * STEP + 0.3, gain, attack: 0.006, bus: this.bus, when: t, pan: 0.12 });
       voice({ type: 'sine', freq: freq * mult * 2.002, dur: durSteps * STEP * 0.5 + 0.15, gain: gain * 0.35, attack: 0.006, bus: this.bus, when: t, pan: -0.15 });
+    }
+  }
+
+  /** Play a theme strain in a chosen section voice — the rotation that keeps
+   *  the motif fresh (horn statement vs legato string section). */
+  private playStrain(t0: number, notes: Array<[number, number, number]>, mult: number, gain: number, kind: 'horn' | 'strings'): void {
+    if (!this.bus) return;
+    const STEP = MUSIC_16TH_SEC;
+    for (const [st, freq, durSteps] of notes) {
+      const t = t0 + st * STEP;
+      const dur = durSteps * STEP + 0.12;
+      if (kind === 'horn') {
+        this.horn(t, freq * mult, dur, gain);
+      } else {
+        voice({ type: 'sawtooth', freq: freq * mult, dur: dur + 0.08, gain, filterFreq: 1900, filterQ: 1.1, attack: 0.05, bus: this.bus, when: t, pan: -0.12 });
+        voice({ type: 'sawtooth', freq: freq * mult * 1.005, dur: dur + 0.08, gain: gain * 0.6, filterFreq: 1500, attack: 0.06, bus: this.bus, when: t, pan: 0.14 });
+      }
     }
   }
 
@@ -1521,6 +1564,7 @@ class MusicDirector {
             // into, braam pitched to this bar's chord root.
             this.arrivalArmed = false;
             this.musicTier = 4;
+            this.arrivalBar = bar;
             this.arrivalHit(t, MusicDirector.CELLO[bar % 4], inten);
             this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
           } else if (m < 4 && this.musicTier < 4) {
@@ -1541,6 +1585,7 @@ class MusicDirector {
             // this downbeat anyway, still inside the harmony.
             this.arrivalArmed = false;
             this.musicTier = 4;
+            this.arrivalBar = bar;
             this.arrivalHit(t, MusicDirector.CELLO[bar % 4], inten);
             this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
           }
@@ -1548,19 +1593,52 @@ class MusicDirector {
         const breath = this.arrivalArmed && step < this.breathUntilStep;
         const filterOpen = MusicDirector.lerpTab([1400, 1400, 1900, 2100, 2400], pos);
 
+        // --- Verse/chorus form (Believer / Higher) ------------------------
+        // Each 8-bar phrase splits: bars 0–3 VERSE (lean, hypnotic), bars
+        // 4–7 CHORUS (stacked, soaring). The additive minute ladder scales
+        // both — contrast lives INSIDE every minute, so nothing goes stale.
+        const bar8 = bar % 8;
+        const phraseIdx = Math.floor(bar / 8);
+        const chorusHalf = bar8 >= 4;
+        const lift = chorusHalf ? 1.08 : 0.94;
+        // Believer suckout: chorus downbeat drops to a lone falling sub +
+        // varied rise, then SLAMS on the backbeat. From minute 3 onward.
+        const suckBar = chorusHalf && bar8 === 4 && m >= 2 && !breath && bar !== this.arrivalBar;
+        const inSuck = suckBar && s16 < 4;
+
+        if (suckBar && s16 === 0) {
+          voice({ type: 'sine', freq: MusicDirector.CELLO[bar % 4], freqEnd: 30, dur: 0.55, gain: 0.34, bus: this.bus, when: t });
+          if (phraseIdx % 2 === 0) {
+            voice({ type: 'triangle', freq: 320, freqEnd: 1280, dur: 0.55, gain: 0.045, attack: 0.05, bus: this.bus, when: t, pan: 0.2 });
+          } else {
+            this.taiko(t + 0.2, false, 0.5);
+            this.taiko(t + 0.4, false, 0.7);
+          }
+        }
+        if (suckBar && s16 === 4) {
+          this.taiko(t, true, 1.05 + 0.1 * l3);
+          this.crash(t, 0.05 + 0.06 * l3);
+          if (l3 > 0.05) this.snare(t, 1.15 * l3);
+          if (l3 > 0.04) this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.0, 0.06 * l3, 0);
+        }
+
         // --- Ostinato engine (suspense — never stops) --------------------
         // 8ths at first; the offbeat 16ths FADE in across minute 3's build.
+        // The octave stack is CHORUS-ONLY — verses stay lean so the chorus
+        // has something to be big against.
         const offbeat16 = s16 % 2 === 1;
-        const gate = breath ? s16 % 4 === 0 : (!offbeat16 || l2 > 0.03);
+        const gate = breath ? s16 % 4 === 0 : inSuck ? s16 === 0 : (!offbeat16 || l2 > 0.03);
         if (gate) {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
-          let strVel = accent * (0.62 + inten * 0.4) * MusicDirector.lerpTab([1, 1, 1.12, 1.2, 1.28], pos);
+          let strVel = accent * (0.62 + inten * 0.4) * MusicDirector.lerpTab([1, 1, 1.12, 1.2, 1.28], pos) * lift;
           if (offbeat16 && !breath) strVel *= l2;
           if (strVel > 0.02) {
             this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
-            if (l2 > 0.03) this.stringNote(t, cell[s16] * 2, strVel * (0.55 + 0.15 * l3) * l2, 0.12, filterOpen * 1.1);
-            if (l3 > 0.03 && s16 % 2 === 0) this.stringNote(t, cell[s16] * 2, strVel * 0.35 * l3, 0.11, 2600);
-            if (l4 > 0.03 && s16 % 4 === 0) this.stringNote(t, cell[s16] * 4, strVel * 0.28 * l4, 0.1, 3000);
+            if (chorusHalf && !inSuck) {
+              if (l2 > 0.03) this.stringNote(t, cell[s16] * 2, strVel * (0.55 + 0.15 * l3) * l2, 0.12, filterOpen * 1.1);
+              if (l3 > 0.03 && s16 % 2 === 0) this.stringNote(t, cell[s16] * 2, strVel * 0.35 * l3, 0.11, 2600);
+              if (l4 > 0.03 && s16 % 4 === 0) this.stringNote(t, cell[s16] * 4, strVel * 0.28 * l4, 0.1, 3000);
+            }
           }
         }
 
@@ -1571,97 +1649,133 @@ class MusicDirector {
             gain: 0.24 + 0.015 * pos, filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
           });
           this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.08 + inten * 0.03 + pos * 0.004);
-          if (l2 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, (0.055 + inten * 0.045) * l2);
-          if (l3 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4] * 0.5, 2.2, (0.035 + inten * 0.03) * l3);
-          if (l4 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, (0.04 + inten * 0.025) * l4);
+          if (l2 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, (0.055 + inten * 0.045) * l2 * (chorusHalf ? 1 : 0.8));
+          if (chorusHalf) {
+            if (l3 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4] * 0.5, 2.2, (0.035 + inten * 0.03) * l3);
+            if (l4 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, (0.04 + inten * 0.025) * l4);
+          }
         }
 
         // --- Legato string bed: held harmony from MINUTE 1, locked to the
         // ostinato progression. Every 8th bar the A chord suspends (Asus4)
         // and resolves 4→3 — the whole ensemble cadences together.
-        if (s16 === 0 && !breath) {
-          const bedGain = 0.015 + pos * 0.005 + inten * 0.008;
+        // In a suckout bar the bed enters WITH the slam, not the downbeat.
+        if (!breath && ((s16 === 0 && !suckBar) || (suckBar && s16 === 4))) {
+          const bedGain = (0.015 + pos * 0.005 + inten * 0.008) * lift;
           const bedHz = 750 + pos * 250;
           if (bar % 8 === 7) {
             this.legatoStrings(t, MusicDirector.A_SUS4, 1.25, bedGain, bedHz, pos);
             this.legatoStrings(t + 1.2, MusicDirector.BED_CHORDS[3], 1.3, bedGain, bedHz, pos);
           } else {
-            this.legatoStrings(t, MusicDirector.BED_CHORDS[bar % 4], 2.5, bedGain, bedHz, pos);
+            this.legatoStrings(t, MusicDirector.BED_CHORDS[bar % 4], suckBar ? 2.1 : 2.5, bedGain, bedHz, pos);
           }
         }
-        if (l4 > 0.03 && s16 === 0 && !breath) {
-          this.choirSustain(t, 2.5, (0.03 + inten * 0.018) * l4);
+        if (l4 > 0.03 && chorusHalf && !breath && s16 === (suckBar ? 4 : 0)) {
+          this.choirSustain(t, 2.5, (0.033 + inten * 0.018) * l4);
         }
 
-        if (s16 === 4) {
+        if (s16 === 4 && !suckBar) {
           this.shimmer(t, bar % 4 === 1 ? 466.2 : (m >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + pos * 0.002);
         }
 
         // --- Battery: heartbeat always; new pulses bloom, never jump ------
-        if (s16 === 0) this.taiko(t, true, 0.8 + inten * 0.2 + pos * 0.02);
+        if (s16 === 0 && !inSuck) this.taiko(t, true, (0.8 + inten * 0.2 + pos * 0.02) * lift);
         if (s16 === 10) this.taiko(t, false, 0.85);
         if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
-        if (l2 > 0.05 && s16 % 4 === 2) this.taiko(t, false, 0.4 * l2);
-        // Min 5: the drumline goes full corps — a driving 8th-note pulse.
-        if (l4 > 0.05 && !breath && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4);
+        if (l2 > 0.05 && s16 % 4 === 2 && !inSuck) this.taiko(t, false, 0.4 * l2);
+        // Min 5: the drumline goes full corps in the CHORUS — driving 8ths.
+        if (l4 > 0.05 && chorusHalf && !breath && !inSuck && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4);
+        // Chained lift into every chorus (last verse bar): reverse swell +
+        // triplet taiko ramp — the 12/8 swagger riding our straight grid.
+        if (bar8 === 3 && !breath && m >= 1) {
+          if (s16 === 8) {
+            if (l2 > 0.1) this.cymbalSwell(t, 1.15, 0.016 + 0.02 * l3);
+            this.taiko(t, false, 0.3);
+            this.taiko(t + 0.2, false, 0.38);
+            this.taiko(t + 0.4, false, 0.46);
+          }
+          if (s16 === 12) {
+            this.taiko(t, false, 0.5);
+            this.taiko(t + 0.2, false, 0.58);
+            this.taiko(t + 0.4, false, 0.66 + 0.2 * l3);
+            if (l3 > 0.1) this.snare(t + 0.4, 0.45 * l3);
+          }
+        }
         // Breath-bar fill (minute 5 only): the roll into the one arrival.
         if (breath && s16 >= 8 && s16 % 2 === 0) this.taiko(t, false, 0.5 + (s16 - 8) * 0.05);
         if (breath && (s16 === 13 || s16 === 15)) this.taiko(t, false, 0.67);
         if (breath && s16 >= 8) this.snare(t, 0.35 + (s16 - 8) * 0.09);
 
-        // --- TSO crest (minutes 4–5): the wall BLOOMS in over the slide ---
-        if (l3 > 0.04 && !breath) {
-          if (s16 % 4 === 0) this.rockKick(t, (0.85 + 0.15 * l4) * l3);
-          if (s16 === 4 || s16 === 12) this.snare(t, (0.9 + 0.2 * l4) * l3);
-          if (l4 > 0.05 && (s16 === 7 || s16 === 15)) this.snare(t, 0.35 * l4);
-          if (s16 % 2 === 0) {
-            const root = MusicDirector.BED_CHORDS[bar % 4][0];
-            const accent = s16 % 8 === 0 ? 1.3 : 1;
-            this.powerChord(t, root, 0.13, 0.042 * accent * l3, s16 % 4 === 0 ? -0.15 : 0.15);
-            if (l4 > 0.04) this.powerChord(t, root * 2, 0.11, 0.02 * accent * l4, 0.3);
-          }
-          if (l4 > 0.04 && s16 % 4 === 3) {
-            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 0.1, 0.036 * l4, -0.25);
-          }
-          if (l4 > 0.04 && s16 === 0) {
-            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.1, 0.05 * l4, 0);
-          }
-          // Crashes: every cycle in min 4, every 2 bars in min 5.
-          if (s16 === 0 && (m >= 4 ? bar % 2 === 0 : bar % 4 === 0)) {
-            this.crash(t, (m >= 4 ? 0.095 : 0.07) * l3);
+        // --- TSO crest (minutes 4–5): verse CHUGS, chorus RINGS (Higher) --
+        if (l3 > 0.04 && !breath && !inSuck) {
+          const root = MusicDirector.BED_CHORDS[bar % 4][0];
+          if (s16 % 4 === 0) this.rockKick(t, ((chorusHalf ? 1 : 0.85) + 0.15 * l4) * l3);
+          if (chorusHalf) {
+            // Backbeats + ghosts live in the chorus only.
+            if (s16 === 4 || s16 === 12) this.snare(t, (0.9 + 0.2 * l4) * l3);
+            if (l4 > 0.05 && (s16 === 7 || s16 === 15)) this.snare(t, 0.35 * l4);
+            // The drop-D riff: a ringing chord blooms over each bar, with
+            // rhythmic punches — a hook, not texture.
+            if (s16 === 0) this.powerChord(t, root, 1.15, (0.055 + 0.02 * l4) * l3, 0);
+            if (s16 === 6 || s16 === 10) this.powerChord(t, root, 0.28, 0.04 * l3, s16 === 6 ? -0.2 : 0.2);
+            if (l4 > 0.04 && s16 % 2 === 0 && s16 >= 8) this.powerChord(t, root * 2, 0.11, 0.018 * l4, 0.3);
+            if (l4 > 0.04 && s16 % 4 === 3) this.powerChord(t, root, 0.1, 0.036 * l4, -0.25);
+            // Mid-chorus crash refresher in the final minute.
+            if (m >= 4 && bar8 === 6 && s16 === 0) this.crash(t, 0.085 * l3);
+          } else {
+            // Verse: palm-muted 8th chugs — restrained, hypnotic.
+            if (s16 % 2 === 0) this.powerChord(t, root, 0.12, 0.034 * l3, s16 % 4 === 0 ? -0.15 : 0.15);
           }
         }
 
-        // Hats fade in across minute 2's build.
-        if (l1 > 0.03 && !breath && s16 % 2 === 1) this.hat(t, (s16 % 4 === 3 ? 1 : 0.55) * l1);
+        // Hats fade in across minute 2; they sit back in the verses.
+        if (l1 > 0.03 && !breath && !inSuck && s16 % 2 === 1) {
+          this.hat(t, (s16 % 4 === 3 ? 1 : 0.55) * l1 * (chorusHalf ? 1 : 0.8));
+        }
 
-        // --- The theme is the PROTAGONIST ("Time" seed) ------------------
-        // Stated every cycle from minute 1; the horn statement, octave
-        // doubling and descant each FADE in as their minute opens.
-        if (bar % 4 === 0 && s16 === 0 && !breath) {
-          const seedGain = MusicDirector.lerpTab([0.044, 0.05, 0.03, 0.028, 0.024], pos) + (pos < 2 ? inten * 0.012 : 0);
-          this.softTheme(t, 2, seedGain);
-          if (l2 > 0.03) this.playTheme(t, 1, (0.1 + inten * 0.05 + 0.02 * l4) * l2);
-          if (l3 > 0.03) this.playTheme(t, 2, (0.045 + inten * 0.022) * l3);
-          if (l4 > 0.03) {
-            this.softTheme(t, 4, 0.02 * l4);
-            // High descant — sustained A5 riding above the full statement.
-            voice({ type: 'triangle', freq: 880, dur: 4.6, gain: (0.02 + inten * 0.008) * l4, attack: 1.4, bus: this.bus, when: t, pan: 0.25 });
-            voice({ type: 'triangle', freq: 880 * 1.005, dur: 4.6, gain: 0.016 * l4, attack: 1.6, bus: this.bus, when: t, pan: -0.25 });
+        // --- The theme: rotated strains and voices, stated in the CHORUS --
+        // A-strain and B-strain alternate by phrase; the voice rotates
+        // horn → strings → horn-with-octave. Verses get only a whispered
+        // fragment every other phrase. The motif never goes stale.
+        if (bar8 === 4 && s16 === 0 && !breath) {
+          const strain = phraseIdx % 2 === 0 ? MusicDirector.THEME : MusicDirector.THEME_B;
+          if (l2 <= 0.05) {
+            // Minutes 1–2: the soft seed carries the statement (Time model).
+            const seedGain = MusicDirector.lerpTab([0.046, 0.052, 0.036, 0.03, 0.026], pos) + (pos < 2 ? inten * 0.012 : 0);
+            this.softTheme(t, 2, seedGain, strain);
+          } else {
+            const g = (0.095 + inten * 0.05 + 0.02 * l4) * Math.min(1, l2 + 0.2);
+            const vsel = phraseIdx % 3;
+            if (vsel === 0) {
+              this.playStrain(t, strain, 1, g, 'horn');
+            } else if (vsel === 1) {
+              this.playStrain(t, strain, 1, g * 0.85, 'strings');
+            } else {
+              this.playStrain(t, strain, 1, g, 'horn');
+              if (l3 > 0.05) this.playStrain(t, strain, 2, g * 0.4 * l3, 'strings');
+            }
+            this.softTheme(t, 2, 0.026, strain);
+            if (l3 > 0.05) {
+              // The soar: sustained descant riding above the statement.
+              voice({ type: 'triangle', freq: 880, dur: 4.6, gain: (0.018 + inten * 0.008) * l3, attack: 1.4, bus: this.bus, when: t, pan: 0.25 });
+              voice({ type: 'triangle', freq: 880 * 1.005, dur: 4.6, gain: 0.015 * l3, attack: 1.6, bus: this.bus, when: t, pan: -0.25 });
+            }
           }
         }
-        // --- The answer: cello line in dialogue (bars 3–4 of each cycle) --
-        if (l1 > 0.03 && bar % 4 === 2 && s16 === 0 && !breath) {
+        // Verse whisper: the opening gesture only, alternating octave.
+        if (bar8 === 1 && s16 === 0 && phraseIdx % 2 === 1 && !breath) {
+          this.softTheme(t, phraseIdx % 4 === 1 ? 2 : 1, 0.028 + 0.012 * l1, MusicDirector.THEME_FRAG);
+        }
+        // --- The answer: cello line in the chorus back half ---------------
+        if (l1 > 0.03 && bar8 === 6 && s16 === 0 && !breath) {
           this.playAnswer(t, (0.05 + inten * 0.02 + pos * 0.006) * l1, pos >= 3);
         }
 
-        // Cadential braams: sparse punctuation inside the arrangement — the
-        // minute boundaries themselves stay clean (only min 5 gets the hit).
+        // Cadential braam: once per TWO phrases (the suckout slams carry the
+        // punctuation now), plus the 4:50 climax crest.
         if (step > 0 && s16 === 0 && !breath) {
-          if (m <= 1 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
-          else if (m === 2 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.38 + inten * 0.18, 0);
-          else if (m === 3 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.18, 0);
-          else if (m >= 4 && (step % 64 === 0 || (this.allowClimax && this.basaltElapsed >= 290 && this.basaltElapsed < 290.6))) {
+          if (step % 256 === 0) this.braamAt(t, 73.4, 1.6, 0.3 + inten * 0.15 + 0.1 * l2, 0);
+          else if (m >= 4 && this.allowClimax && this.basaltElapsed >= 290 && this.basaltElapsed < 290.6) {
             this.braamAt(t, 73.4, 1.75, 0.44 + inten * 0.18, 0);
           }
         }
