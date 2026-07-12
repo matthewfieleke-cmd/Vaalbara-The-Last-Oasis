@@ -1776,7 +1776,7 @@ export class BotBrain {
     }
 
     if (me.aqua < 2) return null;
-    if (!flush && this.rng() < 0.06) return null;
+    if (!flush && this.rng() < 0.03) return null;
     if (armySize(st, this.seat) >= currentArmyCap(st)) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
@@ -1789,7 +1789,7 @@ export class BotBrain {
     const foeAntiAir = foes.some((u) => !!speciesDef(u.species).stats?.canHitAir);
     const scored = affordable.map((c) => {
       const d = cardDef(c, st.phase);
-      let s = d.cost + this.rng() * 2.2;
+      let s = d.cost + this.rng() * 1.8;
       if (d.kind === 'unit') {
         if (foeFlyers > 0 && d.stats?.canHitAir) s += 2;
         if (!foeAntiAir && d.stats?.flying) s += 1.5;
@@ -1834,7 +1834,7 @@ export class BotBrain {
         lane = c0 <= c1 ? 0 : 1;
       }
       // Commit to a crumbling wing (finishing blow).
-      if (wings.length > 0 && this.rng() < 0.5) {
+      if (wings.length > 0 && this.rng() < 0.65) {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
         if (weakest.hp < weakest.maxHp * 0.55) lane = weakest.wing;
       }
@@ -1849,21 +1849,21 @@ export class BotBrain {
           danger = w.wing;
         }
       }
-      if (danger !== null && dangerN >= 2 && this.rng() < 0.7) lane = danger;
+      if (danger !== null && dangerN >= 2 && this.rng() < 0.85) lane = danger;
       // Respect lane soft-cap so the bot doesn't invent mid-lane soup.
       const flying = !!def.stats?.flying;
       const chosen = preferDeployLane(st, this.seat, lane, flying, def.stats?.count ?? 1);
       if (chosen === null) return null;
       lane = chosen;
       const pad = pads[lane];
-      this.nextActionTick = st.tick + (flush ? 3 : 4);
+      this.nextActionTick = st.tick + (flush ? 2 : 3);
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };
     }
     const x = Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5));
     const y = this.seat === 0
       ? WORLD_H - DEPLOY_DEPTH + 0.4 + this.rng() * (DEPLOY_DEPTH - 0.9)
       : 0.5 + this.rng() * (DEPLOY_DEPTH - 0.9);
-    this.nextActionTick = st.tick + (flush ? 3 : 4);
+    this.nextActionTick = st.tick + (flush ? 2 : 3);
     return { type: 'deploy', card: pick, x, y, dirX: (this.rng() - 0.5) * 0.8, dirY };
   }
 }
