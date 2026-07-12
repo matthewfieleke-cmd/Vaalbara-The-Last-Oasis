@@ -14,10 +14,11 @@
  *             chugs, cycle crashes, theme in octaves
  *      Min 5: + TSO crest II — gallop guitars + octave wall + ringing chord,
  *             driving 8th battery, choir, high descant, 2-bar crashes
- *    Minute boundaries are Babylon arrivals, ALL bar-quantized: the breath
- *    bar (thin texture, snare fill, cymbal swell) starts on the downbeat
- *    that contains the wall-clock flip, and the NEXT downbeat lands layers,
- *    volume snap and braam together. Layers only add — never thin the pulse.
+ *    Minute boundaries are 8-second SLIDES on a continuous ladder position:
+ *    every new voice fades in, volume/intensity interpolate, and a soft
+ *    cymbal swell hints at the boundary. The braam-and-crash arrival is
+ *    reserved for ONE moment — the start of minute 5 (breath bar → hit).
+ *    Layers only add — never thin the pulse.
  *    Early double-raze skips the last crest into the transition riser → Oasis.
  *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
  *    A bus compressor glues the stacked layers so density reads as power.
@@ -699,8 +700,6 @@ class MusicDirector {
   private beePresence = false;
   /** Species currently alive — drives soft in-key presence beds. */
   private presenceSpecies = new Set<SpeciesId>();
-  /** 0..4 = Phase 1 minute index from the wall clock (flips mid-bar). */
-  private actTier = 0;
   /** Music-bus volume multiplier (ensemble weight across acts). */
   private volumeMul = 1.06;
   private volumeTarget = 1.06;
@@ -709,15 +708,17 @@ class MusicDirector {
   /** Skip the 4:50 climax crest when Phase 1 ended early by double-raze. */
   private allowClimax = true;
   /**
-   * Bar-quantized minute tier — the one the ARRANGEMENT plays. The wall-clock
-   * minute (actTier) flips mid-bar; layers, volume and the arrival braam all
-   * wait for the next bar downbeat so every flip lands on the musical grid.
+   * Bar-quantized minute the arrangement acknowledges (presence beds, the
+   * minute-5 arrival latch). Layer GAINS slide continuously via ladderPos —
+   * minute boundaries are 8-second crescendos, not cuts.
    */
   private musicTier = 0;
-  /** True from the breath-bar downbeat until the arrival downbeat fires. */
+  /** True from the breath-bar downbeat until the minute-5 arrival fires. */
   private arrivalArmed = false;
-  /** Step index of the arrival downbeat (breath bar = the 16 steps before). */
+  /** Step index of the minute-5 arrival downbeat. */
   private breathUntilStep = -1;
+  /** Minute whose pre-boundary soft swell was already scheduled. */
+  private swellMinute = -1;
 
   /** AudioContext currentTime when a context exists (even if muted). */
   audioNow(): number | null {
@@ -862,17 +863,16 @@ class MusicDirector {
       this.riser(2.4);
       this.intensityTarget = Math.max(this.intensity * 0.85, 0.45);
       this.volumeTarget = 1; // settle before Oasis — no lingering climax loudness
-      this.actTier = 0;
       this.musicTier = 0;
       this.arrivalArmed = false;
       this.breathUntilStep = -1;
+      this.swellMinute = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (mode === 'oasis' && prev === 'transition') {
       this.braam(220, 1.4, 0.5);
       this.intensityTarget = 0.4;
       this.volumeTarget = 1;
-      this.actTier = 0;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (mode === 'basalt') {
@@ -882,10 +882,10 @@ class MusicDirector {
       this.intensityTarget = 0.5;
       this.volumeTarget = 1.06;
       this.volumeMul = 1.06;
-      this.actTier = 0;
       this.musicTier = 0;
       this.arrivalArmed = false;
       this.breathUntilStep = -1;
+      this.swellMinute = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.42);
     }
@@ -907,34 +907,30 @@ class MusicDirector {
     this.presenceSpecies = new Set(opts.speciesAlive ?? []);
     if (opts.phase === 'basalt') {
       this.basaltElapsed = opts.basaltElapsedSec;
-      // Wall-clock minute — the ARRANGEMENT follows musicTier, which playStep
-      // advances only on a bar downbeat (breath → arrival), so intensity,
-      // volume, layers and the braam all land together on the grid.
-      this.actTier = Math.min(4, Math.floor(opts.basaltElapsedSec / 60));
-      const mt = this.musicTier;
+      // Continuous ladder position: every minute is an 8-second SLIDE up
+      // (intensity, volume, bus rides all interpolate — no terraced steps).
+      const pos = MusicDirector.ladderPos(opts.basaltElapsedSec);
       const army = Math.min(1, opts.unitCount / 18);
-      this.intensityTarget = Math.min(1, this.actFloor(mt) + army * 0.14);
-      this.volumeTarget = this.actVolume(mt);
-      const sfxByTier = [0.9, 0.94, 1.0, 1.06, 1.14];
-      const revByTier = [0.42, 0.45, 0.48, 0.54, 0.6];
-      this.rideSfxBus(sfxByTier[mt] ?? 1.0);
-      this.rideReverb(revByTier[mt] ?? 0.45);
+      this.intensityTarget = Math.min(1, MusicDirector.lerpTab([0.5, 0.55, 0.72, 0.84, 0.94], pos) + army * 0.14);
+      this.volumeTarget = this.actVolume(pos);
+      this.rideSfxBus(MusicDirector.lerpTab([0.9, 0.94, 1.0, 1.06, 1.14], pos));
+      this.rideReverb(MusicDirector.lerpTab([0.42, 0.45, 0.48, 0.54, 0.6], pos));
     } else if (opts.phase === 'oasis') {
       const army = Math.min(1, opts.unitCount / 18);
       this.intensityTarget = Math.min(1, 0.38 + army * 0.45);
       this.volumeTarget = 1;
-      this.actTier = 0;
       this.musicTier = 0;
       this.arrivalArmed = false;
       this.breathUntilStep = -1;
+      this.swellMinute = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     } else if (opts.phase === 'transition') {
       this.volumeTarget = 1;
-      this.actTier = 0;
       this.musicTier = 0;
       this.arrivalArmed = false;
       this.breathUntilStep = -1;
+      this.swellMinute = -1;
       this.rideSfxBus(0.9);
       this.rideReverb(0.45);
     }
@@ -966,15 +962,27 @@ class MusicDirector {
     return origin + Math.max(0, steps) * STEP;
   }
 
-  /** Hard intensity floors per (bar-quantized) minute tier. */
-  private actFloor(tier: number): number {
-    return [0.5, 0.55, 0.72, 0.84, 0.94][tier] ?? 0.5;
+  /**
+   * Continuous Phase 1 ladder position, 0..4. Sits at m-1 when minute m
+   * starts and slides up to m across the first 8 seconds — the crescendo.
+   */
+  private static ladderPos(elapsedSec: number): number {
+    const m = Math.min(4, Math.floor(elapsedSec / 60));
+    if (m === 0) return 0;
+    return Math.min(4, (m - 1) + Math.min(1, (elapsedSec % 60) / 8));
   }
 
-  /** Hard volume steps per minute tier — snapped at each arrival downbeat.
-   *  Minutes 4–5 climb harder (the TSO crest). */
-  private actVolume(tier: number): number {
-    const v = [1.06, 1.14, 1.22, 1.32, 1.42][tier] ?? 1.06;
+  /** Linear interpolation through a per-minute table at a ladder position. */
+  private static lerpTab(tbl: number[], pos: number): number {
+    const i = Math.max(0, Math.min(tbl.length - 1, Math.floor(pos)));
+    const j = Math.min(tbl.length - 1, i + 1);
+    const f = Math.min(1, Math.max(0, pos - i));
+    return tbl[i] + (tbl[j] - tbl[i]) * f;
+  }
+
+  /** Volume curve along the ladder — minutes 4–5 climb harder (TSO crest). */
+  private actVolume(pos: number): number {
+    const v = MusicDirector.lerpTab([1.06, 1.14, 1.22, 1.32, 1.42], pos);
     if (this.basaltElapsed >= 290 && this.allowClimax) return Math.min(1.45, v + 0.03);
     return v;
   }
@@ -1225,18 +1233,22 @@ class MusicDirector {
    * minute 1 (the "Time" bed: what turns a loop into a piece). Detuned saw
    * pairs per chord tone; extra octaves join as the minutes climb.
    */
-  private legatoStrings(t: number, freqs: number[], dur: number, gain: number, filterHz: number, tier: number): void {
+  private legatoStrings(t: number, freqs: number[], dur: number, gain: number, filterHz: number, pos: number): void {
     if (!this.bus) return;
+    // Octave voices FADE in along the continuous ladder — no terraced entries.
+    const l2 = Math.max(0, Math.min(1, pos - 1));
+    const l3 = Math.max(0, Math.min(1, pos - 2));
+    const l4 = Math.max(0, Math.min(1, pos - 3));
     freqs.forEach((f, i) => {
       const pan = (i % 2 === 0 ? -1 : 1) * (0.15 + i * 0.09);
       voice({ type: 'sawtooth', freq: f, dur, gain, filterFreq: filterHz, attack: 0.5, bus: this.bus, when: t, pan });
       voice({ type: 'sawtooth', freq: f * 1.006, dur, gain: gain * 0.7, filterFreq: filterHz * 0.85, attack: 0.6, bus: this.bus, when: t, pan: -pan * 0.7 });
-      if (tier >= 2) {
-        voice({ type: 'sawtooth', freq: f * 2.004, dur, gain: gain * 0.3, filterFreq: filterHz * 1.4, attack: 0.7, bus: this.bus, when: t, pan: pan * 0.5 });
+      if (l2 > 0.03) {
+        voice({ type: 'sawtooth', freq: f * 2.004, dur, gain: gain * 0.3 * l2, filterFreq: filterHz * 1.4, attack: 0.7, bus: this.bus, when: t, pan: pan * 0.5 });
       }
     });
-    if (tier >= 3) voice({ type: 'sine', freq: freqs[0] * 0.5, dur, gain: gain * 0.8, attack: 0.55, bus: this.bus, when: t });
-    if (tier >= 4) voice({ type: 'triangle', freq: freqs[freqs.length - 1] * 2, dur, gain: gain * 0.5, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+    if (l3 > 0.03) voice({ type: 'sine', freq: freqs[0] * 0.5, dur, gain: gain * 0.8 * l3, attack: 0.55, bus: this.bus, when: t });
+    if (l4 > 0.03) voice({ type: 'triangle', freq: freqs[freqs.length - 1] * 2, dur, gain: gain * 0.5 * l4, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
   }
 
   /** The theme as a soft, clean seed — the "piano" of minutes 1–2, kept as
@@ -1484,184 +1496,170 @@ class MusicDirector {
 
       case 'basalt': {
         // Five-minute ADDITIVE ladder over ONE chord loop (Dm→Bb→Gm→A).
-        // The theme is the protagonist from minute 1; each minute keeps every
-        // prior layer and adds one voice. Minute flips are Babylon arrivals:
-        // breath bar (thin texture + battery fill + cymbal swell) → unison hit.
+        // Minute boundaries are 8-second SLIDES: every new voice fades in
+        // along the continuous ladder position — no cuts, no snaps. A soft
+        // cymbal swell hints at each boundary; the braam-and-crash arrival
+        // is reserved for ONE moment, the start of minute 5 (the final act).
         const cell = MusicDirector.OSTINATO[bar % 4];
 
-        // --- Minute-boundary craft, ALL on the bar grid ------------------
-        // At each bar downbeat: if the wall-clock minute flips inside this
-        // bar, this bar is the BREATH (thin texture + fill + swell) and the
-        // next downbeat is the ARRIVAL — layers, volume snap and braam land
-        // together, in time. If a flip was missed (tab hidden), catch up on
-        // the next downbeat without a breath.
+        // Continuous ladder position at the scheduled time t.
+        const ctxNow = core.ctx ? core.ctx.currentTime : t;
+        const elapsedAtT = this.basaltElapsed + Math.max(0, t - ctxNow);
+        const m = Math.min(4, Math.floor(elapsedAtT / 60));
+        const pos = MusicDirector.ladderPos(elapsedAtT);
+        const l1 = Math.max(0, Math.min(1, pos));
+        const l2 = Math.max(0, Math.min(1, pos - 1));
+        const l3 = Math.max(0, Math.min(1, pos - 2));
+        const l4 = Math.max(0, Math.min(1, pos - 3));
+
+        // --- Minute-boundary craft --------------------------------------
         if (s16 === 0) {
-          const ctxNow = core.ctx ? core.ctx.currentTime : t;
-          const elapsedAtT = this.basaltElapsed + Math.max(0, t - ctxNow);
           const secToFlip = 60 - (elapsedAtT % 60);
-          if (this.arrivalArmed && step >= this.breathUntilStep) {
+          if (m < 4) {
+            this.musicTier = m;
+            // Minutes 2–4 approach: only a soft swell — the slide speaks.
+            if (m < 3 && elapsedAtT > 5 && secToFlip <= 2.4 && this.swellMinute !== m) {
+              this.swellMinute = m;
+              this.cymbalSwell(t, 2.3, 0.028 + m * 0.007);
+            }
+            // Minute 5 approach: arm the ONE Babylon arrival (breath bar).
+            if (m === 3 && !this.arrivalArmed && secToFlip <= 2.4) {
+              this.arrivalArmed = true;
+              this.breathUntilStep = step + 16;
+              this.cymbalSwell(t, 2.3, 0.09);
+            }
+          } else if (this.musicTier < 4) {
+            // The one true arrival (also the catch-up path after a hidden tab).
             this.arrivalArmed = false;
-            this.musicTier = Math.min(4, this.musicTier + 1);
-            this.volumeMul = this.actVolume(this.musicTier);
-            if (this.bus) this.bus.gain.setTargetAtTime(Math.min(1.45, this.volumeMul), t, 0.04);
-            this.arrivalHit(t, this.musicTier, inten);
-            if (this.musicTier >= 3) this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
-          } else if (!this.arrivalArmed && this.musicTier < this.actTier) {
-            this.musicTier = this.actTier;
-            this.volumeMul = this.actVolume(this.musicTier);
-            if (this.bus) this.bus.gain.setTargetAtTime(Math.min(1.45, this.volumeMul), t, 0.04);
-            this.arrivalHit(t, this.musicTier, inten);
-          } else if (!this.arrivalArmed && this.musicTier < 4 && this.musicTier === this.actTier
-            && elapsedAtT > 5 && secToFlip <= 2.4) {
-            this.arrivalArmed = true;
-            this.breathUntilStep = step + 16;
-            this.cymbalSwell(t, 2.3, 0.05 + this.musicTier * 0.014);
+            this.musicTier = 4;
+            this.arrivalHit(t, 4, inten);
+            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
           }
         }
-        const tier = this.musicTier; // 0..4 — bar-quantized minute
         const breath = this.arrivalArmed && step < this.breathUntilStep;
-        const filterOpen = tier <= 1 ? 1400 : tier === 2 ? 1900 : tier === 3 ? 2100 : 2400;
+        const filterOpen = MusicDirector.lerpTab([1400, 1400, 1900, 2100, 2400], pos);
 
-        // --- Ostinato engine (suspense — never stops, thins only to breathe)
-        // 8ths in min1–2, full 16ths from min3; octaves stack with the tiers.
-        const gate = breath ? (s16 % 4 === 0 ? 1 : 0) : tier >= 2 ? 1 : (s16 % 2 === 0 ? 1 : 0);
+        // --- Ostinato engine (suspense — never stops) --------------------
+        // 8ths at first; the offbeat 16ths FADE in across minute 3's build.
+        const offbeat16 = s16 % 2 === 1;
+        const gate = breath ? s16 % 4 === 0 : (!offbeat16 || l2 > 0.03);
         if (gate) {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
-          const strVel = accent * (0.62 + inten * 0.4) * (tier <= 1 ? 1 : tier === 2 ? 1.12 : tier === 3 ? 1.2 : 1.28);
-          this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
-          if (tier >= 2) {
-            this.stringNote(t, cell[s16] * 2, strVel * (tier >= 3 ? 0.7 : 0.55), 0.12, filterOpen * 1.1);
-          }
-          if (tier >= 3 && s16 % 2 === 0) {
-            this.stringNote(t, cell[s16] * 2, strVel * 0.35, 0.11, 2600);
-          }
-          if (tier >= 4 && s16 % 4 === 0) {
-            this.stringNote(t, cell[s16] * 4, strVel * 0.28, 0.1, 3000);
+          let strVel = accent * (0.62 + inten * 0.4) * MusicDirector.lerpTab([1, 1, 1.12, 1.2, 1.28], pos);
+          if (offbeat16 && !breath) strVel *= l2;
+          if (strVel > 0.02) {
+            this.stringNote(t, cell[s16], strVel, 0.14, filterOpen);
+            if (l2 > 0.03) this.stringNote(t, cell[s16] * 2, strVel * (0.55 + 0.15 * l3) * l2, 0.12, filterOpen * 1.1);
+            if (l3 > 0.03 && s16 % 2 === 0) this.stringNote(t, cell[s16] * 2, strVel * 0.35 * l3, 0.11, 2600);
+            if (l4 > 0.03 && s16 % 4 === 0) this.stringNote(t, cell[s16] * 4, strVel * 0.28 * l4, 0.1, 3000);
           }
         }
 
-        // --- Floor: sub bass + cello + low brass mass -------------------
+        // --- Floor: sub bass + cello + low brass mass (brass fades in) ---
         if (s16 === 0) {
           voice({
             type: 'sawtooth', freq: MusicDirector.BASS[bar % 4], dur: 2.2,
-            gain: 0.24 + Math.min(0.06, tier * 0.012), filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
+            gain: 0.24 + 0.015 * pos, filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
           });
-          this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.08 + inten * 0.03 + tier * 0.004);
-          if (tier >= 2) {
-            this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, 0.055 + inten * 0.045);
-          }
-          if (tier >= 3) {
-            this.lowBrass(t, MusicDirector.CELLO[bar % 4] * 0.5, 2.2, 0.035 + inten * 0.03);
-          }
-          if (tier >= 4) {
-            this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, 0.04 + inten * 0.025);
-          }
+          this.cello(t, MusicDirector.CELLO[bar % 4], 2.4, 0.08 + inten * 0.03 + pos * 0.004);
+          if (l2 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, (0.055 + inten * 0.045) * l2);
+          if (l3 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4] * 0.5, 2.2, (0.035 + inten * 0.03) * l3);
+          if (l4 > 0.03) this.lowBrass(t, MusicDirector.CELLO[bar % 4], 2.2, (0.04 + inten * 0.025) * l4);
         }
 
         // --- Legato string bed: held harmony from MINUTE 1, locked to the
         // ostinato progression. Every 8th bar the A chord suspends (Asus4)
         // and resolves 4→3 — the whole ensemble cadences together.
         if (s16 === 0 && !breath) {
-          const bedGain = (0.015 + tier * 0.005 + inten * 0.008);
-          const bedHz = 750 + tier * 250;
+          const bedGain = 0.015 + pos * 0.005 + inten * 0.008;
+          const bedHz = 750 + pos * 250;
           if (bar % 8 === 7) {
-            this.legatoStrings(t, MusicDirector.A_SUS4, 1.25, bedGain, bedHz, tier);
-            this.legatoStrings(t + 1.2, MusicDirector.BED_CHORDS[3], 1.3, bedGain, bedHz, tier);
+            this.legatoStrings(t, MusicDirector.A_SUS4, 1.25, bedGain, bedHz, pos);
+            this.legatoStrings(t + 1.2, MusicDirector.BED_CHORDS[3], 1.3, bedGain, bedHz, pos);
           } else {
-            this.legatoStrings(t, MusicDirector.BED_CHORDS[bar % 4], 2.5, bedGain, bedHz, tier);
+            this.legatoStrings(t, MusicDirector.BED_CHORDS[bar % 4], 2.5, bedGain, bedHz, pos);
           }
         }
-        if (tier >= 4 && s16 === 0 && !breath) {
-          this.choirSustain(t, 2.5, 0.03 + inten * 0.018);
+        if (l4 > 0.03 && s16 === 0 && !breath) {
+          this.choirSustain(t, 2.5, (0.03 + inten * 0.018) * l4);
         }
 
         if (s16 === 4) {
-          this.shimmer(t, bar % 4 === 1 ? 466.2 : (tier >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + tier * 0.002);
+          this.shimmer(t, bar % 4 === 1 ? 466.2 : (m >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + pos * 0.002);
         }
 
-        // --- Battery: heartbeat always; fills feed the arrivals ----------
-        if (s16 === 0) this.taiko(t, true, 0.8 + inten * 0.2 + tier * 0.02);
+        // --- Battery: heartbeat always; new pulses bloom, never jump ------
+        if (s16 === 0) this.taiko(t, true, 0.8 + inten * 0.2 + pos * 0.02);
         if (s16 === 10) this.taiko(t, false, 0.85);
         if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
-        if (tier >= 2 && s16 % 4 === 2) this.taiko(t, false, 0.4);
+        if (l2 > 0.05 && s16 % 4 === 2) this.taiko(t, false, 0.4 * l2);
         // Min 5: the drumline goes full corps — a driving 8th-note pulse.
-        if (tier >= 4 && !breath && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3);
-        // Breath-bar fill: denser each minute, crescendos into the downbeat.
-        if (breath && s16 >= 8 && s16 % 2 === 0) this.taiko(t, false, 0.35 + (s16 - 8) * 0.05 + tier * 0.05);
-        if (breath && tier >= 2 && (s16 === 13 || s16 === 15)) this.taiko(t, false, 0.55 + tier * 0.04);
-        // From min 4 the roll goes to the snares — a real drum fill.
-        if (breath && tier >= 3 && s16 >= 8) this.snare(t, 0.35 + (s16 - 8) * 0.09);
+        if (l4 > 0.05 && !breath && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4);
+        // Breath-bar fill (minute 5 only): the roll into the one arrival.
+        if (breath && s16 >= 8 && s16 % 2 === 0) this.taiko(t, false, 0.5 + (s16 - 8) * 0.05);
+        if (breath && (s16 === 13 || s16 === 15)) this.taiko(t, false, 0.67);
+        if (breath && s16 >= 8) this.snare(t, 0.35 + (s16 - 8) * 0.09);
 
-        // --- TSO crest (minutes 4–5): rock kit + guitar wall + crashes ---
-        if (tier >= 3 && !breath) {
-          // Driving kick on the quarters, snare cracking the backbeats.
-          if (s16 % 4 === 0) this.rockKick(t, tier >= 4 ? 1 : 0.85);
-          if (s16 === 4 || s16 === 12) this.snare(t, tier >= 4 ? 1.1 : 0.9);
-          if (tier >= 4 && (s16 === 7 || s16 === 15)) this.snare(t, 0.35);
-          // Power-chord chugs on the 8ths, following the same chord loop.
+        // --- TSO crest (minutes 4–5): the wall BLOOMS in over the slide ---
+        if (l3 > 0.04 && !breath) {
+          if (s16 % 4 === 0) this.rockKick(t, (0.85 + 0.15 * l4) * l3);
+          if (s16 === 4 || s16 === 12) this.snare(t, (0.9 + 0.2 * l4) * l3);
+          if (l4 > 0.05 && (s16 === 7 || s16 === 15)) this.snare(t, 0.35 * l4);
           if (s16 % 2 === 0) {
             const root = MusicDirector.BED_CHORDS[bar % 4][0];
             const accent = s16 % 8 === 0 ? 1.3 : 1;
-            this.powerChord(t, root, 0.13, 0.042 * accent, s16 % 4 === 0 ? -0.15 : 0.15);
-            if (tier >= 4) this.powerChord(t, root * 2, 0.11, 0.02 * accent, 0.3);
+            this.powerChord(t, root, 0.13, 0.042 * accent * l3, s16 % 4 === 0 ? -0.15 : 0.15);
+            if (l4 > 0.04) this.powerChord(t, root * 2, 0.11, 0.02 * accent * l4, 0.3);
           }
-          // Min 5 gallop pickup + a sustained chord ringing over each bar.
-          if (tier >= 4 && s16 % 4 === 3) {
-            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 0.1, 0.036, -0.25);
+          if (l4 > 0.04 && s16 % 4 === 3) {
+            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 0.1, 0.036 * l4, -0.25);
           }
-          if (tier >= 4 && s16 === 0) {
-            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.1, 0.05, 0);
+          if (l4 > 0.04 && s16 === 0) {
+            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.1, 0.05 * l4, 0);
           }
-          // Loud crashes: every cycle in min 4, every 2 bars in min 5.
-          if (s16 === 0 && (tier >= 4 ? bar % 2 === 0 : bar % 4 === 0)) {
-            this.crash(t, tier >= 4 ? 0.095 : 0.07);
+          // Crashes: every cycle in min 4, every 2 bars in min 5.
+          if (s16 === 0 && (m >= 4 ? bar % 2 === 0 : bar % 4 === 0)) {
+            this.crash(t, (m >= 4 ? 0.095 : 0.07) * l3);
           }
         }
 
-        // Hats from min2 only; they drop out to breathe with everyone else.
-        if (tier >= 1 && !breath && s16 % 2 === 1) this.hat(t, s16 % 4 === 3 ? 1 : 0.55);
+        // Hats fade in across minute 2's build.
+        if (l1 > 0.03 && !breath && s16 % 2 === 1) this.hat(t, (s16 % 4 === 3 ? 1 : 0.55) * l1);
 
         // --- The theme is the PROTAGONIST ("Time" seed) ------------------
-        // Stated every cycle from minute 1: soft seed → horns → octaves →
-        // full statement with descant. Payoff through recognition.
+        // Stated every cycle from minute 1; the horn statement, octave
+        // doubling and descant each FADE in as their minute opens.
         if (bar % 4 === 0 && s16 === 0 && !breath) {
-          if (tier === 0) this.softTheme(t, 2, 0.042 + inten * 0.012);
-          if (tier === 1) this.softTheme(t, 2, 0.048 + inten * 0.014);
-          if (tier === 2) {
-            this.playTheme(t, 1, 0.1 + inten * 0.05);
-            this.softTheme(t, 2, 0.03);
-          }
-          if (tier === 3) {
-            this.playTheme(t, 1, 0.11 + inten * 0.05);
-            this.playTheme(t, 2, 0.045 + inten * 0.02);
-            this.softTheme(t, 2, 0.028);
-          }
-          if (tier >= 4) {
-            this.playTheme(t, 1, 0.12 + inten * 0.055);
-            this.playTheme(t, 2, 0.05 + inten * 0.025);
-            this.softTheme(t, 4, 0.02);
+          const seedGain = MusicDirector.lerpTab([0.044, 0.05, 0.03, 0.028, 0.024], pos) + (pos < 2 ? inten * 0.012 : 0);
+          this.softTheme(t, 2, seedGain);
+          if (l2 > 0.03) this.playTheme(t, 1, (0.1 + inten * 0.05 + 0.02 * l4) * l2);
+          if (l3 > 0.03) this.playTheme(t, 2, (0.045 + inten * 0.022) * l3);
+          if (l4 > 0.03) {
+            this.softTheme(t, 4, 0.02 * l4);
             // High descant — sustained A5 riding above the full statement.
-            voice({ type: 'triangle', freq: 880, dur: 4.6, gain: 0.02 + inten * 0.008, attack: 1.4, bus: this.bus, when: t, pan: 0.25 });
-            voice({ type: 'triangle', freq: 880 * 1.005, dur: 4.6, gain: 0.016, attack: 1.6, bus: this.bus, when: t, pan: -0.25 });
+            voice({ type: 'triangle', freq: 880, dur: 4.6, gain: (0.02 + inten * 0.008) * l4, attack: 1.4, bus: this.bus, when: t, pan: 0.25 });
+            voice({ type: 'triangle', freq: 880 * 1.005, dur: 4.6, gain: 0.016 * l4, attack: 1.6, bus: this.bus, when: t, pan: -0.25 });
           }
         }
         // --- The answer: cello line in dialogue (bars 3–4 of each cycle) --
-        if (tier >= 1 && bar % 4 === 2 && s16 === 0 && !breath) {
-          this.playAnswer(t, 0.05 + inten * 0.02 + tier * 0.006, tier >= 3);
+        if (l1 > 0.03 && bar % 4 === 2 && s16 === 0 && !breath) {
+          this.playAnswer(t, (0.05 + inten * 0.02 + pos * 0.006) * l1, pos >= 3);
         }
 
+        // Cadential braams: sparse punctuation inside the arrangement — the
+        // minute boundaries themselves stay clean (only min 5 gets the hit).
         if (step > 0 && s16 === 0 && !breath) {
-          if (tier <= 1 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
-          else if (tier === 2 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.38 + inten * 0.18, 0);
-          else if (tier === 3 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.18, 0);
-          else if (tier >= 4 && (step % 64 === 0 || (this.allowClimax && this.basaltElapsed >= 290 && this.basaltElapsed < 290.6))) {
+          if (m <= 1 && step % 128 === 0) this.braamAt(t, 73.4, 1.5, 0.28 + inten * 0.14, 0);
+          else if (m === 2 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.38 + inten * 0.18, 0);
+          else if (m === 3 && step % 64 === 0) this.braamAt(t, 73.4, 1.7, 0.4 + inten * 0.18, 0);
+          else if (m >= 4 && (step % 64 === 0 || (this.allowClimax && this.basaltElapsed >= 290 && this.basaltElapsed < 290.6))) {
             this.braamAt(t, 73.4, 1.75, 0.44 + inten * 0.18, 0);
           }
         }
 
         if (step % 64 === 48) {
-          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.026 + inten * 0.01 + tier * 0.002, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
-          voice({ type: 'triangle', freq: tier >= 4 ? 698.5 : 622.3, dur: 2.2, gain: 0.022 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
+          voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.026 + inten * 0.01 + pos * 0.002, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
+          voice({ type: 'triangle', freq: m >= 4 ? 698.5 : 622.3, dur: 2.2, gain: 0.022 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
         }
         break;
       }
