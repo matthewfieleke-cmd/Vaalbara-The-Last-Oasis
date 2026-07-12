@@ -1301,13 +1301,14 @@ class MusicDirector {
     src.stop(t + dur + 0.2);
   }
 
-  /** Unison downbeat hit when a new minute lands — the company front. */
-  private arrivalHit(t: number, tier: number, inten: number): void {
+  /** The minute-5 company-front hit. Fires on a bar downbeat; the braam is
+   *  PITCHED to that bar's chord root so it lands inside the harmony. */
+  private arrivalHit(t: number, freq: number, inten: number): void {
     if (!this.bus) return;
-    this.braamAt(t, 73.4, 1.6 + tier * 0.06, 0.34 + tier * 0.05 + inten * 0.12, 0);
+    this.braamAt(t, freq, 1.85, 0.54 + inten * 0.12, 0);
     this.taiko(t, true, 1.15);
     this.taiko(t + MUSIC_16TH_SEC, false, 0.7);
-    this.crash(t, 0.1 + tier * 0.012);
+    this.crash(t, 0.148);
   }
 
   /** Shared soft-clip curve — real distortion for the guitar stack. */
@@ -1515,7 +1516,14 @@ class MusicDirector {
         // --- Minute-boundary craft --------------------------------------
         if (s16 === 0) {
           const secToFlip = 60 - (elapsedAtT % 60);
-          if (m < 4) {
+          if (this.arrivalArmed && step >= this.breathUntilStep) {
+            // The one true arrival — always the downbeat the breath built
+            // into, braam pitched to this bar's chord root.
+            this.arrivalArmed = false;
+            this.musicTier = 4;
+            this.arrivalHit(t, MusicDirector.CELLO[bar % 4], inten);
+            this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
+          } else if (m < 4 && this.musicTier < 4) {
             this.musicTier = m;
             // Minutes 2–4 approach: only a soft swell — the slide speaks.
             if (m < 3 && elapsedAtT > 5 && secToFlip <= 2.4 && this.swellMinute !== m) {
@@ -1528,11 +1536,12 @@ class MusicDirector {
               this.breathUntilStep = step + 16;
               this.cymbalSwell(t, 2.3, 0.09);
             }
-          } else if (this.musicTier < 4) {
-            // The one true arrival (also the catch-up path after a hidden tab).
+          } else if (m >= 4 && this.musicTier < 4) {
+            // Missed the breath window (hidden tab) — land the arrival on
+            // this downbeat anyway, still inside the harmony.
             this.arrivalArmed = false;
             this.musicTier = 4;
-            this.arrivalHit(t, 4, inten);
+            this.arrivalHit(t, MusicDirector.CELLO[bar % 4], inten);
             this.powerChord(t, MusicDirector.BED_CHORDS[bar % 4][0], 1.2, 0.085);
           }
         }
