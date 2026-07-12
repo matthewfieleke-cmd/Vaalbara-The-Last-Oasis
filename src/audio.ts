@@ -22,8 +22,12 @@
  *    FORM (Believer/Higher): every 8-bar phrase = lean VERSE half + stacked
  *    CHORUS half, with a suckout-and-slam on chorus downbeats from minute 3
  *    and chained lifts (swell + triplet taiko ramp) into every chorus.
- *    The theme rotates two strains and three voices, chorus-half only, with
- *    whispered verse fragments — the motif never repeats the same way twice.
+ *    The theme rotates three voices, chorus-half only, with whispered verse
+ *    fragments; the B-strain response guests one phrase in eight.
+ *    THE DRUMMER: a full rock kit bleeds in from ~3:30 and owns minute 5 —
+ *    relentless 16th tom groove, driving kick, verse backbeats, two-bar
+ *    turnaround fills into crashes. Only the suckout and the arrival
+ *    breath cut him off.
  *    Early double-raze skips the last crest into the transition riser → Oasis.
  *    Cinematic intro: pre-corps intensity-gated bed (not the battle ladder).
  *    A bus compressor glues the stacked layers so density reads as power.
@@ -1408,6 +1412,15 @@ class MusicDirector {
     noise({ dur: 0.05, gain: 0.1 * vel, filterFreq: 2600, filterEnd: 300, bus: this.bus, when: t });
   }
 
+  /** Rock tom — pitched between the taiko floor and the snare. The voice of
+   *  the minute-5 drummer's relentless 16th groove and turnaround fills. */
+  private tom(t: number, freq: number, vel = 1): void {
+    if (!this.bus) return;
+    voice({ type: 'sine', freq, freqEnd: freq * 0.55, dur: 0.22, gain: 0.3 * vel, bus: this.bus, when: t });
+    voice({ type: 'triangle', freq: freq * 1.5, freqEnd: freq * 0.7, dur: 0.1, gain: 0.08 * vel, bus: this.bus, when: t });
+    noise({ dur: 0.03, gain: 0.05 * vel, filterFreq: 1800, filterEnd: 400, bus: this.bus, when: t });
+  }
+
   /** Rock snare — backbeats and the roll into each arrival. */
   private snare(t: number, vel = 1): void {
     if (!this.bus) return;
@@ -1555,6 +1568,10 @@ class MusicDirector {
         const l2 = Math.max(0, Math.min(1, pos - 1));
         const l3 = Math.max(0, Math.min(1, pos - 2));
         const l4 = Math.max(0, Math.min(1, pos - 3));
+        // The DRUMMER: a full rock kit that bleeds in from ~3:30 and owns
+        // minute 5 — relentless drive, verse and chorus alike. Only the
+        // suckout and the arrival breath ever cut him off.
+        const drummer = Math.min(1, Math.max(0, (elapsedAtT - 210) / 38));
 
         // --- Minute-boundary craft --------------------------------------
         if (s16 === 0) {
@@ -1706,6 +1723,24 @@ class MusicDirector {
         if (breath && (s16 === 13 || s16 === 15)) this.taiko(t, false, 0.67);
         if (breath && s16 >= 8) this.snare(t, 0.35 + (s16 - 8) * 0.09);
 
+        // --- The DRUMMER (bleeds in ~3:30, owns minute 5) -----------------
+        // Relentless 16th tom groove + driving 8th kick + backbeats even in
+        // the verses + two-bar turnaround fills crashing onto the downbeat.
+        if (drummer > 0.03 && !breath && !inSuck) {
+          const fillBar = bar % 2 === 1;
+          if (fillBar && s16 >= 12) {
+            // Turnaround: snare-and-tom run up the last beat.
+            this.snare(t, (0.4 + (s16 - 12) * 0.16) * drummer);
+            this.tom(t, 150 - (s16 - 12) * 18, (0.6 + (s16 - 12) * 0.1) * drummer);
+          } else {
+            const acc = s16 % 4 === 0 ? 1 : s16 % 2 === 0 ? 0.7 : 0.42;
+            this.tom(t, s16 % 8 < 4 ? 110 : 88, acc * 0.72 * drummer);
+          }
+          if (s16 % 2 === 0 && s16 % 4 !== 0) this.rockKick(t, 0.5 * drummer);
+          if (!chorusHalf && (s16 === 4 || (s16 === 12 && !fillBar))) this.snare(t, 0.75 * drummer);
+          if (bar % 2 === 0 && s16 === 0) this.crash(t, 0.065 * drummer);
+        }
+
         // --- TSO crest (minutes 4–5): verse CHUGS, chorus RINGS (Higher) --
         if (l3 > 0.04 && !breath && !inSuck) {
           const root = MusicDirector.BED_CHORDS[bar % 4][0];
@@ -1738,7 +1773,9 @@ class MusicDirector {
         // horn → strings → horn-with-octave. Verses get only a whispered
         // fragment every other phrase. The motif never goes stale.
         if (bar8 === 4 && s16 === 0 && !breath) {
-          const strain = phraseIdx % 2 === 0 ? MusicDirector.THEME : MusicDirector.THEME_B;
+          // B-strain is a rare guest — one phrase in eight; the original
+          // motif owns the rest.
+          const strain = phraseIdx % 8 === 3 ? MusicDirector.THEME_B : MusicDirector.THEME;
           if (l2 <= 0.05) {
             // Minutes 1–2: the soft seed carries the statement (Time model).
             const seedGain = MusicDirector.lerpTab([0.046, 0.052, 0.036, 0.03, 0.026], pos) + (pos < 2 ? inten * 0.012 : 0);
