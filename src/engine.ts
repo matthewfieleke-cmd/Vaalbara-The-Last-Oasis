@@ -1753,7 +1753,7 @@ export class BotBrain {
     if (st.tick % 2 !== 0) return null;
     const me = st.players[this.seat];
     // Near the aqua cap every idle beat wastes income — spend with urgency.
-    const flush = me.aqua >= 8;
+    const flush = me.aqua >= 7;
 
     const lavaInHand = me.hand.includes(LAVA_RAIN_CARD);
     if (lavaInHand && me.aqua >= cardDef(LAVA_RAIN_CARD, st.phase).cost) {
@@ -1769,14 +1769,14 @@ export class BotBrain {
           }
         }
         if (best && (bestScore >= 3 || (this.rng() < 0.55 && bestScore >= 2))) {
-          this.nextActionTick = st.tick + 6;
+          this.nextActionTick = st.tick + 4;
           return { type: 'spell', card: LAVA_RAIN_CARD, x: best.x, y: best.y };
         }
       }
     }
 
+    // Relentless pressure: no idle beats — if the bot can act, it acts.
     if (me.aqua < 2) return null;
-    if (!flush && this.rng() < 0.03) return null;
     if (armySize(st, this.seat) >= currentArmyCap(st)) return null;
 
     const affordable = me.hand.filter((c) => cardDef(c, st.phase).cost <= me.aqua);
@@ -1814,7 +1814,7 @@ export class BotBrain {
         }
       }
       if (bestN < 2 && !flush) return null; // hold it for a real clump
-      this.nextActionTick = st.tick + 6;
+      this.nextActionTick = st.tick + 4;
       return { type: 'spell', card: pick, x: best.x, y: best.y };
     }
     if (def.kind === 'spell') return null;
@@ -1856,14 +1856,14 @@ export class BotBrain {
       if (chosen === null) return null;
       lane = chosen;
       const pad = pads[lane];
-      this.nextActionTick = st.tick + (flush ? 2 : 3);
+      this.nextActionTick = st.tick + 2;
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };
     }
     const x = Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5));
     const y = this.seat === 0
       ? WORLD_H - DEPLOY_DEPTH + 0.4 + this.rng() * (DEPLOY_DEPTH - 0.9)
       : 0.5 + this.rng() * (DEPLOY_DEPTH - 0.9);
-    this.nextActionTick = st.tick + (flush ? 2 : 3);
+    this.nextActionTick = st.tick + 2;
     return { type: 'deploy', card: pick, x, y, dirX: (this.rng() - 0.5) * 0.8, dirY };
   }
 }

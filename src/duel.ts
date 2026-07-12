@@ -517,18 +517,23 @@ export function pickBotIntent(m: DuelMatch): DuelIntent {
   const me = activeDuelist(m, 1);
   const foe = activeDuelist(m, 0);
   const r = m.rng();
+  // A stunned foe skips the exchange — never waste the free hit.
+  if (foe.status.stunned === true) {
+    return me.meter >= 100 ? 'special' : 'strike';
+  }
   if (me.meter >= 100) {
-    // Fire the special most of the time; hold it briefly for mind games.
-    return r < 0.78 ? 'special' : 'strike';
+    // Fire the special almost always; hold it rarely for mind games.
+    return r < 0.88 ? 'special' : 'strike';
   }
   if (foe.meter >= 100) {
     // Guard loses to specials — trade instead.
-    return r < 0.85 ? 'strike' : 'guard';
+    return r < 0.92 ? 'strike' : 'guard';
   }
-  if (me.hp < me.maxHp * 0.28 && foe.status.stunned !== true) {
-    return r < 0.45 ? 'guard' : 'strike';
+  if (me.hp < me.maxHp * 0.28) {
+    return r < 0.4 ? 'guard' : 'strike';
   }
-  return r < 0.68 ? 'strike' : 'guard';
+  // Striking builds meter faster than guarding — press the tempo.
+  return r < 0.78 ? 'strike' : 'guard';
 }
 
 /** Bot replacement pick: sends its best matchup among the survivors. */
@@ -540,7 +545,7 @@ export function pickBotReplacement(m: DuelMatch): number {
     const d = m.teams[1][i];
     if (d.ko) continue;
     // Favor warriors that out-speed the foe and can absorb its attack.
-    const score = d.hp / 100 + d.atk / 10 + (d.spd > foe.spd ? 3 : 0) + d.def / 8 + m.rng() * 2;
+    const score = d.hp / 100 + d.atk / 10 + (d.spd > foe.spd ? 3 : 0) + d.def / 8 + m.rng() * 1.2;
     if (score > bestScore) {
       bestScore = score;
       best = i;
