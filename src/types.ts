@@ -159,6 +159,9 @@ export interface UnitState {
   stall: number;
   /** Best distance-to-waypoint achieved so far (progress reference). */
   stallRef: number;
+  /** Ticks remaining of post-wedge recovery: movement ignores chase targets
+   *  and marches on the phase objective (attacks in reach still happen). */
+  unstick: number;
   buffs: UnitBuffs;
   /** True while inside reeds / thicket and not revealed. */
   stealthed: boolean;
