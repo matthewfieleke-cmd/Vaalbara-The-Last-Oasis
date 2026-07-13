@@ -1765,14 +1765,33 @@ export class TickDriver {
 export class BotBrain {
   private rng: () => number;
   private nextActionTick = 0;
+  /** Enemy unit ids seen last think — fresh ids mean the foe just deployed. */
+  private knownFoes = new Set<number>();
+  /** Punish-push window: answer a fresh enemy deployment back-to-back. */
+  private punishUntil = 0;
+  /** Wing of the previous deploy — the dual-lane squeeze alternates it. */
+  private lastLane: 0 | 1 | null = null;
   constructor(private seat: PlayerId, seed: number) {
     this.rng = makeRng(seed ^ 0xb07);
   }
 
   think(st: GameState): PlayerInput['action'] | null {
     if (st.phase !== 'basalt' && st.phase !== 'oasis') return null;
+    // Punish-push detection runs before any cooldown gate so a player
+    // deployment is never missed: fresh enemy bodies open a short window
+    // where the bot answers immediately, back to back.
+    const foeIds = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat).map((u) => u.id);
+    let newFoe = false;
+    for (const id of foeIds) if (!this.knownFoes.has(id)) { newFoe = true; break; }
+    this.knownFoes = new Set(foeIds);
+    if (newFoe) this.punishUntil = st.tick + 10;
+    const punishing = st.tick < this.punishUntil;
+
     if (st.tick < this.nextActionTick) return null;
-    if (st.tick % 2 !== 0) return null;
+    // Act on OWN-priority ticks (input ordering alternates seat priority by
+    // tick parity — acting off-parity donated every contested army-cap and
+    // lane-cap slot to the opponent). Punish windows override the wait.
+    if (!punishing && st.tick % 2 !== this.seat % 2) return null;
     const me = st.players[this.seat];
     // Near the aqua cap every idle beat wastes income — spend with urgency.
     const flush = me.aqua >= 7;
@@ -1819,27 +1838,34 @@ export class BotBrain {
       return { c, s };
     });
     scored.sort((a, b) => b.s - a.s);
-    const pick = scored[0].c as CardId;
-    const def = cardDef(pick, st.phase);
-
-    if (def.kind === 'spell' && pick !== LAVA_RAIN_CARD) {
-      const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat && isCombatVisible(st, u));
-      if (enemies.length === 0) return null;
-      // Aim at the densest knot — a random single target wasted the cast.
-      let best = enemies[0];
-      let bestN = 0;
-      for (const e of enemies) {
-        const n = enemies.filter((o) => dist2(o.x, o.y, e.x, e.y) <= 1.6 * 1.6).length;
-        if (n > bestN) {
-          bestN = n;
-          best = e;
+    // Walk the scored list: a spell being HELD for a better clump must not
+    // stall the whole turn — pressure falls through to the best unit.
+    let pick: CardId | null = null;
+    for (const cand of scored) {
+      const d = cardDef(cand.c, st.phase);
+      if (d.kind === 'spell') {
+        if (cand.c === LAVA_RAIN_CARD) continue; // handled above
+        const enemies = st.units.filter((u) => u.hp > 0 && u.owner !== this.seat && isCombatVisible(st, u));
+        if (enemies.length === 0) continue;
+        // Aim at the densest knot — a random single target wasted the cast.
+        let best = enemies[0];
+        let bestN = 0;
+        for (const e of enemies) {
+          const n = enemies.filter((o) => dist2(o.x, o.y, e.x, e.y) <= 1.6 * 1.6).length;
+          if (n > bestN) {
+            bestN = n;
+            best = e;
+          }
         }
+        if (bestN < 2 && !flush) continue; // hold it — try the next card
+        this.nextActionTick = st.tick + 4;
+        return { type: 'spell', card: cand.c as CardId, x: best.x, y: best.y };
       }
-      if (bestN < 2 && !flush) return null; // hold it for a real clump
-      this.nextActionTick = st.tick + 4;
-      return { type: 'spell', card: pick, x: best.x, y: best.y };
+      pick = cand.c as CardId;
+      break;
     }
-    if (def.kind === 'spell') return null;
+    if (pick === null) return null;
+    const def = cardDef(pick, st.phase);
 
     const dirY = this.seat === 0 ? -1 : 1;
     if (st.phase === 'basalt') {
@@ -1855,6 +1881,9 @@ export class BotBrain {
         const c1 = foes.length - c0;
         lane = c0 <= c1 ? 0 : 1;
       }
+      // Dual-lane squeeze: with aqua to burn, alternate wings on consecutive
+      // deploys so the defense has to split its attention.
+      if (flush && this.lastLane !== null) lane = (1 - this.lastLane) as 0 | 1;
       // Commit to a crumbling wing (finishing blow).
       if (wings.length > 0 && this.rng() < 0.65) {
         const weakest = wings.reduce((a, b) => (b.hp < a.hp ? b : a));
@@ -1878,14 +1907,15 @@ export class BotBrain {
       if (chosen === null) return null;
       lane = chosen;
       const pad = pads[lane];
-      this.nextActionTick = st.tick + 2;
+      this.lastLane = lane;
+      this.nextActionTick = st.tick + (punishing ? 1 : 2);
       return { type: 'deploy', card: pick, x: pad.x, y: pad.y, dirX: 0, dirY };
     }
     const x = Math.max(0.8, Math.min(WORLD_W - 0.8, WORLD_W / 2 + (this.rng() - 0.5) * 5));
     const y = this.seat === 0
       ? WORLD_H - DEPLOY_DEPTH + 0.4 + this.rng() * (DEPLOY_DEPTH - 0.9)
       : 0.5 + this.rng() * (DEPLOY_DEPTH - 0.9);
-    this.nextActionTick = st.tick + 2;
+    this.nextActionTick = st.tick + (punishing ? 1 : 2);
     return { type: 'deploy', card: pick, x, y, dirX: (this.rng() - 0.5) * 0.8, dirY };
   }
 }
