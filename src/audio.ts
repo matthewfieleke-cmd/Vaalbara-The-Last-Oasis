@@ -34,9 +34,10 @@
  *    hats, extra taiko) a subtle notch above the minute — clock still leads.
  *    THE LONE HORN (intro cinematic's voice): naked, unadorned theme
  *    statements — one chorus slot in three plus drifting verse fragments.
- *    PHRASE ANCHOR: the verse/chorus grid and chord loop are rebased to the
- *    bar Phase 1 begins in (phraseOrigin), so the suckout-and-slam always
- *    lands on a true section boundary regardless of time spent in menus.
+ *    PHRASE ANCHOR: the verse/chorus grid, chord loop AND species presence
+ *    beds are rebased to the bar Phase 1 begins in (phraseOrigin), so the
+ *    suckout-and-slam lands on a true section boundary and the presence
+ *    figures stay chord-locked regardless of time spent in menus.
  *    POWER BALLAD MIN 5: l4 weights toms/kick/backbeats/fills, crashes wash
  *    every bar line, and the turnaround fills end in a low-tom flam.
  *    Early double-raze skips the last crest into the transition riser → Oasis.
@@ -1561,10 +1562,16 @@ class MusicDirector {
     const bar = Math.floor(step / 16);
     const inten = this.intensity;
 
+    // Capture the phrase anchor BEFORE anything harmonic plays, so the
+    // presence beds and the chord loop share one clock from the first step.
+    if (this.mode === 'basalt' && this.phraseOrigin < 0) this.phraseOrigin = bar;
+
     // Living bee buzz rides under every mode once a swarm is on the field.
     if (this.beePresence && s16 % 2 === 0) this.beeBuzz(t, inten);
-    // Species presence beds unlock with the minute-4 / minute-5 acts.
-    this.playPresence(t, s16, bar);
+    // Species presence beds ride the PHRASE-ANCHORED bar in battle so their
+    // figures (the command F–A–D arpeggio, titan/siege color notes) land on
+    // the same chord cycle as the score — never a random offset per battle.
+    this.playPresence(t, s16, this.mode === 'basalt' ? bar - this.phraseOrigin : bar);
 
     switch (this.mode) {
       case 'menu': {
@@ -1617,7 +1624,7 @@ class MusicDirector {
         // Phrase-anchored bar count: pb 0 is the bar Phase 1 began in, so
         // the chord loop, verse/chorus halves and the suckout-and-slam all
         // align to true section boundaries from the first downbeat.
-        if (this.phraseOrigin < 0) this.phraseOrigin = bar;
+        // (phraseOrigin is captured at the top of playStep.)
         const pb = bar - this.phraseOrigin;
         const cell = MusicDirector.OSTINATO[pb % 4];
 
@@ -1770,19 +1777,23 @@ class MusicDirector {
         // Min 5: the drumline goes full corps — driving 8ths, wall up.
         if (l4 * wall > 0.05 && !breath && !inSuck && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4 * wall);
         // Chained lift into every chorus (last verse bar): reverse swell +
-        // triplet taiko ramp — the 12/8 swagger riding our straight grid.
+        // ramping taiko run. Early minutes keep the run ON the 16th grid —
+        // exposed off-grid hits there read as the band losing the beat. The
+        // off-grid 12/8 swagger only returns from minute 4, once the swell
+        // and snare are loud enough to sell it as intentional.
         if (bar8 === 3 && !breath && m >= 1) {
+          const sp = l3 > 0.1 ? 0.2 : MUSIC_16TH_SEC;
           if (s16 === 8) {
             if (l2 > 0.1) this.cymbalSwell(t, 1.15, 0.016 + 0.02 * l3);
             this.taiko(t, false, 0.3);
-            this.taiko(t + 0.2, false, 0.38);
-            this.taiko(t + 0.4, false, 0.46);
+            this.taiko(t + sp, false, 0.38);
+            this.taiko(t + sp * 2, false, 0.46);
           }
           if (s16 === 12) {
             this.taiko(t, false, 0.5);
-            this.taiko(t + 0.2, false, 0.58);
-            this.taiko(t + 0.4, false, 0.66 + 0.2 * l3);
-            if (l3 > 0.1) this.snare(t + 0.4, 0.45 * l3);
+            this.taiko(t + sp, false, 0.58);
+            this.taiko(t + sp * 2, false, 0.66 + 0.2 * l3);
+            if (l3 > 0.1) this.snare(t + sp * 2, 0.45 * l3);
           }
         }
         // Breath-bar fill (minute 5 only): the roll into the one arrival.

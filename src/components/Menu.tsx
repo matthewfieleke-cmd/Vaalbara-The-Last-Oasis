@@ -107,12 +107,13 @@ export function Menu({
       </div>
 
       <div className="menu-actions">
-        <button className="btn btn-primary" onClick={onPlay}>
-          ⚔ Battle
+        <button className="btn btn-primary menu-cta" onClick={onPlay}>
+          <span className="cta-icon">⚔</span>
+          <span className="cta-label">Battle</span>
         </button>
-        <button className="btn btn-duel" onClick={onDuel}>
-          ⚜ Duels
-          <span className="btn-note">champion vs champion</span>
+        <button className="btn btn-duel menu-cta" onClick={onDuel}>
+          <span className="cta-icon">⚜</span>
+          <span className="cta-label">Duels</span>
         </button>
         <button className="btn btn-ghost" onClick={onReplayIntro}>
           ▸ Replay intro cinematic

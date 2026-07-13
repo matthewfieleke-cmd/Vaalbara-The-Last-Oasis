@@ -361,35 +361,129 @@ button {
 }
 
 .game-title h1 {
-  font-size: 2.55rem;
+  font-size: 2.7rem;
   font-weight: 900;
   letter-spacing: 0.06em;
   line-height: 1.02;
-  background: linear-gradient(180deg, #ffd9a0 5%, var(--magma) 55%, #7a1b06 100%);
+  /* Fire gradient taller than the text: shifting it vertically makes the
+     flames lick up and down through the letters. */
+  background: linear-gradient(
+    180deg,
+    #fff3c4 0%,
+    #ffd9a0 16%,
+    #ffab48 34%,
+    var(--magma) 55%,
+    #c23a10 74%,
+    #7a1b06 100%
+  );
+  background-size: 100% 240%;
+  background-position: 50% 18%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
   filter: drop-shadow(0 3px 18px rgba(255, 90, 44, 0.35));
+  animation: title-flame 3.4s ease-in-out infinite;
+}
+
+/* Irregular keyframes = candle flicker, not a metronome pulse. */
+@keyframes title-flame {
+  0% { background-position: 50% 16%; filter: drop-shadow(0 3px 16px rgba(255, 90, 44, 0.32)); }
+  17% { background-position: 50% 40%; filter: drop-shadow(0 3px 26px rgba(255, 128, 48, 0.55)); }
+  28% { background-position: 50% 24%; filter: drop-shadow(0 3px 18px rgba(255, 90, 44, 0.38)); }
+  47% { background-position: 50% 52%; filter: drop-shadow(0 3px 30px rgba(255, 150, 60, 0.6)); }
+  61% { background-position: 50% 30%; filter: drop-shadow(0 3px 20px rgba(255, 90, 44, 0.4)); }
+  78% { background-position: 50% 46%; filter: drop-shadow(0 3px 24px rgba(255, 120, 50, 0.5)); }
+  100% { background-position: 50% 16%; filter: drop-shadow(0 3px 16px rgba(255, 90, 44, 0.32)); }
 }
 
 .game-title .sub {
-  margin-top: 0.4rem;
-  font-size: 1.02rem;
-  letter-spacing: 0.34em;
+  margin-top: 0.45rem;
+  /* Heavier, larger strokes give the shimmer band surface area to travel. */
+  font-size: 1.18rem;
+  font-weight: 800;
+  letter-spacing: 0.3em;
   text-transform: uppercase;
-  background: linear-gradient(90deg, var(--aqua), var(--oasis));
+  background: linear-gradient(
+    100deg,
+    var(--aqua) 0%,
+    var(--oasis) 22%,
+    #d9fff4 34%,
+    #ffffff 40%,
+    #a8f4ff 46%,
+    var(--aqua) 60%,
+    var(--oasis) 82%,
+    var(--aqua) 100%
+  );
+  background-size: 240% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  filter: drop-shadow(0 2px 12px rgba(46, 230, 168, 0.3));
+  animation: title-water 5.2s linear infinite;
+}
+
+/* A bright caustic band sweeping across the letters — water in sunlight. */
+@keyframes title-water {
+  from { background-position: 140% 0; }
+  to { background-position: -100% 0; }
 }
 
 .menu-actions {
   margin-top: auto;
-  width: 100%;
+  /* Centered column, not edge-to-edge — the CTAs read as crafted objects. */
+  width: min(100%, 300px);
+  align-self: center;
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
   padding-top: 2rem;
+}
+
+/* Matched-size hero CTAs (Battle / Duels) with a slow idle sheen sweep. */
+.menu-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-height: 3.5rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+}
+
+.menu-cta .cta-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.35));
+}
+
+.menu-cta .cta-label {
+  letter-spacing: 0.14em;
+}
+
+.menu-cta::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 32%,
+    rgba(255, 255, 255, 0.24) 46%,
+    rgba(255, 255, 255, 0.06) 54%,
+    transparent 68%
+  );
+  background-size: 250% 100%;
+  background-position: 130% 0;
+  animation: cta-sheen 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.btn-duel.menu-cta::after {
+  animation-delay: 2.7s;
+}
+
+@keyframes cta-sheen {
+  0%, 58% { background-position: 130% 0; }
+  88%, 100% { background-position: -130% 0; }
 }
 
 .btn {
@@ -1053,17 +1147,6 @@ button {
   background: linear-gradient(160deg, #6a4dff 0%, #3b2a9e 55%, #221463);
   color: #f0edff;
   box-shadow: 0 6px 26px rgba(106, 77, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.15rem;
-}
-
-.btn-duel .btn-note {
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.22em;
-  opacity: 0.75;
 }
 
 /* --- Setup ---------------------------------------------------------------- */
