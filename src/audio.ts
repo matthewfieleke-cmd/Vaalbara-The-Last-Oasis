@@ -20,8 +20,11 @@
  *    reserved for ONE moment — the start of minute 5 (breath bar → hit).
  *    Layers only add — never thin the pulse.
  *    FORM (Believer/Higher): every 8-bar phrase = lean VERSE half + stacked
- *    CHORUS half, with a suckout-and-slam on chorus downbeats from minute 3
- *    and chained lifts (swell + triplet taiko ramp) into every chorus.
+ *    CHORUS half, with a suckout-and-slam on chorus downbeats from MINUTE 4
+ *    (where the kit and guitars make the slam audible; minutes 1–3 keep
+ *    clean downbeat statements) and chained lifts into every chorus.
+ *    Minute-gated triggers read a BAR-FROZEN minute — a bar never changes
+ *    its mind mid-flight, so boundaries can't double the theme statement.
  *    The theme rotates three voices, chorus-half only, with whispered verse
  *    fragments; the B-strain response guests one phrase in eight.
  *    THE DRUMMER: a full rock kit bleeds in from ~3:30 and owns minute 5 —
@@ -1632,6 +1635,12 @@ class MusicDirector {
         const ctxNow = core.ctx ? core.ctx.currentTime : t;
         const elapsedAtT = this.basaltElapsed + Math.max(0, t - ctxNow);
         const m = Math.min(4, Math.floor(elapsedAtT / 60));
+        // Minute FROZEN at this bar's downbeat: every minute-gated TRIGGER
+        // in the bar reads one value, so a bar can never change its mind
+        // mid-flight (no double theme statements at minute boundaries).
+        // Continuous gains (pos/l1..l4) still slide freely — that's the
+        // 8-second crescendo; it moves no events.
+        const mBar = Math.min(4, Math.max(0, Math.floor((elapsedAtT - s16 * MUSIC_16TH_SEC) / 60)));
         const pos = MusicDirector.ladderPos(elapsedAtT);
         const l1 = Math.max(0, Math.min(1, pos));
         const l2 = Math.max(0, Math.min(1, pos - 1));
@@ -1695,8 +1704,12 @@ class MusicDirector {
         // The clock still leads; the battle seasons.
         const boil = Math.max(0, this.armyHeat - 0.5) * 0.7;
         // Believer suckout: chorus downbeat drops to a lone falling sub +
-        // varied rise, then SLAMS on the backbeat. From minute 3 onward.
-        const suckBar = chorusHalf && bar8 === 4 && m >= 2 && !breath && pb !== this.arrivalBar;
+        // varied rise, then SLAMS on the backbeat. From MINUTE 4 onward —
+        // that's where the guitar, rock kit and incoming drummer make the
+        // slam land like the record. Minutes 1–3 keep clean downbeat theme
+        // statements; a late entrance without an audible slam just sounds
+        // like the horns missing their cue.
+        const suckBar = chorusHalf && bar8 === 4 && mBar >= 3 && !breath && pb !== this.arrivalBar;
         const inSuck = suckBar && s16 < 4;
 
         if (suckBar && s16 === 0) {
@@ -1709,10 +1722,12 @@ class MusicDirector {
           }
         }
         if (suckBar && s16 === 4) {
+          // The slam has a guaranteed FLOOR independent of l3, so even in
+          // minute 4's opening slide it reads as intentional punctuation.
           this.taiko(t, true, 1.05 + 0.1 * l3);
-          this.crash(t, 0.05 + 0.06 * l3);
-          if (l3 > 0.05) this.snare(t, 1.15 * l3);
-          if (l3 > 0.04) this.powerChord(t, MusicDirector.BED_CHORDS[pb % 4][0], 1.0, 0.06 * l3, 0);
+          this.crash(t, 0.09 + 0.05 * l3);
+          this.snare(t, Math.max(0.55, 1.15 * l3));
+          this.powerChord(t, MusicDirector.BED_CHORDS[pb % 4][0], 1.0, 0.045 + 0.025 * l3, 0);
         }
 
         // --- Ostinato engine (suspense — never stops) --------------------
@@ -1766,7 +1781,7 @@ class MusicDirector {
         }
 
         if (s16 === 4 && !suckBar) {
-          this.shimmer(t, pb % 4 === 1 ? 466.2 : (m >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + pos * 0.002);
+          this.shimmer(t, pb % 4 === 1 ? 466.2 : (mBar >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + pos * 0.002);
         }
 
         // --- Battery: heartbeat always; new pulses bloom, never jump ------
@@ -1781,7 +1796,7 @@ class MusicDirector {
         // exposed off-grid hits there read as the band losing the beat. The
         // off-grid 12/8 swagger only returns from minute 4, once the swell
         // and snare are loud enough to sell it as intentional.
-        if (bar8 === 3 && !breath && m >= 1) {
+        if (bar8 === 3 && !breath && mBar >= 1) {
           const sp = l3 > 0.1 ? 0.2 : MUSIC_16TH_SEC;
           if (s16 === 8) {
             if (l2 > 0.1) this.cymbalSwell(t, 1.15, 0.016 + 0.02 * l3);
@@ -1839,7 +1854,7 @@ class MusicDirector {
           if (l4 > 0.04 && s16 % 2 === 0 && s16 >= 8) this.powerChord(t, root * 2, 0.11, 0.018 * l4 * wall, 0.3);
           if (l4 > 0.04 && s16 % 4 === 3) this.powerChord(t, root, 0.1, 0.036 * l4 * wall, -0.25);
           // Mid-chorus crash refresher in the final minute.
-          if (m >= 4 && bar8 === 6 && s16 === 0) this.crash(t, 0.085 * l3);
+          if (mBar >= 4 && bar8 === 6 && s16 === 0) this.crash(t, 0.085 * l3);
         }
 
         // Hats fade in across minute 2; a hot brawl boils them in early.
@@ -1884,7 +1899,7 @@ class MusicDirector {
         // descending B-STRAIN on the naked horn, EVERY phrase — the verse
         // answer to each chorus's A-strain slam (3–4 statements).
         if (bar8 === 1 && s16 === 0 && !breath) {
-          if (m >= 4) {
+          if (mBar >= 4) {
             this.playStrain(t, MusicDirector.THEME_B, 1, 0.06 + inten * 0.022, 'horn');
             this.softTheme(t, 2, 0.02, MusicDirector.THEME_B);
           } else if (phraseIdx % 2 === 1) {
@@ -1909,7 +1924,7 @@ class MusicDirector {
 
         if (pb % 4 === 3 && s16 === 0) {
           voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.026 + inten * 0.01 + pos * 0.002, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
-          voice({ type: 'triangle', freq: m >= 4 ? 698.5 : 622.3, dur: 2.2, gain: 0.022 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
+          voice({ type: 'triangle', freq: mBar >= 4 ? 698.5 : 622.3, dur: 2.2, gain: 0.022 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
         }
         break;
       }
