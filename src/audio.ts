@@ -20,9 +20,12 @@
  *    reserved for ONE moment — the start of minute 5 (breath bar → hit).
  *    Layers only add — never thin the pulse.
  *    FORM (Believer/Higher): every 8-bar phrase = lean VERSE half + stacked
- *    CHORUS half, with a suckout-and-slam on chorus downbeats from MINUTE 4
- *    (where the kit and guitars make the slam audible; minutes 1–3 keep
- *    clean downbeat statements) and chained lifts into every chorus.
+ *    CHORUS half. THE THEME CONTRACT: every statement of the motif (A or B
+ *    strain, whisper or full voice) starts ON the downbeat of a Dm bar —
+ *    the first chord of a new cycle. Verse statements sit on bar 1, chorus
+ *    statements on bar 5. From MINUTE 4, the suckout owns beats 3–4 of the
+ *    A-chord bar (the cycle's LAST measure) and the slam lands on the next
+ *    downbeat TOGETHER with theme A — suction → slam+theme, one moment.
  *    Minute-gated triggers read a BAR-FROZEN minute — a bar never changes
  *    its mind mid-flight, so boundaries can't double the theme statement.
  *    The theme rotates three voices, chorus-half only, with whispered verse
@@ -1703,28 +1706,28 @@ class MusicDirector {
         // pushes rhythm density up to about a third of one ladder layer.
         // The clock still leads; the battle seasons.
         const boil = Math.max(0, this.armyHeat - 0.5) * 0.7;
-        // Believer suckout: chorus downbeat drops to a lone falling sub +
-        // varied rise, then SLAMS on the backbeat. From MINUTE 4 onward —
-        // that's where the guitar, rock kit and incoming drummer make the
-        // slam land like the record. Minutes 1–3 keep clean downbeat theme
-        // statements; a late entrance without an audible slam just sounds
-        // like the horns missing their cue.
-        const suckBar = chorusHalf && bar8 === 4 && mBar >= 3 && !breath && pb !== this.arrivalBar;
-        const inSuck = suckBar && s16 < 4;
+        // Believer suckout, phrase-aligned (THE CONTRACT): the suction owns
+        // beats 3–4 of the LAST verse bar — the A chord, the cycle's final
+        // measure. The SLAM lands on the next downbeat — the Dm bar, the
+        // first chord of a NEW cycle — and theme A's first note sounds ON
+        // that same downbeat. Suction → slam+theme, never theme-after-slam.
+        // From minute 4 onward, where the kit and guitars sell the slam.
+        const suckTail = bar8 === 3 && mBar >= 3 && !breath;
+        const inSuck = suckTail && s16 >= 8;
+        const slamBar = bar8 === 4 && mBar >= 3 && !breath && pb !== this.arrivalBar;
 
-        if (suckBar && s16 === 0) {
+        if (suckTail && s16 === 8) {
+          // The drop: falling sub off the A-bar root; alternate phrases add
+          // a rising sweep. The chained-lift taikos below are the pickup.
           voice({ type: 'sine', freq: MusicDirector.CELLO[pb % 4], freqEnd: 30, dur: 0.55, gain: 0.34, bus: this.bus, when: t });
           if (phraseIdx % 2 === 0) {
-            voice({ type: 'triangle', freq: 320, freqEnd: 1280, dur: 0.55, gain: 0.045, attack: 0.05, bus: this.bus, when: t, pan: 0.2 });
-          } else {
-            this.taiko(t + 0.2, false, 0.5);
-            this.taiko(t + 0.4, false, 0.7);
+            voice({ type: 'triangle', freq: 320, freqEnd: 1280, dur: 1.0, gain: 0.045, attack: 0.05, bus: this.bus, when: t, pan: 0.2 });
           }
         }
-        if (suckBar && s16 === 4) {
+        if (slamBar && s16 === 0) {
           // The slam has a guaranteed FLOOR independent of l3, so even in
           // minute 4's opening slide it reads as intentional punctuation.
-          this.taiko(t, true, 1.05 + 0.1 * l3);
+          this.taiko(t, true, 1.15 + 0.1 * l3);
           this.crash(t, 0.09 + 0.05 * l3);
           this.snare(t, Math.max(0.55, 1.15 * l3));
           this.powerChord(t, MusicDirector.BED_CHORDS[pb % 4][0], 1.0, 0.045 + 0.025 * l3, 0);
@@ -1735,7 +1738,9 @@ class MusicDirector {
         // (a hot brawl can boil them in a notch early). The octave stack is
         // chorus-only in minutes 1–3 and full-time once the wall is up.
         const offbeat16 = s16 % 2 === 1;
-        const gate = breath ? s16 % 4 === 0 : inSuck ? s16 === 0 : (!offbeat16 || l2 + boil > 0.03);
+        // During the suction (beats 3–4 of the pre-slam bar) the ostinato
+        // goes silent — the falling sub and the pickup carry the tension.
+        const gate = breath ? s16 % 4 === 0 : inSuck ? false : (!offbeat16 || l2 + boil > 0.03);
         if (gate) {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
           let strVel = accent * (0.62 + inten * 0.4) * MusicDirector.lerpTab([1, 1, 1.12, 1.2, 1.28], pos) * lift;
@@ -1765,29 +1770,29 @@ class MusicDirector {
         // --- Legato string bed: held harmony from MINUTE 1, locked to the
         // ostinato progression. Every 8th bar the A chord suspends (Asus4)
         // and resolves 4→3 — the whole ensemble cadences together.
-        // In a suckout bar the bed enters WITH the slam, not the downbeat.
-        if (!breath && ((s16 === 0 && !suckBar) || (suckBar && s16 === 4))) {
+        // In a suction bar the bed decays before beat 3 so the drop is real.
+        if (!breath && s16 === 0) {
           const bedGain = (0.015 + pos * 0.005 + inten * 0.008) * lift;
           const bedHz = 750 + pos * 250;
           if (pb % 8 === 7) {
             this.legatoStrings(t, MusicDirector.A_SUS4, 1.25, bedGain, bedHz, pos);
             this.legatoStrings(t + 1.2, MusicDirector.BED_CHORDS[3], 1.3, bedGain, bedHz, pos);
           } else {
-            this.legatoStrings(t, MusicDirector.BED_CHORDS[pb % 4], suckBar ? 2.1 : 2.5, bedGain, bedHz, pos);
+            this.legatoStrings(t, MusicDirector.BED_CHORDS[pb % 4], suckTail ? 1.1 : 2.5, bedGain, bedHz, pos);
           }
         }
-        if (l4 * wall > 0.03 && !breath && s16 === (suckBar ? 4 : 0)) {
+        if (l4 * wall > 0.03 && !breath && s16 === 0) {
           this.choirSustain(t, 2.5, (0.033 + inten * 0.018) * l4 * wall);
         }
 
-        if (s16 === 4 && !suckBar) {
+        if (s16 === 4 && !suckTail) {
           this.shimmer(t, pb % 4 === 1 ? 466.2 : (mBar >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + pos * 0.002);
         }
 
         // --- Battery: heartbeat always; new pulses bloom, never jump ------
-        if (s16 === 0 && !inSuck) this.taiko(t, true, (0.8 + inten * 0.2 + pos * 0.02) * lift);
-        if (s16 === 10) this.taiko(t, false, 0.85);
-        if (inten > 0.42 && s16 === 13) this.taiko(t, false, 0.65);
+        if (s16 === 0) this.taiko(t, true, (0.8 + inten * 0.2 + pos * 0.02) * lift);
+        if (s16 === 10 && !inSuck) this.taiko(t, false, 0.85);
+        if (inten > 0.42 && s16 === 13 && !inSuck) this.taiko(t, false, 0.65);
         if (l2 + boil > 0.05 && s16 % 4 === 2 && !inSuck) this.taiko(t, false, 0.4 * Math.min(1, l2 + boil));
         // Min 5: the drumline goes full corps — driving 8ths, wall up.
         if (l4 * wall > 0.05 && !breath && !inSuck && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4 * wall);
@@ -1863,10 +1868,11 @@ class MusicDirector {
         }
 
         // --- The theme: the A-STRAIN owns every chorus -------------------
-        // In suckout bars the statement enters WITH the slam (beat 2), so
-        // the sequence is always suction → slam → main theme ringing out.
+        // THE CONTRACT: theme A's first note is ALWAYS the downbeat of the
+        // Dm bar — the first chord of a new cycle. In minutes 4–5 the slam
+        // shares that same downbeat (suction → slam+theme, one moment).
         // The voice still rotates horn → strings → horn-with-octave.
-        if (bar8 === 4 && s16 === (suckBar ? 4 : 0) && !breath) {
+        if (bar8 === 4 && s16 === 0 && !breath) {
           const strain = MusicDirector.THEME;
           if (l2 <= 0.05) {
             // Minutes 1–2: the soft seed carries the statement (Time model).
@@ -1894,11 +1900,13 @@ class MusicDirector {
             }
           }
         }
-        // Verse melody. Minutes 1–4: a whispered opening fragment every
-        // other phrase (lone horn once the horns exist). Minute 5: the
-        // descending B-STRAIN on the naked horn, EVERY phrase — the verse
-        // answer to each chorus's A-strain slam (3–4 statements).
-        if (bar8 === 1 && s16 === 0 && !breath) {
+        // Verse melody — on the PHRASE DOWNBEAT (bar 1, the Dm bar), never
+        // bar 2: every strain starts on the first chord of a new cycle.
+        // Minutes 1–4: a whispered opening fragment every other phrase
+        // (lone horn once the horns exist). Minute 5: the descending
+        // B-STRAIN (composed Dm→Bb) on the naked horn, EVERY phrase — the
+        // verse answer to each chorus's A-strain slam (3–4 statements).
+        if (bar8 === 0 && s16 === 0 && !breath) {
           if (mBar >= 4) {
             this.playStrain(t, MusicDirector.THEME_B, 1, 0.06 + inten * 0.022, 'horn');
             this.softTheme(t, 2, 0.02, MusicDirector.THEME_B);
