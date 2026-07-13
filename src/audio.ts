@@ -35,7 +35,14 @@
  *    turnaround fills into crashes. Only the suckout and the arrival
  *    breath cut him off.
  *    THE WALL HOLDS in minutes 4–5: verse pullback fades out across minute
- *    4's slide — from there the only dips are the suckout and the breath.
+ *    4's slide — from there the only dips are the suckout, the breath and
+ *    the STOP-TIME bar (see below), all of them rhythmic and phrase-true.
+ *    TSO/S&M DEVICES (minutes 4–5): the phrase's final bar becomes unison
+ *    STOP-TIME stabs with dead air between them; horn and LEAD GUITAR
+ *    trade theme halves (leader swaps each phrase) with a 3-phrase
+ *    register ratchet; strings/brass CRESCENDO into every second downbeat
+ *    (the No Leaf Clover breath); and minute 5 opens every second chorus
+ *    bar into a HALF-TIME wide backbeat under the ringing guitar.
  *    THE BOIL: live army density can push rhythm density (offbeat 16ths,
  *    hats, extra taiko) a subtle notch above the minute — clock still leads.
  *    THE LONE HORN (intro cinematic's voice): naked, unadorned theme
@@ -1359,7 +1366,7 @@ class MusicDirector {
 
   /** Play a theme strain in a chosen section voice — the rotation that keeps
    *  the motif fresh (horn statement vs legato string section). */
-  private playStrain(t0: number, notes: Array<[number, number, number]>, mult: number, gain: number, kind: 'horn' | 'strings'): void {
+  private playStrain(t0: number, notes: Array<[number, number, number]>, mult: number, gain: number, kind: 'horn' | 'strings' | 'lead'): void {
     if (!this.bus) return;
     const STEP = MUSIC_16TH_SEC;
     for (const [st, freq, durSteps] of notes) {
@@ -1367,6 +1374,8 @@ class MusicDirector {
       const dur = durSteps * STEP + 0.12;
       if (kind === 'horn') {
         this.horn(t, freq * mult, dur, gain);
+      } else if (kind === 'lead') {
+        this.leadGtr(t, freq * mult, dur, gain);
       } else {
         voice({ type: 'sawtooth', freq: freq * mult, dur: dur + 0.08, gain, filterFreq: 1900, filterQ: 1.1, attack: 0.05, bus: this.bus, when: t, pan: -0.12 });
         voice({ type: 'sawtooth', freq: freq * mult * 1.005, dur: dur + 0.08, gain: gain * 0.6, filterFreq: 1500, attack: 0.06, bus: this.bus, when: t, pan: 0.14 });
@@ -1467,6 +1476,67 @@ class MusicDirector {
       osc.start(t);
       osc.stop(t + dur + 0.05);
     }
+  }
+
+  /** Screaming lead guitar — a single distorted note with detune vibrato,
+   *  living two octaves above the chugs (the TSO vertical spread). */
+  private leadGtr(t: number, freq: number, dur: number, gain: number, pan = 0.18): void {
+    const ctx = core.ensure();
+    if (!ctx || !this.bus) return;
+    if (!MusicDirector.guitarCurve) {
+      this.powerChord(t, 1, 0.01, 0.0001); // builds the shared curve
+    }
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = MusicDirector.guitarCurve;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'lowpass';
+    bp.frequency.value = 3400;
+    bp.Q.value = 1.4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
+    g.gain.setValueAtTime(gain, t + Math.max(0.02, dur - 0.12));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    shaper.connect(bp);
+    bp.connect(g);
+    if (typeof ctx.createStereoPanner === 'function') {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      g.connect(p);
+      p.connect(this.bus);
+    } else {
+      g.connect(this.bus);
+    }
+    for (const cents of [-7, 6]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq * Math.pow(2, cents / 1200);
+      // Singer's vibrato blooming after the attack.
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 5.4;
+      const lfoAmt = ctx.createGain();
+      lfoAmt.gain.setValueAtTime(0, t);
+      lfoAmt.gain.linearRampToValueAtTime(freq * 0.011, t + Math.min(0.35, dur * 0.5));
+      lfo.connect(lfoAmt);
+      lfoAmt.connect(osc.frequency);
+      osc.connect(shaper);
+      osc.start(t);
+      osc.stop(t + dur + 0.05);
+      lfo.start(t);
+      lfo.stop(t + dur + 0.05);
+    }
+  }
+
+  /** Full-ensemble unison stab — guitar, strings, low brass and kick hitting
+   *  one grid cell together, with dead air around it (the TSO stop-time). */
+  private ensembleStab(t: number, root: number, vel = 1): void {
+    if (!this.bus) return;
+    this.powerChord(t, root, 0.26, 0.075 * vel, 0);
+    this.rockKick(t, 1.05 * vel);
+    this.taiko(t, true, 0.9 * vel);
+    this.lowBrass(t, root, 0.3, 0.07 * vel);
+    voice({ type: 'sawtooth', freq: root * 2, dur: 0.24, gain: 0.055 * vel, filterFreq: 2200, attack: 0.004, bus: this.bus, when: t, pan: -0.15 });
+    voice({ type: 'sawtooth', freq: root * 3, dur: 0.22, gain: 0.035 * vel, filterFreq: 2600, attack: 0.004, bus: this.bus, when: t, pan: 0.17 });
   }
 
   /** Tight rock kick under the taiko — the driving quarter pulse. */
@@ -1733,14 +1803,31 @@ class MusicDirector {
           this.powerChord(t, MusicDirector.BED_CHORDS[pb % 4][0], 1.0, 0.045 + 0.025 * l3, 0);
         }
 
+        // --- TSO STOP-TIME (minutes 4–5) ----------------------------------
+        // The phrase's final bar (the A-chord cadence bar) becomes unison
+        // ensemble stabs — guitar, strings, brass, kick hitting one cell
+        // together — with DEAD AIR between them and a full silent beat
+        // rolling into the next phrase downbeat. Loudness between stops
+        // reads as power; loudness without them reads as noise.
+        const stopBar = pb % 8 === 7 && mBar >= 3 && !breath;
+        if (stopBar && (s16 === 0 || s16 === 4 || s16 === 8 || s16 === 10)) {
+          const vel = (0.7 + 0.45 * l3) * (s16 === 10 ? 1.12 : 1);
+          this.ensembleStab(t, MusicDirector.BED_CHORDS[3][0], vel);
+          if (s16 === 0) this.crash(t, 0.06 * l3);
+        }
+        // Wide bar (minute 5): every second chorus bar the kit opens to
+        // half-time — kick on one, one enormous snare on three, air around
+        // both. Heavy is mass with room to land, not busyness.
+        const wideBar = l4 > 0.5 && bar8 === 5 && !breath;
+
         // --- Ostinato engine (suspense — never stops) --------------------
         // 8ths at first; the offbeat 16ths FADE in across minute 3's build
         // (a hot brawl can boil them in a notch early). The octave stack is
         // chorus-only in minutes 1–3 and full-time once the wall is up.
         const offbeat16 = s16 % 2 === 1;
-        // During the suction (beats 3–4 of the pre-slam bar) the ostinato
-        // goes silent — the falling sub and the pickup carry the tension.
-        const gate = breath ? s16 % 4 === 0 : inSuck ? false : (!offbeat16 || l2 + boil > 0.03);
+        // During the suction (beats 3–4 of the pre-slam bar) and between
+        // stop-time stabs the ostinato goes silent — dead air is the point.
+        const gate = breath ? s16 % 4 === 0 : (inSuck || stopBar) ? false : (!offbeat16 || l2 + boil > 0.03);
         if (gate) {
           const accent = s16 % 4 === 0 ? 1.25 : 0.85;
           let strVel = accent * (0.62 + inten * 0.4) * MusicDirector.lerpTab([1, 1, 1.12, 1.2, 1.28], pos) * lift;
@@ -1756,7 +1843,8 @@ class MusicDirector {
         }
 
         // --- Floor: sub bass + cello + low brass mass (brass fades in) ---
-        if (s16 === 0) {
+        // Silent through the stop-time bar — the stabs own the bottom.
+        if (s16 === 0 && !stopBar) {
           voice({
             type: 'sawtooth', freq: MusicDirector.BASS[pb % 4], dur: 2.2,
             gain: 0.24 + 0.015 * pos, filterFreq: 130, attack: 0.03, bus: this.bus, when: t,
@@ -1781,21 +1869,32 @@ class MusicDirector {
             this.legatoStrings(t, MusicDirector.BED_CHORDS[pb % 4], suckTail ? 1.1 : 2.5, bedGain, bedHz, pos);
           }
         }
-        if (l4 * wall > 0.03 && !breath && s16 === 0) {
+        if (l4 * wall > 0.03 && !breath && s16 === 0 && !stopBar) {
           this.choirSustain(t, 2.5, (0.033 + inten * 0.018) * l4 * wall);
         }
 
-        if (s16 === 4 && !suckTail) {
+        if (s16 === 4 && !suckTail && !stopBar) {
           this.shimmer(t, pb % 4 === 1 ? 466.2 : (mBar >= 4 ? 698.5 : 587.3), 2.0, 0.014 + inten * 0.014 + pos * 0.002);
         }
 
+        // --- No-Leaf-Clover breath (minutes 4–5): strings and brass -------
+        // crescendo through beats 3–4 of every second bar, peaking exactly
+        // ON the next downbeat — the wall arrives pre-loaded, every time.
+        if (mBar >= 3 && s16 === 8 && pb % 2 === 1 && !suckTail && !stopBar && !breath) {
+          const next = MusicDirector.BED_CHORDS[(pb + 1) % 4];
+          const sg = (0.026 + inten * 0.013) * l3;
+          voice({ type: 'sawtooth', freq: next[0] * 2, dur: 1.5, gain: sg, filterFreq: 1500, attack: 1.18, bus: this.bus, when: t, pan: -0.2 });
+          voice({ type: 'sawtooth', freq: next[2], dur: 1.5, gain: sg * 0.8, filterFreq: 1200, attack: 1.2, bus: this.bus, when: t, pan: 0.2 });
+          voice({ type: 'sawtooth', freq: next[0] / 2, dur: 1.5, gain: sg * 0.9, filterFreq: 420, attack: 1.2, bus: this.bus, when: t });
+        }
+
         // --- Battery: heartbeat always; new pulses bloom, never jump ------
-        if (s16 === 0) this.taiko(t, true, (0.8 + inten * 0.2 + pos * 0.02) * lift);
-        if (s16 === 10 && !inSuck) this.taiko(t, false, 0.85);
-        if (inten > 0.42 && s16 === 13 && !inSuck) this.taiko(t, false, 0.65);
-        if (l2 + boil > 0.05 && s16 % 4 === 2 && !inSuck) this.taiko(t, false, 0.4 * Math.min(1, l2 + boil));
+        if (s16 === 0 && !stopBar) this.taiko(t, true, (0.8 + inten * 0.2 + pos * 0.02) * lift);
+        if (s16 === 10 && !inSuck && !stopBar) this.taiko(t, false, 0.85);
+        if (inten > 0.42 && s16 === 13 && !inSuck && !stopBar) this.taiko(t, false, 0.65);
+        if (l2 + boil > 0.05 && s16 % 4 === 2 && !inSuck && !stopBar) this.taiko(t, false, 0.4 * Math.min(1, l2 + boil));
         // Min 5: the drumline goes full corps — driving 8ths, wall up.
-        if (l4 * wall > 0.05 && !breath && !inSuck && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4 * wall);
+        if (l4 * wall > 0.05 && !breath && !inSuck && !stopBar && !wideBar && s16 % 2 === 0 && s16 !== 0 && s16 !== 10) this.taiko(t, false, 0.3 * l4 * wall);
         // Chained lift into every chorus (last verse bar): reverse swell +
         // ramping taiko run. Early minutes keep the run ON the 16th grid —
         // exposed off-grid hits there read as the band losing the beat. The
@@ -1827,43 +1926,50 @@ class MusicDirector {
         // Minute 5 is the POWER BALLAD crest: everything hits harder — l4
         // weights the toms, kick, backbeats and fills, and crashes wash
         // over every bar line.
-        if (drummer > 0.03 && !breath && !inSuck) {
+        if (drummer > 0.03 && !breath && !inSuck && !stopBar) {
           const heavy = 1 + 0.4 * l4;
           const fillBar = pb % 2 === 1;
-          if (fillBar && s16 >= 12) {
-            // Turnaround: snare-and-tom run up the last beat.
-            this.snare(t, (0.4 + (s16 - 12) * 0.16) * drummer * heavy);
-            this.tom(t, 150 - (s16 - 12) * 18, (0.6 + (s16 - 12) * 0.1) * drummer * heavy);
-            if (l4 > 0.3 && s16 === 15) this.tom(t + 0.075, 78, 0.9 * l4); // flam into the crash
+          if (wideBar) {
+            // HALF-TIME: kick on one, one enormous snare on three, crash
+            // wash — then back to the driving groove next bar.
+            if (s16 === 0) { this.rockKick(t, 1.1 * drummer); this.crash(t, 0.08 * l4); }
+            if (s16 === 8) { this.snare(t, 1.35 * l4 * drummer); this.tom(t, 88, 0.9 * l4 * drummer); }
           } else {
-            const acc = s16 % 4 === 0 ? 1 : s16 % 2 === 0 ? 0.7 : 0.42;
-            this.tom(t, s16 % 8 < 4 ? 110 : 88, acc * (0.72 + 0.26 * l4) * drummer);
+            if (fillBar && s16 >= 12) {
+              // Turnaround: snare-and-tom run up the last beat.
+              this.snare(t, (0.4 + (s16 - 12) * 0.16) * drummer * heavy);
+              this.tom(t, 150 - (s16 - 12) * 18, (0.6 + (s16 - 12) * 0.1) * drummer * heavy);
+              if (l4 > 0.3 && s16 === 15) this.tom(t + 0.075, 78, 0.9 * l4); // flam into the crash
+            } else {
+              const acc = s16 % 4 === 0 ? 1 : s16 % 2 === 0 ? 0.7 : 0.42;
+              this.tom(t, s16 % 8 < 4 ? 110 : 88, acc * (0.72 + 0.26 * l4) * drummer);
+            }
+            if (s16 % 2 === 0 && s16 % 4 !== 0) this.rockKick(t, (0.5 + 0.3 * l4) * drummer);
+            if (!chorusHalf && (s16 === 4 || (s16 === 12 && !fillBar))) this.snare(t, (0.75 + 0.35 * l4) * drummer);
+            if (pb % 2 === 0 && s16 === 0) this.crash(t, (0.065 + 0.05 * l4) * drummer);
+            // Minute 5: crash wash on the odd bar lines too — ride the crest.
+            if (l4 > 0.5 && pb % 2 === 1 && s16 === 0) this.crash(t, 0.055 * l4);
           }
-          if (s16 % 2 === 0 && s16 % 4 !== 0) this.rockKick(t, (0.5 + 0.3 * l4) * drummer);
-          if (!chorusHalf && (s16 === 4 || (s16 === 12 && !fillBar))) this.snare(t, (0.75 + 0.35 * l4) * drummer);
-          if (pb % 2 === 0 && s16 === 0) this.crash(t, (0.065 + 0.05 * l4) * drummer);
-          // Minute 5: crash wash on the odd bar lines too — ride the crest.
-          if (l4 > 0.5 && pb % 2 === 1 && s16 === 0) this.crash(t, 0.055 * l4);
         }
 
         // --- TSO crest (minutes 4–5): the wall holds, verse and chorus ----
         // The drop-D riff rings everywhere once minute 4 arrives (fading in
         // across the slide); only the suckout and the breath ever dip.
-        if (l3 > 0.04 && !breath && !inSuck && wall > 0.03) {
+        if (l3 > 0.04 && !breath && !inSuck && !stopBar && wall > 0.03) {
           const root = MusicDirector.BED_CHORDS[pb % 4][0];
-          if (s16 % 4 === 0) this.rockKick(t, ((0.85 + 0.15 * wall) + 0.3 * l4) * l3);
-          if (s16 === 4 || s16 === 12) this.snare(t, (0.9 + 0.45 * l4) * l3 * wall);
-          if (l4 > 0.05 && (s16 === 7 || s16 === 15)) this.snare(t, 0.35 * l4 * wall);
-          if (s16 === 0) this.powerChord(t, root, 1.15, (0.055 + 0.02 * l4) * l3 * wall, 0);
-          if (s16 === 6 || s16 === 10) this.powerChord(t, root, 0.28, 0.04 * l3 * wall, s16 === 6 ? -0.2 : 0.2);
-          if (l4 > 0.04 && s16 % 2 === 0 && s16 >= 8) this.powerChord(t, root * 2, 0.11, 0.018 * l4 * wall, 0.3);
-          if (l4 > 0.04 && s16 % 4 === 3) this.powerChord(t, root, 0.1, 0.036 * l4 * wall, -0.25);
+          if (s16 % 4 === 0 && !wideBar) this.rockKick(t, ((0.85 + 0.15 * wall) + 0.3 * l4) * l3);
+          if ((s16 === 4 || s16 === 12) && !wideBar) this.snare(t, (0.9 + 0.45 * l4) * l3 * wall);
+          if (l4 > 0.05 && (s16 === 7 || s16 === 15) && !wideBar) this.snare(t, 0.35 * l4 * wall);
+          if (s16 === 0) this.powerChord(t, root, wideBar ? 2.3 : 1.15, (0.055 + 0.02 * l4) * l3 * wall, 0);
+          if ((s16 === 6 || s16 === 10) && !wideBar) this.powerChord(t, root, 0.28, 0.04 * l3 * wall, s16 === 6 ? -0.2 : 0.2);
+          if (l4 > 0.04 && s16 % 2 === 0 && s16 >= 8 && !wideBar) this.powerChord(t, root * 2, 0.11, 0.018 * l4 * wall, 0.3);
+          if (l4 > 0.04 && s16 % 4 === 3 && !wideBar) this.powerChord(t, root, 0.1, 0.036 * l4 * wall, -0.25);
           // Mid-chorus crash refresher in the final minute.
           if (mBar >= 4 && bar8 === 6 && s16 === 0) this.crash(t, 0.085 * l3);
         }
 
         // Hats fade in across minute 2; a hot brawl boils them in early.
-        if (l1 + boil > 0.03 && !breath && !inSuck && s16 % 2 === 1) {
+        if (l1 + boil > 0.03 && !breath && !inSuck && !stopBar && s16 % 2 === 1) {
           this.hat(t, (s16 % 4 === 3 ? 1 : 0.55) * Math.min(1, l1 + boil * 0.6) * (0.8 + 0.2 * wall));
         }
 
@@ -1878,6 +1984,31 @@ class MusicDirector {
             // Minutes 1–2: the soft seed carries the statement (Time model).
             const seedGain = MusicDirector.lerpTab([0.046, 0.052, 0.036, 0.03, 0.026], pos) + (pos < 2 ? inten * 0.012 : 0);
             this.softTheme(t, 2, seedGain, strain);
+          } else if (mBar >= 3) {
+            // TSO dialogue (minutes 4–5): horn and screaming lead guitar
+            // TRADE the statement — leader takes the first half, the other
+            // voice answers the second half an octave apart; the leader
+            // swaps each phrase. The register RATCHETS on a 3-phrase cycle:
+            // dialogue alone → +octave strings → +lead double on top.
+            const g = (0.095 + inten * 0.05 + 0.02 * l4) * Math.min(1, l2 + 0.2);
+            const ratchet = phraseIdx % 3;
+            const halfA = strain.filter(([st]) => st < 16);
+            const halfB = strain.filter(([st]) => st >= 16);
+            if (phraseIdx % 2 === 1) {
+              this.playStrain(t, halfA, 2, g * 0.4 * Math.max(0.4, l3), 'lead');
+              this.playStrain(t, halfB, 1, g, 'horn');
+            } else {
+              this.playStrain(t, halfA, 1, g, 'horn');
+              this.playStrain(t, halfB, 2, g * 0.4 * Math.max(0.4, l3), 'lead');
+            }
+            if (ratchet >= 1) this.playStrain(t, strain, 2, g * 0.3 * l3, 'strings');
+            if (ratchet === 2 && l4 > 0.05) this.playStrain(t, strain, 2, g * 0.28 * l4, 'lead');
+            this.softTheme(t, 2, 0.026, strain);
+            if (ratchet >= 1) {
+              // The soar: sustained descant riding above the dialogue.
+              voice({ type: 'triangle', freq: 880, dur: 4.6, gain: (0.018 + inten * 0.008) * l3, attack: 1.4, bus: this.bus, when: t, pan: 0.25 });
+              voice({ type: 'triangle', freq: 880 * 1.005, dur: 4.6, gain: 0.015 * l3, attack: 1.6, bus: this.bus, when: t, pan: -0.25 });
+            }
           } else {
             const g = (0.095 + inten * 0.05 + 0.02 * l4) * Math.min(1, l2 + 0.2);
             const vsel = phraseIdx % 3;
@@ -1930,7 +2061,7 @@ class MusicDirector {
           this.braamAt(t, 73.4, 1.6, 0.3 + inten * 0.15 + 0.1 * l2, 0);
         }
 
-        if (pb % 4 === 3 && s16 === 0) {
+        if (pb % 4 === 3 && s16 === 0 && !stopBar) {
           voice({ type: 'triangle', freq: 587.3, dur: 2.2, gain: 0.026 + inten * 0.01 + pos * 0.002, attack: 0.8, bus: this.bus, when: t, pan: 0.3 });
           voice({ type: 'triangle', freq: mBar >= 4 ? 698.5 : 622.3, dur: 2.2, gain: 0.022 + inten * 0.01, attack: 0.9, bus: this.bus, when: t, pan: -0.3 });
         }
