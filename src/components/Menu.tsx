@@ -90,7 +90,13 @@ export function Menu({
       <canvas className="menu-bg" ref={bgRef} />
       <div className="game-title">
         <div className="pre">One land · One water · Two armies</div>
-        <h1>VAALBARA</h1>
+        {/* Per-letter spans: each letter burns on its own clock, and a heat
+            surge travels across the word — fire, not a synchronized pulse. */}
+        <h1 aria-label="VAALBARA">
+          {'VAALBARA'.split('').map((ch, i) => (
+            <span key={i} aria-hidden="true">{ch}</span>
+          ))}
+        </h1>
         <div className="sub">The Last Oasis</div>
       </div>
 
