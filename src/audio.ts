@@ -579,15 +579,16 @@ const GLOBAL_SFX = {
   },
   defeat: () => {
     // The banner falls — unmistakable from the first second: a sub drop and
-    // muffled drum, a lament-bass descent (D–C–Bb–A), the theme's opening
-    // gesture played broken, low-passed and slowing (it never makes the
-    // reach), and a minor-second choir sigh that decays without resolving.
+    // muffled drum, a lament-bass descent (D–C–Bb–A) that finally sinks
+    // home to a low D, the theme's opening gesture played broken and
+    // slowing (it never makes the reach), and a choir that settles into a
+    // dark but PURE D minor — grief without dissonance at the close.
     const t = core.ctx?.currentTime ?? 0;
     greatDrum(1.2, 0.5, t, 56);
     voice({ type: 'sine', freq: 73.4, freqEnd: 34, dur: 1.1, gain: 0.32, when: t });
-    // Lament bass: D2 → C2 → Bb1 → A1, each step darker.
+    // Lament bass: D2 → C2 → Bb1 → A1 … → D2. The dominant resolves home.
     const lament: Array<[number, number, number]> = [
-      [73.4, 0, 0.95], [65.4, 0.75, 0.95], [58.3, 1.5, 0.95], [55, 2.25, 2.4],
+      [73.4, 0, 0.95], [65.4, 0.75, 0.95], [58.3, 1.5, 0.95], [55, 2.25, 1.15], [73.4, 3.3, 2.6],
     ];
     for (const [f, dt, dur] of lament) {
       voice({ type: 'sawtooth', freq: f, dur, gain: 0.15, filterFreq: 210, attack: 0.05, when: t + dt });
@@ -601,9 +602,11 @@ const GLOBAL_SFX = {
       voice({ type: 'triangle', freq: f, dur, gain: 0.085, filterFreq: 850, attack: 0.04, when: t + dt, pan: -0.1 });
       voice({ type: 'sawtooth', freq: f * 0.5, dur, gain: 0.05, filterFreq: 480, attack: 0.05, when: t + dt, pan: 0.1 });
     }
-    // Choir sigh: minor-second cluster, sinking, never resolving.
-    drone([220, 233.1], 2.6, 0.042, t + 0.7);
-    drone([146.8, 155.6], 3.8, 0.04, t + 1.8);
+    // Choir sigh: F over A — Dm color, mournful but consonant.
+    drone([174.6, 220], 2.4, 0.042, t + 0.7);
+    // The close: a settled low D-minor bloom fading with the bass's return
+    // home. Dark, final, clean.
+    drone([73.4, 146.8, 174.6, 220], 3.4, 0.045, t + 3.1);
     greatDrum(2.6, 0.55, t + 2.5, 44);
   },
 };
