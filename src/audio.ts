@@ -535,24 +535,60 @@ const GLOBAL_SFX = {
     voice({ type: 'square', freq: 180, freqEnd: 120, dur: 0.15, gain: 0.1 });
   },
   victory: () => {
-    // Triumph, austere: three slow ceremonial drum strikes, the last and
-    // deepest landing as the dark drone finally opens into a major third —
-    // earned and grave, not sugary.
+    // Triumph: the ceremonial drum triple, a rising shimmer, and the main
+    // theme's opening reach on horns crowned with the Picardy third — the
+    // SCORE concluding, not a jingle. Earned and grave, not sugary.
     const t = core.ctx?.currentTime ?? 0;
     greatDrum(1.0, 0.48, t);
     greatDrum(1.0, 0.54, t + 0.55);
+    // Rising cymbal shimmer into the crowning strike (stepped noise swell).
+    for (let i = 0; i < 4; i++) {
+      noise({ dur: 0.3, gain: 0.016 + i * 0.012, filterFreq: 2400 + i * 900, filterType: 'highpass', when: t + 0.2 + i * 0.24 });
+    }
     greatDrum(1.7, 0.64, t + 1.1, 62);
     drone([73.4, 110], 1.8, 0.055, t);                    // D2 + A2
     drone([73.4, 110, 146.8, 185], 3.4, 0.06, t + 1.05);  // + D3 + F#3
+    // The theme's opening reach — D F E D, up to A — on stacked horns.
+    const fanfare: Array<[number, number, number]> = [
+      [293.66, 1.1, 0.3], [349.23, 1.4, 0.3], [329.63, 1.7, 0.22],
+      [293.66, 1.92, 0.3], [440, 2.22, 1.6],
+    ];
+    for (const [f, dt, dur] of fanfare) {
+      voice({ type: 'sawtooth', freq: f, dur: dur + 0.15, gain: 0.08, filterFreq: 1500, attack: 0.03, when: t + dt, pan: -0.12 });
+      voice({ type: 'sawtooth', freq: f * 1.006, dur: dur + 0.15, gain: 0.055, filterFreq: 1200, attack: 0.05, when: t + dt, pan: 0.14 });
+      voice({ type: 'triangle', freq: f * 2, dur, gain: 0.04, attack: 0.02, when: t + dt, pan: 0.22 });
+    }
+    // Choir bloom on the D-major resolution under the held A.
+    drone([146.8, 185, 220, 293.7], 3.2, 0.045, t + 2.25);
   },
   defeat: () => {
-    // The fall: two muffled drum hits and a drone that sinks a half-step
-    // into the dark and never resolves.
+    // The banner falls — unmistakable from the first second: a sub drop and
+    // muffled drum, a lament-bass descent (D–C–Bb–A), the theme's opening
+    // gesture played broken, low-passed and slowing (it never makes the
+    // reach), and a minor-second choir sigh that decays without resolving.
     const t = core.ctx?.currentTime ?? 0;
-    greatDrum(1.2, 0.42, t, 58);
-    greatDrum(2.2, 0.5, t + 0.75, 48);
-    drone([73.4, 87.3], 1.6, 0.055, t);         // D2 + F2 (minor)
-    drone([69.3, 82.4], 3.6, 0.05, t + 1.25);   // sinks to C#2 + E2
+    greatDrum(1.2, 0.5, t, 56);
+    voice({ type: 'sine', freq: 73.4, freqEnd: 34, dur: 1.1, gain: 0.32, when: t });
+    // Lament bass: D2 → C2 → Bb1 → A1, each step darker.
+    const lament: Array<[number, number, number]> = [
+      [73.4, 0, 0.95], [65.4, 0.75, 0.95], [58.3, 1.5, 0.95], [55, 2.25, 2.4],
+    ];
+    for (const [f, dt, dur] of lament) {
+      voice({ type: 'sawtooth', freq: f, dur, gain: 0.15, filterFreq: 210, attack: 0.05, when: t + dt });
+      voice({ type: 'sine', freq: f * 0.5, dur, gain: 0.1, when: t + dt });
+    }
+    // The broken theme: D F E ... D — slowing, muffled, falling short.
+    const frag: Array<[number, number, number]> = [
+      [293.66, 0.2, 0.5], [349.23, 0.85, 0.5], [329.63, 1.6, 0.55], [293.66, 2.45, 1.7],
+    ];
+    for (const [f, dt, dur] of frag) {
+      voice({ type: 'triangle', freq: f, dur, gain: 0.085, filterFreq: 850, attack: 0.04, when: t + dt, pan: -0.1 });
+      voice({ type: 'sawtooth', freq: f * 0.5, dur, gain: 0.05, filterFreq: 480, attack: 0.05, when: t + dt, pan: 0.1 });
+    }
+    // Choir sigh: minor-second cluster, sinking, never resolving.
+    drone([220, 233.1], 2.6, 0.042, t + 0.7);
+    drone([146.8, 155.6], 3.8, 0.04, t + 1.8);
+    greatDrum(2.6, 0.55, t + 2.5, 44);
   },
 };
 
@@ -1800,14 +1836,12 @@ class MusicDirector {
           this.hat(t, (s16 % 4 === 3 ? 1 : 0.55) * Math.min(1, l1 + boil * 0.6) * (0.8 + 0.2 * wall));
         }
 
-        // --- The theme: rotated strains and voices, stated in the CHORUS --
-        // A-strain and B-strain alternate by phrase; the voice rotates
-        // horn → strings → horn-with-octave. Verses get only a whispered
-        // fragment every other phrase. The motif never goes stale.
-        if (bar8 === 4 && s16 === 0 && !breath) {
-          // B-strain is a rare guest — one phrase in eight; the original
-          // motif owns the rest.
-          const strain = phraseIdx % 8 === 3 ? MusicDirector.THEME_B : MusicDirector.THEME;
+        // --- The theme: the A-STRAIN owns every chorus -------------------
+        // In suckout bars the statement enters WITH the slam (beat 2), so
+        // the sequence is always suction → slam → main theme ringing out.
+        // The voice still rotates horn → strings → horn-with-octave.
+        if (bar8 === 4 && s16 === (suckBar ? 4 : 0) && !breath) {
+          const strain = MusicDirector.THEME;
           if (l2 <= 0.05) {
             // Minutes 1–2: the soft seed carries the statement (Time model).
             const seedGain = MusicDirector.lerpTab([0.046, 0.052, 0.036, 0.03, 0.026], pos) + (pos < 2 ? inten * 0.012 : 0);
@@ -1834,14 +1868,20 @@ class MusicDirector {
             }
           }
         }
-        // Verse whisper: the opening gesture only. Once the horns exist it
-        // becomes the intro cinematic's device — a lone, unadorned horn
-        // drifting over the steady groove.
-        if (bar8 === 1 && s16 === 0 && phraseIdx % 2 === 1 && !breath) {
-          if (l2 > 0.05) {
-            this.playStrain(t, MusicDirector.THEME_FRAG, 1, (0.05 + inten * 0.02) * l2, 'horn');
-          } else {
-            this.softTheme(t, phraseIdx % 4 === 1 ? 2 : 1, 0.028 + 0.012 * l1, MusicDirector.THEME_FRAG);
+        // Verse melody. Minutes 1–4: a whispered opening fragment every
+        // other phrase (lone horn once the horns exist). Minute 5: the
+        // descending B-STRAIN on the naked horn, EVERY phrase — the verse
+        // answer to each chorus's A-strain slam (3–4 statements).
+        if (bar8 === 1 && s16 === 0 && !breath) {
+          if (m >= 4) {
+            this.playStrain(t, MusicDirector.THEME_B, 1, 0.06 + inten * 0.022, 'horn');
+            this.softTheme(t, 2, 0.02, MusicDirector.THEME_B);
+          } else if (phraseIdx % 2 === 1) {
+            if (l2 > 0.05) {
+              this.playStrain(t, MusicDirector.THEME_FRAG, 1, (0.05 + inten * 0.02) * l2, 'horn');
+            } else {
+              this.softTheme(t, phraseIdx % 4 === 1 ? 2 : 1, 0.028 + 0.012 * l1, MusicDirector.THEME_FRAG);
+            }
           }
         }
         // --- The answer: cello line in the chorus back half ---------------
@@ -1849,14 +1889,11 @@ class MusicDirector {
           this.playAnswer(t, (0.05 + inten * 0.02 + pos * 0.006) * l1, pos >= 3);
         }
 
-        // Cadential braam: once per TWO phrases, on the phrase downbeat
-        // (the suckout slams carry the punctuation now), plus the 4:50
-        // climax crest.
-        if (pb > 0 && s16 === 0 && !breath) {
-          if (pb % 16 === 0) this.braamAt(t, 73.4, 1.6, 0.3 + inten * 0.15 + 0.1 * l2, 0);
-          else if (m >= 4 && this.allowClimax && this.basaltElapsed >= 290 && this.basaltElapsed < 290.6) {
-            this.braamAt(t, 73.4, 1.75, 0.44 + inten * 0.18, 0);
-          }
+        // Cadential braam: once per TWO phrases, on the phrase downbeat.
+        // The suckout slams carry all other punctuation — no 4:50 crest
+        // braam; the drummer and crash wash own the finale.
+        if (pb > 0 && s16 === 0 && !breath && pb % 16 === 0) {
+          this.braamAt(t, 73.4, 1.6, 0.3 + inten * 0.15 + 0.1 * l2, 0);
         }
 
         if (pb % 4 === 3 && s16 === 0) {
